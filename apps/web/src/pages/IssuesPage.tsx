@@ -109,6 +109,7 @@ import {
 } from "./IssueProjects";
 import { DisplayButton, IssueFilters, PRIORITY_ICON } from "./IssuesToolbar";
 import { type CardMove, type DropResult, type IssueDrag, useIssueDrag } from "./issue-drag";
+import { chromeFor, levelOf } from "./issues-level";
 import { NewIssueDialog } from "./NewIssueDialog";
 import "./issues.css";
 
@@ -228,8 +229,10 @@ export function IssuesPage() {
   // A company's own page lists its boards: it asks for no tasks, and the board of one board is where tasks are read.
   const [allParam, setAllParam] = useAllParam();
   // Tarefas opens on the companies; inside one, on its boards; in a board, on its kanban (ADR 0179).
-  const onRootPage = !spaceParam && !projectParam && !allParam;
-  const onCompanyPage = Boolean(spaceParam) && !projectParam;
+  const level = levelOf({ project: projectParam, space: spaceParam, all: allParam });
+  const chrome = chromeFor(level);
+  const onRootPage = level === "root";
+  const onCompanyPage = level === "company";
   // A board opened from a company's grid: its dialogs live with the page's, as the board of the URL's do.
   const [gridDialog, setGridDialog] = useState<"edit" | "delete" | null>(null);
   const [gridBoard, setGridBoard] = useState<IssueProjectRef | null>(null);
@@ -295,7 +298,7 @@ export function IssuesPage() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.toLowerCase() === "n") {
         e.preventDefault();
-        if (adds) setCreating({ columnId: null });
+        if (adds && readsTasks) setCreating({ columnId: null });
       } else if (e.key === "/") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -303,7 +306,7 @@ export function IssuesPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [adds]);
+  }, [adds, readsTasks]);
   return (
     <BoardProject.Provider value={projectParam ?? null}>
       <IssueDeleteProvider onDeleted={() => setOpenParam(null)}>
@@ -343,13 +346,30 @@ export function IssuesPage() {
                 </>
               }
               actions={
-                // The empty state takes over this button: one way in, in the middle of the page.
-                !noIssues &&
-                adds && (
-                  <Button variant="primary" icon="plus" kbd={["N"]} onClick={() => setCreating({ columnId: null })}>
-                    {t("issues.new")}
-                  </Button>
-                )
+                // The action is the level's own: a company, a board, or a task (the empty state takes this one over).
+                chrome.action === "company"
+                  ? posts && (
+                      <Button variant="primary" icon="plus" onClick={() => setSpaceDialog("new")}>
+                        {t("issues.spaces.new")}
+                      </Button>
+                    )
+                  : chrome.action === "board"
+                    ? posts && (
+                        <Button variant="primary" icon="plus" onClick={() => setProjectDialog("new")}>
+                          {t("issues.projects.new")}
+                        </Button>
+                      )
+                    : !noIssues &&
+                      adds && (
+                        <Button
+                          variant="primary"
+                          icon="plus"
+                          kbd={["N"]}
+                          onClick={() => setCreating({ columnId: null })}
+                        >
+                          {t("issues.new")}
+                        </Button>
+                      )
               }
             />
             <WorkingNow issues={all} onOpen={toggle} />
