@@ -3795,7 +3795,7 @@ export const ptBR = {
     label: "Tarefa #{{number}}: {{title}} ({{status}})",
   },
   channelRefs: {
-    list: "Canais",
+    list: "Canais e tarefas",
     label: "Canal #{{name}}",
     archivedLabel: "Canal #{{name}}, arquivado",
     card: "Sobre #{{name}}",

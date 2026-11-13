@@ -52,16 +52,17 @@ describe("#channel autocomplete", () => {
     await go(`c/${GENERAL_ID}`);
     const box = composer();
     await typeIn(box, "veja #");
-    const list = screen().getByRole("listbox", { name: "Canais" });
+    const list = screen().getByRole("listbox", { name: "Canais e tarefas" });
     const options = within(list).getAllByRole("option");
-    expect(options).toHaveLength(2);
+    // The channels first, then the workspace's cards (at most eight rows in all).
+    expect(options).toHaveLength(8);
     expect(options[0]?.textContent).toContain("#eng");
     expect(options[0]?.textContent).toContain("Código, erros e deploys");
     expect(options[1]?.textContent).toContain("#general");
     await keyDown(box, "ArrowDown");
     expect(box.getAttribute("aria-activedescendant")).toBe(options[1]?.id ?? null);
-    await typeIn(box, "veja #ge");
-    expect(within(screen().getByRole("listbox", { name: "Canais" })).getAllByRole("option")).toHaveLength(1);
+    await typeIn(box, "veja #gene");
+    expect(within(screen().getByRole("listbox", { name: "Canais e tarefas" })).getAllByRole("option")).toHaveLength(1);
     await keyDown(box, "Enter");
     expect(box.value).toBe("veja #general ");
     expect(box.getAttribute("aria-expanded")).toBe("false");

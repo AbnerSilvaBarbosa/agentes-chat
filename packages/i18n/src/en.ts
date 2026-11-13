@@ -3881,7 +3881,7 @@ export const en = {
     label: "Task #{{number}}: {{title}} ({{status}})",
   },
   channelRefs: {
-    list: "Channels",
+    list: "Channels and tasks",
     label: "Channel #{{name}}",
     archivedLabel: "Channel #{{name}}, archived",
     card: "About #{{name}}",

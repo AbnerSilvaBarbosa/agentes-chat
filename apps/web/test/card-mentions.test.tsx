@@ -181,3 +181,50 @@ describe("#128 in a message", () => {
     expect(chips()[0]?.textContent).toContain(CARD.title);
   });
 });
+
+describe("the # list in the composer", () => {
+  const typeIn = (el: HTMLTextAreaElement, value: string) =>
+    act(async () => {
+      fireEvent.change(el, { target: { value, selectionStart: value.length, selectionEnd: value.length } });
+    });
+  const composer = () => screen().getByRole("combobox", { name: /Mensagem para/ }) as HTMLTextAreaElement;
+  const options = () =>
+    within(screen().getByRole("listbox", { name: "Canais e tarefas" })).getAllByRole("option") as HTMLElement[];
+
+  test("typing # lists channels and cards", async () => {
+    await go(`c/${GENERAL_ID}`, createFakeApi(seedState()));
+    await typeIn(composer(), "veja #");
+    const rows = options();
+    // Channels first, then cards, eight rows at most.
+    expect(rows.length).toBeLessThanOrEqual(8);
+    expect(rows[0]?.textContent).toContain("#eng");
+    expect(rows[1]?.textContent).toContain("#general");
+    const card = rows.find((r) => r.textContent?.includes("#128"));
+    expect(card?.textContent).toContain(CARD.title);
+    expect(rows.indexOf(card as HTMLElement)).toBeGreaterThan(1);
+  });
+
+  test("picking a card inserts its number", async () => {
+    await go(`c/${GENERAL_ID}`, createFakeApi(seedState()));
+    const box = composer();
+    await typeIn(box, "veja #12");
+    // 126 to 129 start with 12: the digits pick the cards whose number starts with them.
+    expect(options().map((r) => r.textContent?.match(/#(\d+)/)?.[1])).toEqual(["126", "127", "128", "129"]);
+    await act(async () => fireEvent.mouseDown(options()[2] as HTMLElement));
+    await act(async () => fireEvent.click(options()[2] as HTMLElement));
+    expect(box.value).toBe("veja #128 ");
+    expect(box.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("the list holds only the cards the member may see", async () => {
+    const api = createFakeApi(seedState());
+    const list = api.issues.list.bind(api.issues);
+    // The server leaves out of the list the cards its reader may not see.
+    api.issues.list = async (orgId, filters) => (await list(orgId, filters)).filter((i) => i.number !== 128);
+    await go(`c/${GENERAL_ID}`, api);
+    await typeIn(composer(), "#12");
+    expect(options().map((r) => r.textContent?.match(/#(\d+)/)?.[1])).toEqual(["126", "127", "129"]);
+    await typeIn(composer(), "#login");
+    expect(screen().queryByRole("listbox", { name: "Canais e tarefas" })).toBeNull();
+  });
+});
