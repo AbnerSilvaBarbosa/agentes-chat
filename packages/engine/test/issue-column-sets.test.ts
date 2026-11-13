@@ -189,7 +189,7 @@ describe("status sets", () => {
     const other = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Obras", spaceId: company.id });
     await applyColumnTemplate(deps, f.owner.id, f.org.id, other.id, kanban?.id as string);
     expect((await listIssueColumns(f.db, f.owner.id, f.org.id, other.id)).map((c) => c.name)).toEqual(
-      kanban?.columns.map((c) => c.name),
+      (kanban?.columns ?? []).map((c) => c.name),
     );
   });
 
