@@ -541,9 +541,24 @@ function templateColumns(columns: { name: string; stage: IssueStatus }[]) {
   if (columns.length === 0) {
     throw new ValidationError("A set needs at least one column", "issue_template.empty");
   }
+  const seen = new Set<string>();
   return columns.map((c) => {
     if (!BOARD_STAGES.includes(c.stage)) throw new ValidationError("invalid stage");
-    return { name: cleanName(c.name), stage: c.stage };
+    // A set refuses what a board's column would cut: a longer name, and two columns called the same.
+    const name = c.name.trim();
+    if (name.length > 40) {
+      throw new ValidationError("A column's name is up to 40 characters", "issue_template.column_name_invalid", {
+        max: 40,
+      });
+    }
+    const clean = cleanName(name);
+    if (seen.has(clean.toLowerCase())) {
+      throw new ValidationError(`The set has two columns named "${clean}"`, "issue_template.column_duplicate", {
+        name: clean,
+      });
+    }
+    seen.add(clean.toLowerCase());
+    return { name: clean, stage: c.stage };
   });
 }
 

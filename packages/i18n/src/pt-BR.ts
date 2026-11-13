@@ -13229,6 +13229,8 @@ export const ptBR = {
       templateNameTaken: "Já existe um conjunto com esse nome.",
       templateNameInvalid: "O nome do conjunto tem de 1 a {{max}} caracteres.",
       templateEmpty: "Um conjunto precisa de pelo menos uma coluna.",
+      templateColumnNameInvalid: "O nome da coluna tem de 1 a {{max}} caracteres.",
+      templateColumnDuplicate: 'O conjunto já tem uma coluna chamada "{{name}}".',
       boardAmbiguous: "Há mais de um board com esse nome: diga em qual empresa.",
       projectArchived: "Este projeto está arquivado e não recebe tarefas novas.",
       projectsFull: "Um workspace tem no máximo {{max}} projetos. Exclua um antes.",

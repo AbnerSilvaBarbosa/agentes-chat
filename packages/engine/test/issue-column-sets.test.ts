@@ -232,6 +232,49 @@ describe("status sets", () => {
     });
   });
 
+  test("refuses a column name over 40 characters and two columns with one name", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const long = [{ name: "x".repeat(41), stage: "todo" as const }];
+    expect(
+      await rejection(createColumnTemplate(deps, f.owner.id, f.org.id, { name: "Longa", columns: long })),
+    ).toMatchObject({
+      code: "issue_template.column_name_invalid",
+      params: { max: 40 },
+    });
+    const twice = [
+      { name: "Revisão", stage: "in_review" as const },
+      { name: " revisão ", stage: "in_progress" as const },
+    ];
+    expect(
+      await rejection(createColumnTemplate(deps, f.owner.id, f.org.id, { name: "Dupla", columns: twice })),
+    ).toMatchObject({
+      code: "issue_template.column_duplicate",
+      params: { name: "revisão" },
+    });
+    // Exactly 40 is a name, and the same word in two sets is not a clash.
+    const ok = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Certa",
+      columns: [{ name: "y".repeat(40), stage: "todo" as const }],
+    });
+    expect(ok.columns[0]?.name).toHaveLength(40);
+    // An edit that would duplicate a name is refused too, and the set stays as it was.
+    const made = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Editável",
+      columns: [{ name: "A", stage: "todo" as const }],
+    });
+    expect(
+      await rejection(
+        updateColumnTemplate(deps, f.owner.id, f.org.id, made.id, {
+          columns: [
+            { name: "A", stage: "todo" as const },
+            { name: "a", stage: "done" as const },
+          ],
+        }),
+      ),
+    ).toMatchObject({ code: "issue_template.column_duplicate" });
+  });
+
   test("two renames to one name at once leave the loser a name_taken answer", async () => {
     f = await setup();
     const deps = { db: f.db, pubsub: f.pubsub };

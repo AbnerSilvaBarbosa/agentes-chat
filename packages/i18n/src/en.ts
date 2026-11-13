@@ -13196,6 +13196,8 @@ export const en = {
       templateNameTaken: "There is already a set with that name.",
       templateNameInvalid: "A set's name is 1 to {{max}} characters.",
       templateEmpty: "A set needs at least one column.",
+      templateColumnNameInvalid: "A column's name is 1 to {{max}} characters.",
+      templateColumnDuplicate: 'The set already has a column named "{{name}}".',
       boardAmbiguous: "More than one board has that name: say which company it is in.",
       projectArchived: "This project is archived and takes no new tasks.",
       projectsFull: "A workspace holds at most {{max}} projects. Delete one first.",

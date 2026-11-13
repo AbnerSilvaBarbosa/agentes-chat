@@ -226,6 +226,8 @@ const KNOWN = {
   "issue_template.name_taken": "errors.issue.templateNameTaken",
   "issue_template.name_invalid": "errors.issue.templateNameInvalid",
   "issue_template.empty": "errors.issue.templateEmpty",
+  "issue_template.column_name_invalid": "errors.issue.templateColumnNameInvalid",
+  "issue_template.column_duplicate": "errors.issue.templateColumnDuplicate",
   "issue_project.ambiguous": "errors.issue.boardAmbiguous",
   "issue_project.archived": "errors.issue.projectArchived",
   "issue_project.too_many": "errors.issue.projectsFull",
