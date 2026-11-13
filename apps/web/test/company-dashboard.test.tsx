@@ -255,3 +255,40 @@ describe("the Painel's numbers", () => {
     expect(bigNumber("A fazer")).toBe("3");
   });
 });
+
+describe("moving between companies", () => {
+  test("never shows one company's numbers under another while it loads", async () => {
+    const state = seedState({
+      companyDashboard: (spaceId) => ({
+        total: 1,
+        stages: { todo: spaceId === "A" ? 11 : 22, in_progress: 0, in_review: 0, done: 0 },
+      }),
+    });
+    const api = createFakeApi(state);
+    const a = await api.issues.createSpace(ORG_ID, { name: "Empresa A", color: "teal" });
+    const b = await api.issues.createSpace(ORG_ID, { name: "Empresa B", color: "amber" });
+    // Each company's numbers say whose they are; B's arrive only when the test lets them.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const read = api.issues.companyDashboard;
+    api.issues.companyDashboard = async (orgId, spaceId, days) => {
+      const data = await read(orgId, spaceId, days);
+      if (spaceId === b.id) await gate;
+      return { ...data, stages: { ...data.stages, todo: spaceId === a.id ? 11 : 22 } };
+    };
+    const { router } = await renderApp(`/org/${ORG_ID}/issues?space=${a.id}&tab=painel`, { api });
+    await settle(8);
+    expect(bigNumber("A fazer")).toBe("11");
+    await act(async () => {
+      await router.navigate({ to: ".", search: { space: b.id, tab: "painel" } as never });
+    });
+    await settle(4);
+    // B is still loading: A's 11 is not shown under B.
+    expect(screen().queryByRole("article", { name: "A fazer" })).toBeNull();
+    await act(async () => release());
+    await settle(6);
+    expect(bigNumber("A fazer")).toBe("22");
+  });
+});

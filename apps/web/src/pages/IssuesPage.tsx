@@ -425,6 +425,8 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
               >
                 <TabPanel value="painel">
                   <CompanyDashboard
+                    // One per company: Back to another company never shows these numbers under it while it loads.
+                    key={space.id}
                     orgId={org.id}
                     spaceId={space.id}
                     onNewBoard={addsBoard ? () => setProjectDialog("new") : undefined}
