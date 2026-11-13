@@ -29,6 +29,7 @@ export type SettingsSection =
   | "import"
   | "media"
   | "voice"
+  | "tasks"
   | "about";
 
 /**
@@ -71,6 +72,8 @@ export const SETTINGS_SECTIONS: {
   { id: "access", icon: "agent", allowed: (o) => can(o, "manage_agents") },
   // Every member sees the devices and can connect one (ADR 0025): computers and the phones they reach.
   { id: "devices", icon: "computer", allowed: (o) => can(o, "read") },
+  // The status sets a board starts from (ADR 0177): every member reads them, who may create tasks changes them.
+  { id: "tasks", icon: "layers", allowed: (o) => can(o, "read") },
   { id: "storage", icon: "drive", allowed: (o) => can(o, "configure") },
   { id: "import", icon: "archiveBox", allowed: (o) => can(o, "create_agents") },
   // What agents did and people changed: only for who may see it (it shows everyone's work).

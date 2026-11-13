@@ -4345,6 +4345,10 @@ export function useIssueColumnTemplateAction(orgId: string) {
       if (Array.isArray(result) && action.type === "apply") {
         qc.setQueryData(keys.issueColumns(orgId, action.projectId), result);
       }
+      // An edit answers with the sets as they are now: the screen shows the new order without waiting for a refetch.
+      if (Array.isArray(result) && action.type === "update") {
+        qc.setQueryData(keys.issueColumnTemplates(orgId), result);
+      }
       void qc.invalidateQueries({ queryKey: keys.issueColumnTemplates(orgId) });
     },
     // Applying a template moves the tasks whose column went away.

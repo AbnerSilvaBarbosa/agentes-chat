@@ -605,15 +605,15 @@ describe("Configurações do workspace", () => {
       // With the Vault as a tab: their own logins, keys and contacts (ADR 0144).
       "Conectores",
     ]);
-    // What no entry holds is under Advanced: the devices on a self-hosted server, and AGPL's legal notices and the
-    // attribution, for everyone (the section 7(b) term in NOTICE).
+    // What no entry holds is under Advanced: the devices on a self-hosted server, the status sets a member reads
+    // (Tarefas), and AGPL's legal notices and the attribution, for everyone (the section 7(b) term in NOTICE).
     await click(within(nav).getByRole("button", { name: "Avançado" }));
     expect(
       within(nav)
         .getAllByRole("link")
         .slice(4)
         .map((l) => l.lastChild?.textContent),
-    ).toEqual(["Dispositivos", "Sobre o agentes.chat"]);
+    ).toEqual(["Dispositivos", "Tarefas", "Sobre o agentes.chat"]);
     // Settings opens on their account: what the agents know of the workspace is not theirs to read.
     expect(screen().queryByLabelText("O que os agentes sabem da Acme")).toBeNull();
     expect(document.body.textContent).not.toContain("Acme builds rockets");

@@ -36,6 +36,7 @@ import type {
   WebhookProvider,
   WebhookSetup,
 } from "@agenteschat/client";
+import { ApiError } from "@agenteschat/client";
 import { nextOccurrences } from "@agenteschat/ui";
 import { fromApiRule } from "@/lib/recurrence";
 import { clone, type MockContext, MockNotFoundError, minutesAgo, mockId, perOrg } from "./context";
@@ -245,6 +246,11 @@ export function createMockPlanning(
 ): Pick<ApiClient, "issues" | "routines" | "calendar"> {
   /** The sets this fake workspace holds: the two it starts with, then the ones a test makes. */
   const templates: IssueColumnTemplate[] = clone(SEEDED_TEMPLATES);
+  /** A set's name is unique in any capitals, as the server's index has it. */
+  const takenName = (name: string, except?: string) => {
+    if (templates.some((t) => t.id !== except && t.name.toLowerCase() === name.trim().toLowerCase()))
+      throw new ApiError(400, "issue_template.name_taken", `There is already a template named "${name}"`, { name });
+  };
   const me = async (): Promise<Actor> => ({ type: "person", id: (await ctx.lookup.me())?.user.id ?? "me" });
   const store = perOrg<Store>(async (orgId) => {
     const s: Store = {
@@ -871,6 +877,7 @@ export function createMockPlanning(
       },
       createColumnTemplate: async (_orgId, input) => {
         record("issues.createColumnTemplate", input);
+        takenName(input.name);
         const made: IssueColumnTemplate = {
           id: mockId("tpl"),
           name: input.name,
@@ -884,12 +891,15 @@ export function createMockPlanning(
         record("issues.updateColumnTemplate", templateId, patch);
         const found = templates.find((t) => t.id === templateId);
         if (!found) throw new MockNotFoundError("Modelo não encontrado.");
+        if (patch.name !== undefined) takenName(patch.name, found.id);
         if (patch.name !== undefined) found.name = patch.name;
         if (patch.columns !== undefined) found.columns = patch.columns;
         return clone(templates);
       },
       deleteColumnTemplate: async (_orgId, templateId) => {
         record("issues.deleteColumnTemplate", templateId);
+        const at = templates.findIndex((t) => t.id === templateId);
+        if (at >= 0) templates.splice(at, 1);
       },
       deleteSpace: async (orgId, spaceId) => {
         record("issues.deleteSpace", spaceId);

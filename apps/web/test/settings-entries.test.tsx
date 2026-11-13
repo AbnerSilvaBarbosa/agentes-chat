@@ -36,6 +36,7 @@ describe("the list", () => {
     await act(async () => fireEvent.click(advanced));
     expect(rows().slice(6)).toEqual([
       "Dispositivos",
+      "Tarefas",
       "Armazenamento",
       "Importar e exportar",
       "Auditoria",
@@ -47,14 +48,15 @@ describe("the list", () => {
     await go("settings", seedState({ authConfig: { cloud: true } }));
     expect(rows()).toEqual(["Sua conta", "Workspace", "Pessoas", "IA e uso", "Conectores", "Dispositivos", "Avançado"]);
     await act(async () => fireEvent.click(within(nav()).getByRole("button", { name: "Avançado" })));
-    expect(rows().slice(7)).toEqual(["Armazenamento", "Importar e exportar", "Auditoria"]);
+    expect(rows().slice(7)).toEqual(["Tarefas", "Armazenamento", "Importar e exportar", "Auditoria"]);
   });
 
   test("a member keeps the entries they open, each with only their tabs", async () => {
     const state = seedState({ authConfig: { cloud: true } });
     if (state.me?.organizations[0]) state.me.organizations[0].role = "member";
     await go("settings/connectors", state);
-    expect(rows()).toEqual(["Sua conta", "Pessoas", "IA e uso", "Conectores", "Dispositivos"]);
+    // Tarefas, which a member reads, is under Advanced.
+    expect(rows()).toEqual(["Sua conta", "Pessoas", "IA e uso", "Conectores", "Dispositivos", "Avançado"]);
     expect(tabs()).toEqual(["Conectores e MCPs", "Cofre"]);
   });
 

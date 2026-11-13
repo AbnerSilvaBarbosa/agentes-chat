@@ -93,6 +93,7 @@ import { KeyMismatch, KeyRefused, KeySite, ProviderKeySelect } from "@/component
 import { RolesSection } from "@/components/roles/RolesSection";
 import { SkillsSection } from "@/components/Skills";
 import { StorageSection } from "@/components/StorageSettings";
+import { TaskStatusSets } from "@/components/settings/TaskStatusSets";
 import { TeamMemoryCard } from "@/components/TeamMemory";
 import { VoiceSettingsSection } from "@/components/VoiceSettings";
 import { VaultSection } from "@/components/vault/VaultSection";
@@ -253,6 +254,7 @@ function Settings({
         <ConnectorsSection connected={connected} outcome={outcome} review={review} mail={mail} account={account} />
       )}
       {current === "skills" && <SkillsSection install={install} connected={connected} skill={skill} agent={agent} />}
+      {current === "tasks" && <TaskStatusSets />}
       {current === "storage" && <StorageSection />}
       {current === "devices" && (device ? <DevicePage path={device} /> : <DevicesSection start={connect} />)}
       {current === "usage" && (
