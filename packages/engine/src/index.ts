@@ -32,6 +32,7 @@ export * from "./avatars";
 export * from "./billing-link";
 export * from "./block-state";
 export * from "./blocks";
+export * from "./board-alerts";
 export * from "./brain-settings";
 export * from "./brains/claude-code";
 export * from "./brains/codex";
