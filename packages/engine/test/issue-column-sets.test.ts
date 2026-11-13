@@ -4,6 +4,7 @@ import {
   applyColumnTemplate,
   createColumnTemplate,
   createIssueProject,
+  createIssueSpace,
   deleteColumnTemplate,
   ForbiddenError,
   listColumnTemplates,
@@ -157,6 +158,39 @@ describe("status sets", () => {
     ]);
     const stored = (await listColumnTemplates(f.db, f.owner.id, f.org.id)).find((t) => t.id === made.id);
     expect(stored?.columns.map((c) => c.name)).toEqual(["Fechado", "Lead", "Proposta"]);
+  });
+
+  test("a board made in a company from a set's id ends with that set's columns", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const company = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Clínica Teo" });
+    const own = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Suporte",
+      columns: [
+        { name: "Triagem", stage: "todo" },
+        { name: "Em atendimento", stage: "in_progress" },
+        { name: "Resolvido", stage: "done" },
+      ],
+    });
+    // The new-board dialog creates the board, then applies the chosen set's id.
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Atendimento", spaceId: company.id });
+    await applyColumnTemplate(deps, f.owner.id, f.org.id, board.id, own.id);
+    const columns = await listIssueColumns(f.db, f.owner.id, f.org.id, board.id);
+    expect(columns.map((c) => [c.name, c.stage])).toEqual(own.columns.map((c) => [c.name, c.stage]));
+    // A copy: editing the set afterwards leaves the board's columns as they were.
+    await updateColumnTemplate(deps, f.owner.id, f.org.id, own.id, { columns: [{ name: "Só uma", stage: "todo" }] });
+    expect((await listIssueColumns(f.db, f.owner.id, f.org.id, board.id)).map((c) => c.name)).toEqual([
+      "Triagem",
+      "Em atendimento",
+      "Resolvido",
+    ]);
+    // A seeded set works the same way.
+    const kanban = (await listColumnTemplates(f.db, f.owner.id, f.org.id)).find((t) => t.name === "Kanban");
+    const other = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Obras", spaceId: company.id });
+    await applyColumnTemplate(deps, f.owner.id, f.org.id, other.id, kanban?.id as string);
+    expect((await listIssueColumns(f.db, f.owner.id, f.org.id, other.id)).map((c) => c.name)).toEqual(
+      kanban?.columns.map((c) => c.name),
+    );
   });
 
   test("deleting a set keeps the boards' columns", async () => {
