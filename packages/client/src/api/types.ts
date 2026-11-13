@@ -3742,6 +3742,23 @@ export interface IssueColumnTemplate {
   seeded: boolean;
 }
 
+/**
+ * A board's alert rule (ADR 0175 addendum): when a card goes to `columnId` (from `fromColumnId`, when set) the agent is
+ * woken. It is a routine on `issue.moved`, so `id` is the routine's.
+ */
+export interface BoardAlert {
+  id: string;
+  agentId: string;
+  agentName: string;
+  columnId: string;
+  /** Null: from any column. */
+  fromColumnId: string | null;
+  /** Fires nothing now: the routine is paused or its agent archived. */
+  paused: boolean;
+  /** Why (`agent_archived`, or the routine's own reason); null when not paused. */
+  pausedReason: string | null;
+}
+
 export type RoutineEvent =
   | "sentry.issue_created"
   | "github.pr_opened"

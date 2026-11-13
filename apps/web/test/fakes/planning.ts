@@ -18,6 +18,7 @@ import type {
   Actor,
   ApiClient,
   ApiRule,
+  BoardAlert,
   CalendarEvent,
   CalendarProposal,
   Issue,
@@ -230,6 +231,8 @@ interface Store {
   /** The companies the boards are grouped under; none until a test makes one. */
   spaces: IssueSpaceRef[];
   activity: Map<string, IssueActivity[]>;
+  /** The boards' alert rules (ADR 0175 addendum), each with its board. */
+  alerts: (BoardAlert & { projectId: string })[];
   routines: Routine[];
   runs: Map<string, RoutineRun[]>;
   /** Webhook routines' addresses and calls. */
@@ -259,6 +262,7 @@ export function createMockPlanning(
       projects: [],
       spaces: [],
       activity: new Map(),
+      alerts: [],
       routines: [],
       runs: new Map(),
       hooks: new Map(),
@@ -793,6 +797,36 @@ export function createMockPlanning(
           s.columns = boardOrder(s.columns);
         }
         return clone(s.columns);
+      },
+      boardAlerts: async (orgId, projectId) =>
+        clone((await store(orgId)).alerts.filter((a) => a.projectId === projectId).map(({ projectId: _p, ...a }) => a)),
+      addBoardAlert: async (orgId, projectId, input) => {
+        record("issues.addBoardAlert", projectId, input);
+        const s = await store(orgId);
+        const ids = s.columns.filter((c) => c.projectId === projectId || c.projectId === null).map((c) => c.id);
+        const from = input.fromColumnId ?? null;
+        if (from && from === input.columnId)
+          throw new ApiError(400, "board_alert.same_column", "A card can't go from a status to itself");
+        if (!ids.includes(input.columnId) || (from && !ids.includes(from)))
+          throw new ApiError(400, "board_alert.column_not_on_board", "That status is not one of this board's");
+        const agent = (await ctx.lookup.agents(orgId)).find((a) => a.id === input.agentId);
+        if (!agent) throw new MockNotFoundError("Agente não encontrado.");
+        const alert: BoardAlert = {
+          id: mockId("alert"),
+          agentId: agent.id,
+          agentName: agent.name,
+          columnId: input.columnId,
+          fromColumnId: from,
+          paused: false,
+          pausedReason: null,
+        };
+        s.alerts.push({ ...alert, projectId });
+        return clone(alert);
+      },
+      removeBoardAlert: async (orgId, projectId, alertId) => {
+        record("issues.removeBoardAlert", projectId, alertId);
+        const s = await store(orgId);
+        s.alerts = s.alerts.filter((a) => !(a.id === alertId && a.projectId === projectId));
       },
       projects: async (orgId) => {
         const s = await store(orgId);

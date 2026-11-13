@@ -92,6 +92,7 @@ import type {
   AuditQuery,
   AuditRow,
   BlockState,
+  BoardAlert,
   BrainScope,
   CalendarEventInput,
   CalendarEventPatch,
@@ -4308,6 +4309,41 @@ export function useIssueColumnAction(orgId: string, projectId?: string | null) {
     },
     // Deleting a column moves its tasks.
     onSettled: () => void qc.invalidateQueries({ queryKey: keys.issues(orgId) }),
+  });
+}
+
+/** A board's alert rules (ADR 0175 addendum); under the issues key, so a deleted column refreshes them too. */
+export const useBoardAlerts = (orgId: string, projectId: string | null | undefined) => {
+  const api = useApi();
+  return useQuery({
+    queryKey: keys.boardAlerts(orgId, projectId ?? ""),
+    queryFn: () => api.issues.boardAlerts(orgId, projectId ?? ""),
+    enabled: !!projectId,
+  });
+};
+
+export function useBoardAlertAction(orgId: string, projectId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      action:
+        | { type: "add"; agentId: string; columnId: string; fromColumnId?: string | null }
+        | { type: "remove"; alertId: string },
+    ): Promise<BoardAlert | undefined> =>
+      action.type === "add"
+        ? api.issues.addBoardAlert(orgId, projectId, {
+            agentId: action.agentId,
+            columnId: action.columnId,
+            fromColumnId: action.fromColumnId,
+          })
+        : api.issues.removeBoardAlert(orgId, projectId, action.alertId).then(() => undefined),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.boardAlerts(orgId, projectId) });
+      // A board that followed the workspace's columns got its own copy; the routine shows on Rotinas.
+      void qc.invalidateQueries({ queryKey: keys.issueColumns(orgId) });
+      void qc.invalidateQueries({ queryKey: keys.routines(orgId) });
+    },
   });
 }
 

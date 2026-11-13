@@ -62,6 +62,7 @@ import type {
   AuthConfig,
   BatchInviteResult,
   BlockState,
+  BoardAlert,
   BrainMachine,
   BrowserHandoff,
   BrowserProfile,
@@ -1522,6 +1523,12 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
             query: { moveTo },
           })
         ).columns,
+      boardAlerts: async (orgId, projectId) =>
+        (await request<{ alerts: BoardAlert[] }>(`${org(orgId)}/issue-projects/${enc(projectId)}/alerts`)).alerts,
+      addBoardAlert: (orgId, projectId, input) =>
+        request<BoardAlert>(`${org(orgId)}/issue-projects/${enc(projectId)}/alerts`, { json: input }),
+      removeBoardAlert: (orgId, projectId, alertId) =>
+        request<void>(`${org(orgId)}/issue-projects/${enc(projectId)}/alerts/${enc(alertId)}`, { method: "DELETE" }),
       projects: (orgId) => request<IssueProjects>(`${org(orgId)}/issue-projects`),
       createProject: (orgId, input) => request<IssueProject>(`${org(orgId)}/issue-projects`, { json: input }),
       updateProject: (orgId, projectId, patch) =>

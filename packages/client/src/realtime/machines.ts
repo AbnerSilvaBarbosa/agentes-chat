@@ -495,6 +495,8 @@ export function applyWorkspaceEvent(qc: QueryClient, orgId: string, event: { typ
   // A routine's run was queued, started or ended, or a routine was made, changed or deleted: Rotinas follows.
   if (event.type === "routine.runs" || event.type === "routines.changed") {
     void qc.invalidateQueries({ queryKey: keys.routines(orgId) });
+    // A board's alert rules are routines on a move (ADR 0175 addendum).
+    if (event.type === "routines.changed") void qc.invalidateQueries({ queryKey: keys.boardAlerts(orgId) });
     return true;
   }
   // The Drive's lists and its trash; a file's own content follows its conversation (`applyConversationEvent`).

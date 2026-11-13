@@ -83,6 +83,7 @@ import type {
   BatchInviteResult,
   BillingFrom,
   BlockState,
+  BoardAlert,
   BrainKind,
   BrainMachine,
   BrainScope,
@@ -1330,6 +1331,15 @@ export interface ApiClient {
     ): Promise<IssueColumn[]>;
     /** Deletes a column; its tasks go to `moveTo`. A stage keeps at least one column. */
     deleteColumn(orgId: string, columnId: string, moveTo: string): Promise<IssueColumn[]>;
+    /** The board's alert rules: routines on `issue.moved` that name a column a card lands in. */
+    boardAlerts(orgId: string, projectId: string): Promise<BoardAlert[]>;
+    /** Alerts an agent when a card goes to `columnId` (from `fromColumnId`, when given). */
+    addBoardAlert(
+      orgId: string,
+      projectId: string,
+      input: { agentId: string; columnId: string; fromColumnId?: string | null },
+    ): Promise<BoardAlert>;
+    removeBoardAlert(orgId: string, projectId: string, alertId: string): Promise<void>;
     projects(orgId: string): Promise<IssueProjects>;
     createProject(
       orgId: string,

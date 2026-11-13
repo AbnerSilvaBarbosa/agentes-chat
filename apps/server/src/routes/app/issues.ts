@@ -1,6 +1,8 @@
 import {
+  addBoardAlert,
   applyColumnTemplate,
   askAgentToImplement,
+  boardAlerts,
   clearSpaceImage,
   commentIssue,
   createColumnTemplate,
@@ -24,6 +26,8 @@ import {
   openTaskConversation,
   PROJECT_NAME_MAX,
   ROLE_COLORS,
+  type RoutineDeps,
+  removeBoardAlert,
   SPACE_NAME_MAX,
   saveColumnTemplate,
   setCriterion,
@@ -44,10 +48,12 @@ import {
   body,
   createAppRouter,
   errors,
+  hookConfig,
   json,
   noContent,
   OrgParams,
   requireSession,
+  routineConnectorDeps,
   security,
 } from "./context";
 import { AudienceChoice, WorkView } from "./schemas";
@@ -231,6 +237,20 @@ const ColumnTemplate = z
   .openapi("IssueColumnTemplate");
 const TemplateColumn = z.object({ name: z.string().max(200), stage: Status });
 const ColumnParams = OrgParams.extend({ columnId: z.uuid() });
+const BoardAlert = z
+  .object({
+    id: z.uuid().openapi({ description: "The rule's routine." }),
+    agentId: z.uuid(),
+    agentName: z.string(),
+    columnId: z.uuid().openapi({ description: "The column a card goes to." }),
+    fromColumnId: z.uuid().nullable().openapi({ description: "The column it leaves; null: any." }),
+    paused: z
+      .boolean()
+      .openapi({ description: "The rule fires nothing now: its routine is paused or its agent archived." }),
+    pausedReason: z.string().nullable(),
+  })
+  .openapi("BoardAlert");
+const BoardAlertParams = OrgParams.extend({ projectId: z.uuid() });
 
 /** Native issues: numbers per org, acceptance criteria, activity, "ask an agent to implement". */
 export function issueRoutes(deps: AppDeps) {
@@ -240,6 +260,15 @@ export function issueRoutes(deps: AppDeps) {
   const issues: IssueDeps = { db, pubsub: adapters.pubsub };
   const blobDeps = { ...issues, blobs: adapters.platformBlobs };
   const person = (userId: string) => ({ type: "person" as const, userId });
+  // A board's alert rules are routines (ADR 0175 addendum): made and deleted as the routines page does.
+  const routines: RoutineDeps = {
+    db,
+    pubsub: adapters.pubsub,
+    context: deps.extras?.context,
+    mail: adapters.mail,
+    hooks: hookConfig(deps.config),
+    connectors: routineConnectorDeps(deps),
+  };
 
   app.openapi(
     createRoute({
@@ -734,6 +763,71 @@ export function issueRoutes(deps: AppDeps) {
     async (c) => {
       const { orgId, projectId } = c.req.valid("param");
       await deleteIssueProject(issues, c.get("user").id, orgId, projectId);
+      return c.body(null, 204);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/organizations/{orgId}/issue-projects/{projectId}/alerts",
+      tags,
+      security,
+      summary: "A board's alert rules: the routines on `issue.moved` that name a column it lands in, whoever made them",
+      request: { params: BoardAlertParams },
+      responses: { 200: json(z.object({ alerts: z.array(BoardAlert) })), ...errors },
+    }),
+    async (c) => {
+      const { orgId, projectId } = c.req.valid("param");
+      return c.json({ alerts: await boardAlerts(db, c.get("user").id, orgId, projectId) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/organizations/{orgId}/issue-projects/{projectId}/alerts",
+      tags,
+      security,
+      summary: "Alert an agent when a card goes to a column (optionally from another one)",
+      description:
+        "Makes one event routine for the agent, with the checks of any routine: who may manage routines for that agent and talk to it, and the agent's caps. `board_alert.column_not_on_board`, `board_alert.same_column`.",
+      request: {
+        params: BoardAlertParams,
+        body: body(
+          z.object({
+            agentId: z.uuid(),
+            columnId: z.uuid().openapi({ description: "The column a card goes to." }),
+            fromColumnId: z
+              .uuid()
+              .nullable()
+              .optional()
+              .openapi({ description: "The column it leaves. Left out: any." }),
+          }),
+        ),
+      },
+      responses: { 201: json(BoardAlert, "Created"), ...errors },
+    }),
+    async (c) => {
+      const { orgId, projectId } = c.req.valid("param");
+      const alert = await addBoardAlert(routines, c.get("user").id, orgId, projectId, c.req.valid("json"));
+      return c.json(alert, 201);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/organizations/{orgId}/issue-projects/{projectId}/alerts/{alertId}",
+      tags,
+      security,
+      summary: "Remove a board's alert rule (its routine is deleted)",
+      request: { params: BoardAlertParams.extend({ alertId: z.uuid() }) },
+      responses: { 204: noContent[204], ...errors },
+    }),
+    async (c) => {
+      const { orgId, projectId, alertId } = c.req.valid("param");
+      await removeBoardAlert(routines, c.get("user").id, orgId, projectId, alertId);
       return c.body(null, 204);
     },
   );

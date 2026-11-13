@@ -13236,6 +13236,8 @@ export const ptBR = {
       spaceImageTooLarge: "A imagem passa de {{maxMb}} MB. Use uma imagem PNG, JPEG ou WebP de até {{maxMb}} MB.",
       spaceImageUnreadable: "Não deu para ler essa imagem. Use uma imagem PNG, JPEG ou WebP de até 1 MB.",
       templateNameTaken: "Já existe um conjunto com esse nome.",
+      alertSameColumn: "Um card não vai de um status para ele mesmo: escolha dois diferentes.",
+      alertColumnNotOnBoard: "Esse status não é deste board.",
       templateNameInvalid: "O nome do conjunto tem de 1 a {{max}} caracteres.",
       templateEmpty: "Um conjunto precisa de pelo menos uma coluna.",
       templateColumnNameInvalid: "O nome da coluna tem de 1 a {{max}} caracteres.",

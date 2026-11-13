@@ -1260,7 +1260,9 @@ async function requireRoutineManager(db: Database, actorId: string, orgId: strin
   const membership = await requirePermission(db, actorId, orgId, "read");
   if (can(membership, "manage_routines")) return;
   const agent = await getAgent(db, orgId, agentId);
-  if (agent?.ownerUserId !== actorId) throw new ForbiddenError("Only an admin or the agent's owner can do this");
+  if (agent?.ownerUserId !== actorId) {
+    throw new ForbiddenError("Only an admin or the agent's owner can do this", "routine.manage_forbidden");
+  }
 }
 
 /**

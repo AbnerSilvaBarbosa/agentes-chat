@@ -173,6 +173,9 @@ export const keys = {
   issue: (orgId: string, number: number) => ["org", orgId, "issues", "one", number] as const,
   issueActivity: (orgId: string, id: string) => ["org", orgId, "issues", "activity", id] as const,
   issueColumns: (orgId: string, projectId = "") => ["org", orgId, "issues", "columns", projectId] as const,
+  /** A board's alert rules (ADR 0175 addendum); the prefix without `projectId` is every board's. */
+  boardAlerts: (orgId: string, projectId = "") =>
+    ["org", orgId, "issues", "alerts", ...(projectId ? [projectId] : [])] as const,
   issueColumnTemplates: (orgId: string) => ["org", orgId, "issues", "column-templates"] as const,
   issueProjects: (orgId: string) => ["org", orgId, "issues", "projects"] as const,
   /** Every thread view and list (prefix): a `thread.updated` refreshes them all. */
