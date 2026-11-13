@@ -278,6 +278,8 @@ export function IssuesPage() {
   const look = useRightHandLook();
   const posts = can(org, "post");
   const adds = posts && !project?.archived;
+  // An archived company takes no new board (the engine refuses it), so its page offers none.
+  const addsBoard = posts && !(onCompanyPage && space?.archived);
   const open = all.filter(isOpen);
   const listed = all.find((i) => i.number === openNumber) ?? null;
   // On a project's board a task that isn't in it still opens (a link, or its project changed in its own dialog).
@@ -354,7 +356,7 @@ export function IssuesPage() {
                       </Button>
                     )
                   : chrome.action === "board"
-                    ? posts && (
+                    ? addsBoard && (
                         <Button variant="primary" icon="plus" onClick={() => setProjectDialog("new")}>
                           {t("issues.projects.new")}
                         </Button>
@@ -486,9 +488,9 @@ export function IssuesPage() {
               <SpaceBoards
                 space={space ?? null}
                 data={projectsQuery.data}
-                mayCreate={posts}
+                mayCreate={addsBoard}
                 onOpen={(id) => setProjectParam(id)}
-                onNew={posts ? () => setProjectDialog("new") : undefined}
+                onNew={addsBoard ? () => setProjectDialog("new") : undefined}
                 onEdit={
                   posts
                     ? (board) => {

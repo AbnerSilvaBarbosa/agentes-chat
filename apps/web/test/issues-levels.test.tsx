@@ -95,6 +95,18 @@ describe("the header's action follows the level", () => {
   });
 });
 
+describe("an archived company", () => {
+  test("an archived company's page offers no Novo board", async () => {
+    const { api, clinic } = await setup();
+    await api.issues.updateSpace(ORG_ID, clinic.id, { archived: true });
+    await visit(api, `?space=${clinic.id}`);
+    expect(headerActions()).toEqual([]);
+    expect(anywhere("Novo board")).toHaveLength(0);
+    // Its boards are still listed.
+    expect(screen().getByText("Site novo")).toBeTruthy();
+  });
+});
+
 /** The toolbar's select triggers, by their words. */
 const triggers = () =>
   [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger")].map((t) => t.textContent ?? "");
