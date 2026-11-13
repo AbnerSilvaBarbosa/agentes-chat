@@ -1,4 +1,4 @@
-import { type Database, rowsOf, type SQL, schema, sql } from "@agenteschat/db";
+import { type Database, eq, rowsOf, type SQL, schema, sql } from "@agenteschat/db";
 import { NotFoundError } from "./errors";
 import { requireActiveMembership } from "./organizations";
 import { taskSeenSql } from "./task-access";
@@ -29,6 +29,10 @@ export interface CompanyDashboard {
   leadTime: SpanStats;
   /** From the first time a task became Em andamento to its last conclusion; a task that never was is out of it. */
   workTime: SpanStats;
+  /** One entry per week of the period (Monday's date in the workspace's time zone), a week with no delivery kept as 0. */
+  weekly: { weekStart: string; count: number }[];
+  /** Open tasks due before today (the workspace's time zone), whatever the period. */
+  late: number;
 }
 
 /** How long tasks took: how many were measured, the median and the average in milliseconds (null: none). */
@@ -37,6 +41,28 @@ export interface SpanStats {
   medianMs: number | null;
   averageMs: number | null;
 }
+
+/** The workspace's time zone, UTC when none is set (or it is not one Postgres reads). */
+async function workspaceTimezone(db: Database, orgId: string) {
+  const [row] = await db
+    .select({ tz: schema.organizationSettings.timezone })
+    .from(schema.organizationSettings)
+    .where(eq(schema.organizationSettings.orgId, orgId));
+  const tz = row?.tz ?? "UTC";
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return tz;
+  } catch {
+    return "UTC";
+  }
+}
+
+const DAY_MS = 86_400_000;
+/** The Monday of the week holding `date` ("YYYY-MM-DD"). */
+const mondayOf = (date: string) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  return d.getTime() - ((d.getUTCDay() + 6) % 7) * DAY_MS;
+};
 
 const OPEN = sql`status in ('todo', 'in_progress', 'in_review')`;
 
@@ -84,14 +110,16 @@ export async function companyDashboard(
     await db.execute(sql`select id from ${schema.issueSpaces} where id = ${spaceId}::uuid and org_id = ${orgId}::uuid`),
   );
   if (!space) throw new NotFoundError("Not found");
-  const since = new Date(now.getTime() - period * 86_400_000).toISOString();
+  const since = new Date(now.getTime() - period * DAY_MS).toISOString();
+  const nowAt = now.toISOString();
+  const tz = await workspaceTimezone(db, orgId);
 
   /** One read over the company's tasks: `select` sees `c`, each task with its conclusion and start. */
   const over = async <T>(select: SQL) =>
     rowsOf<T>(await db.execute(sql`with ${visibleTasks(userId, orgId, spaceId)}, ${CONCLUDED} ${select}`));
   const doneInPeriod = sql`done_at >= ${since}::timestamptz`;
 
-  const [[stages], people, [times]] = await Promise.all([
+  const [[stages], people, [times], weeks, [bounds]] = await Promise.all([
     over<{
       todo: number;
       in_progress: number;
@@ -102,7 +130,8 @@ export async function companyDashboard(
         count(*) filter (where status = 'in_progress')::int as in_progress,
         count(*) filter (where status = 'in_review')::int as in_review,
         count(*) filter (where ${doneInPeriod})::int as done,
-        count(*) filter (where ${OPEN} and assignee_id is null)::int as unassigned
+        count(*) filter (where ${OPEN} and assignee_id is null)::int as unassigned,
+        count(*) filter (where ${OPEN} and due_date < (${nowAt}::timestamptz at time zone ${tz})::date)::int as late
       from c`),
     over<{
       kind: string;
@@ -134,8 +163,19 @@ export async function companyDashboard(
       from (select greatest(0, extract(epoch from done_at - created_at) * 1000) as lead,
           case when first_start is not null then greatest(0, extract(epoch from done_at - first_start) * 1000) end as work
         from c where ${doneInPeriod}) m`),
+    // A conclusion is never past now: a clock a little ahead still counts in this week.
+    over<{
+      week: string;
+      count: number;
+    }>(sql`select date_trunc('week', least(done_at, ${nowAt}::timestamptz) at time zone ${tz})::date::text as week,
+        count(*)::int as count
+      from c where ${doneInPeriod} group by 1`),
+    rowsOf<{ first: string; today: string }>(
+      await db.execute(sql`select (${since}::timestamptz at time zone ${tz})::date::text as first,
+        (${nowAt}::timestamptz at time zone ${tz})::date::text as today`),
+    ),
   ]);
-  const { unassigned = 0, ...counts } = stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 };
+  const { unassigned = 0, late = 0, ...counts } = stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 };
   const assignees = people
     .map((p) => ({
       type: p.removed ? ("removed" as const) : p.kind === "agent" ? ("agent" as const) : ("person" as const),
@@ -150,6 +190,14 @@ export async function companyDashboard(
     medianMs: median == null ? null : Math.round(median),
     averageMs: average == null ? null : Math.round(average),
   });
+  const delivered = new Map(weeks.map((w) => [w.week, w.count]));
+  const weekly: CompanyDashboard["weekly"] = [];
+  if (bounds) {
+    for (let at = mondayOf(bounds.first); at <= mondayOf(bounds.today); at += 7 * DAY_MS) {
+      const weekStart = new Date(at).toISOString().slice(0, 10);
+      weekly.push({ weekStart, count: delivered.get(weekStart) ?? 0 });
+    }
+  }
   return {
     days: period,
     stages: counts,
@@ -157,5 +205,7 @@ export async function companyDashboard(
     unassigned,
     leadTime: span(times?.lead_count, times?.lead_median, times?.lead_average),
     workTime: span(times?.work_count, times?.work_median, times?.work_average),
+    weekly,
+    late,
   };
 }

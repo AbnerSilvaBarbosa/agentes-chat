@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { schema } from "@agenteschat/db";
+import { eq, schema } from "@agenteschat/db";
 import {
   companyDashboard,
   createIssue,
@@ -278,5 +278,132 @@ describe("companyDashboard times", () => {
     const d = await read();
     expect(d.leadTime).toEqual({ count: 0, medianMs: null, averageMs: null });
     expect(d.workTime).toEqual({ count: 0, medianMs: null, averageMs: null });
+  });
+});
+
+describe("companyDashboard weeks, late and unassigned", () => {
+  const doneAt = (at: Date) => ({
+    status: "done" as const,
+    moves: [["done", (NOW.getTime() - at.getTime()) / DAY] as [Status, number]],
+  });
+
+  test("has one entry per week of the period", async () => {
+    f = await setup();
+    const { read } = await scene();
+    // 2026-11-11 is a Wednesday: 7 days back starts on a Wednesday, so two Mondays.
+    expect((await read(7)).weekly.map((w) => w.weekStart)).toEqual(["2026-11-02", "2026-11-09"]);
+    const month = (await read(30)).weekly.map((w) => w.weekStart);
+    expect(month).toEqual(["2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02", "2026-11-09"]);
+    const quarter = (await read(90)).weekly;
+    expect(quarter).toHaveLength(14);
+    expect(quarter[0]?.weekStart).toBe("2026-08-10");
+    expect(quarter.at(-1)?.weekStart).toBe("2026-11-09");
+  });
+
+  test("keeps a week with no delivery as zero", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task(doneAt(new Date("2026-11-10T09:00:00Z"))); // Tuesday of this week
+    await task(doneAt(new Date("2026-11-10T10:00:00Z")));
+    await task(doneAt(new Date("2026-10-20T09:00:00Z"))); // the week of 10-19
+    const d = await read();
+    expect(d.weekly).toEqual([
+      { weekStart: "2026-10-12", count: 0 },
+      { weekStart: "2026-10-19", count: 1 },
+      { weekStart: "2026-10-26", count: 0 },
+      { weekStart: "2026-11-02", count: 0 },
+      { weekStart: "2026-11-09", count: 2 },
+    ]);
+    expect(d.weekly.reduce((n, w) => n + w.count, 0)).toBe(d.stages.done);
+  });
+
+  test("weeks and today follow the workspace's time zone", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await f.db
+      .insert(schema.organizationSettings)
+      .values({ orgId: f.org.id, timezone: "America/Sao_Paulo" })
+      .onConflictDoUpdate({ target: schema.organizationSettings.orgId, set: { timezone: "America/Sao_Paulo" } });
+    // Monday 01:00 UTC is still Sunday night in São Paulo: last week's bar.
+    await task(doneAt(new Date("2026-11-09T01:00:00Z")));
+    // Due on the 10th, 02:00 UTC on the 11th is still the 10th there: not yet past.
+    await task({ status: "todo", dueDate: "2026-11-10" });
+    const d = await companyDashboard(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      (await f.db.select().from(schema.issueSpaces))[0]?.id as string,
+      30,
+      new Date("2026-11-11T02:00:00Z"),
+    );
+    expect(d.weekly.find((w) => w.weekStart === "2026-11-02")?.count).toBe(1);
+    expect(d.weekly.find((w) => w.weekStart === "2026-11-09")?.count).toBe(0);
+    expect(d.late).toBe(0);
+    expect((await read()).late).toBe(1);
+  });
+
+  test("counts the open tasks due before today", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({ status: "todo", dueDate: "2026-11-10" });
+    await task({ status: "in_progress", dueDate: "2026-09-01" });
+    await task({ status: "todo", dueDate: "2026-11-11" }); // today is not late
+    await task({ status: "todo", dueDate: "2026-11-30" });
+    await task({ status: "todo" });
+    await task({ status: "done", dueDate: "2026-11-01", moves: [["done", 2]] });
+    await task({ status: "canceled", dueDate: "2026-11-01" });
+    expect((await read()).late).toBe(2);
+  });
+
+  test("counts the open tasks with no assignee", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({ status: "todo" });
+    await task({ status: "in_review" });
+    await task({ status: "todo", assigneeType: "agent", assigneeId: f.agent.id });
+    await task({ status: "done", moves: [["done", 2]] });
+    await task({ status: "canceled" });
+    expect((await read()).unassigned).toBe(2);
+  });
+
+  test("late and unassigned ignore the period", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({ status: "todo", dueDate: "2025-01-01", createdAt: ago(300) });
+    const [d7, d90] = [await read(7), await read(90)];
+    expect([d7.late, d7.unassigned]).toEqual([1, 1]);
+    expect([d90.late, d90.unassigned]).toEqual([1, 1]);
+  });
+
+  test("counts a task for the company it is in now", async () => {
+    f = await setup();
+    const { task, read, board } = await scene();
+    const [other] = await f.db.insert(schema.issueSpaces).values({ orgId: f.org.id, name: "Outra" }).returning();
+    const [elsewhere] = await f.db
+      .insert(schema.issueProjects)
+      .values({ orgId: f.org.id, name: "Fora", spaceId: other?.id })
+      .returning();
+    const moved = await task({ ...doneAt(ago(2)), projectId: elsewhere?.id });
+    const stays = await task(doneAt(ago(2)));
+    expect((await read()).stages.done).toBe(1);
+    // The board changes company after the conclusion: the task counts where it is now.
+    await f.db.update(schema.issues).set({ projectId: board?.id }).where(eq(schema.issues.id, moved.id));
+    await f.db
+      .update(schema.issueProjects)
+      .set({ spaceId: other?.id })
+      .where(eq(schema.issueProjects.id, board?.id as string));
+    expect((await read()).stages.done).toBe(0);
+    expect(stays.id).not.toBe(moved.id);
+  });
+
+  test("counts a task concluded a minute ago in every period", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task(doneAt(new Date(NOW.getTime() - 60_000)));
+    for (const days of [7, 30, 90]) {
+      const d = await read(days);
+      expect(d.stages.done).toBe(1);
+      expect(d.weekly.at(-1)).toEqual({ weekStart: "2026-11-09", count: 1 });
+    }
   });
 });
