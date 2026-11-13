@@ -6697,6 +6697,7 @@ export type SidebarItem =
   | "proposals"
   | "threads"
   | "issues"
+  | "myTasks"
   | "wiki"
   | "drive"
   | "routines"
