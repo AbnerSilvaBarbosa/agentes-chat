@@ -9,6 +9,156 @@ import { useToast } from "@/lib/toast";
 /** The stages a column can sit in, in board order; `canceled` is kept off the board and out of this screen. */
 export const CONFIGURABLE_STAGES: IssueStatus[] = ["todo", "in_progress", "in_review", "done"];
 
+/** A column as the editor draws it: its name as shown, and the stage it sits in. `id` only has to be unique here. */
+export interface EditorColumn {
+  id: string;
+  name: string;
+  stage: IssueStatus;
+}
+
+/**
+ * The columns of a board or of a status set, by stage: each renamed, moved up or down inside its stage, moved to
+ * another stage, deleted, and one added at the end of any stage. It holds no data of its own: the board's dialog sends
+ * each gesture to the server, the settings screen edits a set's list (ADR 0179).
+ */
+export function ColumnEditor({
+  columns,
+  busy = false,
+  readOnly = false,
+  canDelete = (_column, inStage) => inStage.length > 1,
+  onRename,
+  onStage,
+  onMove,
+  onAdd,
+  onDelete,
+}: {
+  /** In board order: by stage, then position. */
+  columns: EditorColumn[];
+  /** A write is on its way: the moves and the delete wait. */
+  busy?: boolean;
+  /** Only the names, by stage: no control that changes anything. */
+  readOnly?: boolean;
+  /** Whether a column may go; by default a stage keeps one. */
+  canDelete?: (column: EditorColumn, inStage: EditorColumn[]) => boolean;
+  onRename: (id: string, name: string) => void;
+  onStage: (id: string, stage: IssueStatus) => void;
+  /** `index`: its new place among its stage's columns. */
+  onMove: (id: string, index: number) => void;
+  /** A promise it returns settles when the column was added (the form closes); a rejection keeps the form open. */
+  onAdd: (stage: IssueStatus, name: string, afterId: string | null) => unknown;
+  /** `moveTo`: another column of its stage, for the board to send its tasks to. */
+  onDelete: (id: string, moveTo: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  const [adding, setAdding] = useState<IssueStatus | null>(null);
+  const [newName, setNewName] = useState("");
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const save = (c: EditorColumn) => {
+    const value = (draft[c.id] ?? "").trim();
+    if (!value || value === c.name) return;
+    onRename(c.id, value.slice(0, 40));
+  };
+  return (
+    <div className="board-columns">
+      {CONFIGURABLE_STAGES.map((stage) => {
+        const inStage = columns.filter((c) => c.stage === stage);
+        if (readOnly && inStage.length === 0) return null;
+        return (
+          <section key={stage} className="board-columns__stage" aria-label={t(`issues.status.${stage}`)}>
+            <h3>{t(`issues.status.${stage}`)}</h3>
+            {inStage.map((c, index) =>
+              readOnly ? (
+                <p key={c.id} className="board-columns__row">
+                  {c.name}
+                </p>
+              ) : (
+                <div key={c.id} className="board-columns__row">
+                  <Input
+                    aria-label={t("issues.columns.nameLabel")}
+                    value={draft[c.id] ?? c.name}
+                    maxLength={40}
+                    onChange={(e) => setDraft((d) => ({ ...d, [c.id]: e.target.value }))}
+                    onBlur={() => save(c)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                    }}
+                  />
+                  <Select
+                    size="sm"
+                    aria-label={t("issues.columns.stage")}
+                    value={c.stage}
+                    onValueChange={(next) => onStage(c.id, next as IssueStatus)}
+                    options={CONFIGURABLE_STAGES.map((s) => ({ value: s, label: t(`issues.status.${s}`) }))}
+                  />
+                  <div className="board-columns__moves">
+                    <Button
+                      size="sm"
+                      iconOnly
+                      icon="arrowUp"
+                      aria-label={t("issues.columns.moveLeft")}
+                      disabled={index === 0 || busy}
+                      onClick={() => onMove(c.id, index - 1)}
+                    />
+                    <Button
+                      size="sm"
+                      iconOnly
+                      icon="arrowDown"
+                      aria-label={t("issues.columns.moveRight")}
+                      disabled={index === inStage.length - 1 || busy}
+                      onClick={() => onMove(c.id, index + 1)}
+                    />
+                    <Button
+                      size="sm"
+                      iconOnly
+                      icon="trash"
+                      aria-label={t("issues.columns.delete")}
+                      disabled={!canDelete(c, inStage) || busy}
+                      onClick={() => onDelete(c.id, inStage.find((o) => o.id !== c.id)?.id ?? null)}
+                    />
+                  </div>
+                </div>
+              ),
+            )}
+            {readOnly ? null : adding === stage ? (
+              <form
+                className="board-columns__row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const value = newName.trim();
+                  if (!value) return;
+                  void Promise.resolve(onAdd(stage, value, inStage.at(-1)?.id ?? null)).then(
+                    () => {
+                      setNewName("");
+                      setAdding(null);
+                    },
+                    () => {},
+                  );
+                }}
+              >
+                <Input
+                  autoFocus
+                  aria-label={t("issues.columns.nameLabel")}
+                  value={newName}
+                  maxLength={40}
+                  placeholder={t("issues.columns.nameLabel")}
+                  onChange={(e) => setNewName(e.target.value)}
+                />
+                <Button type="submit" variant="primary" disabled={!newName.trim()}>
+                  {t("common.save")}
+                </Button>
+              </form>
+            ) : (
+              <Button size="sm" icon="plus" onClick={() => setAdding(stage)}>
+                {t("issues.columns.add")}
+              </Button>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * "Colunas do board" (ADR 0179): every column of a board, in its stage, where a column is renamed, moved up or down
  * inside its stage, moved to another stage (its tasks follow), added and deleted — and where a template is applied to
@@ -32,20 +182,10 @@ export function BoardColumnsDialog({
   const action = useIssueColumnAction(org.id, projectId);
   const templateAction = useIssueColumnTemplateAction(org.id);
   const templates = useIssueColumnTemplates(org.id).data ?? [];
-  const [adding, setAdding] = useState<IssueStatus | null>(null);
-  const [newName, setNewName] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
-  const [draft, setDraft] = useState<Record<string, string>>({});
   if (!open) return null;
-  const byStage = (stage: IssueStatus) =>
-    columns.filter((c) => c.stage === stage).sort((a, b) => a.position - b.position);
-  const nameOf = (c: IssueColumn) => draft[c.id] ?? c.name ?? t(`issues.status.${c.stage}`);
-  const save = (c: IssueColumn) => {
-    const value = (draft[c.id] ?? "").trim();
-    if (!value || value === (c.name ?? "")) return;
-    action.mutate({ type: "update", columnId: c.id, name: value.slice(0, 40) });
-  };
+  const nameOf = (c: IssueColumn) => c.name ?? t(`issues.status.${c.stage}`);
   return (
     <Dialog
       open
@@ -56,103 +196,17 @@ export function BoardColumnsDialog({
       width={620}
     >
       <DialogBody>
-        <div className="board-columns">
-          {CONFIGURABLE_STAGES.map((stage) => {
-            const inStage = byStage(stage);
-            return (
-              <section key={stage} className="board-columns__stage" aria-label={t(`issues.status.${stage}`)}>
-                <h3>{t(`issues.status.${stage}`)}</h3>
-                {inStage.map((c, index) => (
-                  <div key={c.id} className="board-columns__row">
-                    <Input
-                      aria-label={t("issues.columns.nameLabel")}
-                      value={nameOf(c)}
-                      maxLength={40}
-                      onChange={(e) => setDraft((d) => ({ ...d, [c.id]: e.target.value }))}
-                      onBlur={() => save(c)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      }}
-                    />
-                    <Select
-                      size="sm"
-                      aria-label={t("issues.columns.stage")}
-                      value={c.stage}
-                      onValueChange={(next) =>
-                        action.mutate({ type: "update", columnId: c.id, stage: next as IssueStatus })
-                      }
-                      options={CONFIGURABLE_STAGES.map((s) => ({ value: s, label: t(`issues.status.${s}`) }))}
-                    />
-                    <div className="board-columns__moves">
-                      <Button
-                        size="sm"
-                        iconOnly
-                        icon="arrowUp"
-                        aria-label={t("issues.columns.moveLeft")}
-                        disabled={index === 0 || action.isPending}
-                        onClick={() => action.mutate({ type: "update", columnId: c.id, index: index - 1 })}
-                      />
-                      <Button
-                        size="sm"
-                        iconOnly
-                        icon="arrowDown"
-                        aria-label={t("issues.columns.moveRight")}
-                        disabled={index === inStage.length - 1 || action.isPending}
-                        onClick={() => action.mutate({ type: "update", columnId: c.id, index: index + 1 })}
-                      />
-                      <Button
-                        size="sm"
-                        iconOnly
-                        icon="trash"
-                        aria-label={t("issues.columns.delete")}
-                        disabled={inStage.length === 1 || action.isPending}
-                        onClick={() => {
-                          const moveTo = inStage.find((o) => o.id !== c.id);
-                          if (moveTo) action.mutate({ type: "delete", columnId: c.id, moveTo: moveTo.id });
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
-                {adding === stage ? (
-                  <form
-                    className="board-columns__row"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const value = newName.trim();
-                      if (!value) return;
-                      action.mutate(
-                        { type: "add", name: value, stage, afterId: inStage.at(-1)?.id ?? null },
-                        {
-                          onSuccess: () => {
-                            setNewName("");
-                            setAdding(null);
-                          },
-                        },
-                      );
-                    }}
-                  >
-                    <Input
-                      autoFocus
-                      aria-label={t("issues.columns.nameLabel")}
-                      value={newName}
-                      maxLength={40}
-                      placeholder={t("issues.columns.nameLabel")}
-                      onChange={(e) => setNewName(e.target.value)}
-                    />
-                    <Button type="submit" variant="primary" disabled={!newName.trim()}>
-                      {t("common.save")}
-                    </Button>
-                  </form>
-                ) : (
-                  <Button size="sm" icon="plus" onClick={() => setAdding(stage)}>
-                    {t("issues.columns.add")}
-                  </Button>
-                )}
-              </section>
-            );
-          })}
-        </div>
+        <ColumnEditor
+          columns={columns.map((c) => ({ id: c.id, name: nameOf(c), stage: c.stage }))}
+          busy={action.isPending}
+          onRename={(id, name) => action.mutate({ type: "update", columnId: id, name: name.slice(0, 40) })}
+          onStage={(id, stage) => action.mutate({ type: "update", columnId: id, stage })}
+          onMove={(id, index) => action.mutate({ type: "update", columnId: id, index })}
+          onAdd={(stage, name, afterId) => action.mutateAsync({ type: "add", name, stage, afterId })}
+          onDelete={(id, moveTo) => {
+            if (moveTo) action.mutate({ type: "delete", columnId: id, moveTo });
+          }}
+        />
         {!projectId && <p className="board-columns__note">{t("issues.columns.workspaceNote")}</p>}
       </DialogBody>
       <DialogFooter>

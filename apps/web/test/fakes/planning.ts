@@ -764,6 +764,15 @@ export function createMockPlanning(
         const col = s.columns.find((c) => c.id === columnId);
         if (!col) throw new MockNotFoundError("Coluna não encontrada.");
         if (patch.name !== undefined) col.name = patch.name.trim() || null;
+        if (patch.stage !== undefined && patch.stage !== col.stage) {
+          // Its tasks follow it, as the server does.
+          const from = col.stage;
+          col.stage = patch.stage;
+          for (const i of s.issues) if (i.columnId === col.id) i.status = patch.stage;
+          s.columns = boardOrder(s.columns);
+          renumber(s.columns, from);
+          renumber(s.columns, patch.stage);
+        }
         if (patch.index !== undefined) {
           const sib = s.columns.filter((c) => c.stage === col.stage && c !== col);
           sib.splice(Math.max(0, Math.min(patch.index, sib.length)), 0, col);
