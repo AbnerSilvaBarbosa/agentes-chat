@@ -7,13 +7,17 @@ import {
   createAgentRuns,
   createChannel,
   createIssue,
+  createIssueProject,
   createRoutine,
   executeRoutineRun,
   fireRoutineEvent,
   ingestMail,
   insertMessage,
+  listIssueColumns,
+  MAX_MOVE_HOPS,
   type RoutineDeps,
   stopRoutineRun,
+  updateIssue,
   webhookEvent,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
@@ -255,5 +259,122 @@ describe("email", () => {
     expect(resumed?.event).not.toHaveProperty("held");
     expect(await jobOf(resumed?.id ?? "")).toMatchObject({ status: "pending" });
     expect(await runsOf(routine.id)).toHaveLength(3);
+  });
+});
+
+describe("issue.moved", () => {
+  const personActor = (f: Fixture) => ({ type: "person" as const, userId: f.owner.id });
+  const columnOfStage = async (f: Fixture, stage: "todo" | "in_progress" | "in_review") =>
+    (await listIssueColumns(f.db, f.owner.id, f.org.id)).find((c) => c.stage === stage);
+
+  test("a card moved into the column a routine watches fires it, and any other move doesn't", async () => {
+    f = await setup();
+    const ready = await columnOfStage(f, "in_progress");
+    const review = await columnOfStage(f, "in_review");
+    const watcher = await createRoutine(routineDeps(f), f.owner.id, f.org.id, {
+      agentId: f.agent.id,
+      prompt: "Especifique o card e mova para o dev.",
+      target: { type: "channel", channelId: f.general.id },
+      trigger: { type: "event", event: "issue.moved", filter: { columnId: ready?.id ?? "" } },
+    });
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const issue = await createIssue(deps, personActor(f), f.org.id, { title: "Criar board de tarefas" });
+
+    await updateIssue(deps, personActor(f), f.org.id, issue.id, { columnId: review?.id });
+    expect(await runsOf(watcher.id)).toHaveLength(0);
+
+    await updateIssue(deps, personActor(f), f.org.id, issue.id, { columnId: ready?.id });
+    const runs = await runsOf(watcher.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.event).toMatchObject({
+      type: "issue.moved",
+      issueId: issue.id,
+      columnId: ready?.id,
+      by: "person",
+      depth: 1,
+    });
+  });
+
+  test("the board narrows it: a card of another board moving to that column doesn't fire", async () => {
+    f = await setup();
+    const ready = await columnOfStage(f, "in_progress");
+    const crm = await createIssueProject({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, { name: "CRM" });
+    const other = await createIssueProject({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, { name: "Site" });
+    const watcher = await createRoutine(routineDeps(f), f.owner.id, f.org.id, {
+      agentId: f.agent.id,
+      prompt: "Trabalhe no CRM.",
+      target: { type: "channel", channelId: f.general.id },
+      trigger: { type: "event", event: "issue.moved", filter: { columnId: ready?.id ?? "", projectId: crm.id } },
+    });
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const elsewhere = await createIssue(deps, personActor(f), f.org.id, { title: "Landing", projectId: other.id });
+    await updateIssue(deps, personActor(f), f.org.id, elsewhere.id, { columnId: ready?.id });
+    expect(await runsOf(watcher.id)).toHaveLength(0);
+
+    const mine = await createIssue(deps, personActor(f), f.org.id, { title: "Lead", projectId: crm.id });
+    await updateIssue(deps, personActor(f), f.org.id, mine.id, { columnId: ready?.id });
+    expect(await runsOf(watcher.id)).toHaveLength(1);
+  });
+
+  test("a move a routine's own run makes never fires that routine, and the chain stops at the hop cap", async () => {
+    f = await setup();
+    const ready = await columnOfStage(f, "in_progress");
+    const review = await columnOfStage(f, "in_review");
+    const speccer = await createRoutine(routineDeps(f), f.owner.id, f.org.id, {
+      agentId: f.agent.id,
+      prompt: "Especifique.",
+      target: { type: "channel", channelId: f.general.id },
+      trigger: { type: "event", event: "issue.moved", filter: { columnId: ready?.id ?? "" } },
+    });
+    const dev = await createRoutine(routineDeps(f), f.owner.id, f.org.id, {
+      agentId: f.agent.id,
+      prompt: "Implemente.",
+      target: { type: "channel", channelId: f.general.id },
+      trigger: { type: "event", event: "issue.moved", filter: { columnId: review?.id ?? "" } },
+    });
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const issue = await createIssue(deps, personActor(f), f.org.id, { title: "Bug" });
+    await updateIssue(deps, personActor(f), f.org.id, issue.id, { columnId: ready?.id });
+    const [speccerRun] = await runsOf(speccer.id);
+    expect(speccerRun).toBeDefined();
+
+    // The speccer's own run moves the card: the speccer hears nothing, the dev's routine hears it once.
+    const asSpeccer = {
+      type: "agent" as const,
+      agentId: f.agent.id,
+      channelId: f.general.id,
+      runId: speccerRun?.agentRunId ?? undefined,
+    };
+    await updateIssue(deps, asSpeccer, f.org.id, issue.id, { columnId: review?.id });
+    expect(await runsOf(speccer.id)).toHaveLength(1);
+    expect(await runsOf(dev.id)).toHaveLength(1);
+  });
+
+  test("a chain of automations stops at the hop cap", async () => {
+    f = await setup();
+    const ready = await columnOfStage(f, "in_progress");
+    const watcher = await createRoutine(routineDeps(f), f.owner.id, f.org.id, {
+      agentId: f.agent.id,
+      prompt: "Continue.",
+      target: { type: "channel", channelId: f.general.id },
+      trigger: { type: "event", event: "issue.moved", filter: { columnId: ready?.id ?? "" } },
+    });
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const issue = await createIssue(deps, personActor(f), f.org.id, { title: "Bug" });
+    // A run of the routine that was itself set off by a move already at the cap.
+    const triggered = await fire(f, watcher.id, new Date());
+    await f.db
+      .update(schema.routineRuns)
+      .set({ event: { type: "issue.moved", depth: MAX_MOVE_HOPS } })
+      .where(eq(schema.routineRuns.id, triggered.id));
+    await updateIssue(
+      deps,
+      { type: "agent", agentId: f.agent.id, channelId: f.general.id, runId: triggered.agentRunId ?? undefined },
+      f.org.id,
+      issue.id,
+      { columnId: ready?.id },
+    );
+    // Only the run it already had: the chain went no further.
+    expect(await runsOf(watcher.id)).toHaveLength(1);
   });
 });

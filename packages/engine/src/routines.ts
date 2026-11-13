@@ -142,6 +142,11 @@ export const ROUTINE_EVENTS = [
   "sentry.issue_created",
   "github.pr_opened",
   "issue.created",
+  /**
+   * A task changed column or stage (ADR 0175), which is how a board's pipeline hands work from one agent to the next.
+   * Narrowed by `event_filter`: the board, the company, the column it landed in and the one it left.
+   */
+  "issue.moved",
   "deploy.succeeded",
   /** New mail in a watched mailbox folder (only through an `email` trigger: it needs a watch). */
   "email.received",
@@ -149,6 +154,28 @@ export const ROUTINE_EVENTS = [
   "webhook.received",
 ] as const;
 export type RoutineEvent = (typeof ROUTINE_EVENTS)[number];
+
+/**
+ * How many automations one move may set off in a row (ADR 0175 §3): a card a routine moves fires the next routine, and
+ * the chain stops here. Without it, two agents moving a card for each other would never stop.
+ */
+export const MAX_MOVE_HOPS = 3;
+
+/**
+ * Whether a routine's `event_filter` lets an event through: every key the routine named must be the event's. A routine
+ * that named nothing takes every event of its kind.
+ */
+export function eventFilterAllows(
+  filter: Record<string, string> | null | undefined,
+  match?: Record<string, string | null>,
+): boolean {
+  if (!filter) return true;
+  for (const [key, wanted] of Object.entries(filter)) {
+    if (!wanted) continue;
+    if (!match || (match[key] ?? null) !== wanted) return false;
+  }
+  return true;
+}
 /**
  * The webhook an event comes through (`webhooks.ts`): a routine on it never runs while the workspace has none. The
  * GitHub App's own webhook (`github-app-installs.ts`) keeps installations in step and fires no routine.
@@ -197,7 +224,12 @@ export type RoutineTrigger =
       /** The structured form (always present when it can be derived; null for exotic cron). */
       rule: ScheduleRule | null;
     }
-  | { type: "event"; event: RoutineEvent }
+  | {
+      type: "event";
+      event: RoutineEvent;
+      /** Narrows it (ADR 0175): the board, the company, the column it landed in, the one it left. */
+      filter?: Record<string, string>;
+    }
   /** A one-off (reminders): fires once at `at`, then the routine is done (inactive). */
   | { type: "once"; at: string; timezone: string; description: string }
   /**
@@ -374,7 +406,12 @@ export type RoutineTriggerInput =
       rule?: Omit<ScheduleRule, "freq"> & { freq: ScheduleRule["freq"] | "once" };
       timezone?: string;
     }
-  | { type: "event"; event: RoutineEvent }
+  | {
+      type: "event";
+      event: RoutineEvent;
+      /** Narrows it (ADR 0175): the board, the company, the column it landed in, the one it left. */
+      filter?: Record<string, string>;
+    }
   /** Once, at this moment (ISO 8601). */
   | { type: "once"; at: string; timezone?: string }
   /** New mail in a mailbox the routine's agent can read; `folder` default the inbox. */
@@ -1132,6 +1169,7 @@ async function resolveTrigger(
     timezone: null as string | null,
     description: null as string | null,
     event: null as string | null,
+    eventFilter: {} as Record<string, string>,
     rule: null as Record<string, unknown> | null,
   };
   // The picker's "once": a one-off at its first day and time (a time skipped by DST moves forward).
@@ -1208,7 +1246,13 @@ async function resolveTrigger(
   // Mail events need a mailbox and a folder, webhook calls an address: only through their own triggers.
   if (!ROUTINE_EVENTS.includes(trigger.event) || trigger.event === "email.received" || trigger.event === WEBHOOK_EVENT)
     throw new ValidationError("Unknown event", "routine.unknown_event");
-  return { ...none, triggerType: "event", event: trigger.event as string | null, nextRunAt: null as Date | null };
+  return {
+    ...none,
+    triggerType: "event",
+    event: trigger.event as string | null,
+    eventFilter: trigger.filter ?? {},
+    nextRunAt: null as Date | null,
+  };
 }
 
 /** Admins, or the agent's owner. */
@@ -2043,7 +2087,14 @@ export async function fireRoutineEvent(
   orgId: string,
   event: RoutineEvent,
   payload: { summary: string; [key: string]: unknown },
-  options: { dedupeKey?: string | null; visibleTo?: (userId: string) => Promise<boolean> } = {},
+  options: {
+    dedupeKey?: string | null;
+    visibleTo?: (userId: string) => Promise<boolean>;
+    /** The routine whose own run caused the event (a move it made): it never fires itself (ADR 0175 §3). */
+    exceptRoutineId?: string | null;
+    /** What the event says about a routine's `event_filter`: the board, the company, the column it landed in. */
+    match?: Record<string, string | null>;
+  } = {},
 ) {
   const rows = await deps.db
     .select()
@@ -2059,6 +2110,8 @@ export async function fireRoutineEvent(
     );
   let fired = 0;
   for (const r of rows) {
+    if (options.exceptRoutineId && r.id === options.exceptRoutineId) continue;
+    if (!eventFilterAllows(r.eventFilter, options.match)) continue;
     if (options.visibleTo && !(r.createdByUserId && (await options.visibleTo(r.createdByUserId)))) continue;
     const { outcome } = await queueEventRun(deps, r, {
       event: { ...payload, type: event },

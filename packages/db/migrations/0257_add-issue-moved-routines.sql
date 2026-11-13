@@ -1,0 +1,1 @@
+ALTER TABLE "routines" ADD COLUMN "event_filter" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -37,7 +37,7 @@ import { enqueueRunJob } from "./mission-runs";
 import { notifyIssueChanged } from "./notification-producers";
 import { can, getMembership, requireActiveMembership } from "./organizations";
 import { membersWhoMaySql } from "./permissions";
-import { fireRoutineEvent } from "./routines";
+import { fireRoutineEvent, MAX_MOVE_HOPS } from "./routines";
 import { agentSearchChannels, enqueueIndex, registerDocumentBuilder } from "./search";
 import { AUDIENCE_MAX, type Audience, admitTaskAgents, taskSeenSql } from "./task-access";
 import {
@@ -1256,6 +1256,10 @@ export async function updateIssue(
   }
   const view = await one(db, (await reload(db, row)) ?? row);
   await announce(deps, orgId, view, "issue.updated");
+  // A card that changed column or stage: the routines on `issue.moved` hear it (ADR 0175).
+  if (view.status !== current.status || (view.columnId ?? null) !== (current.columnId ?? null)) {
+    await fireIssueMoved(deps, orgId, { view, from: current, actor }).catch(() => 0);
+  }
   // The inbox: a new assignee, a status change for whoever follows it.
   if (patch.assignee !== undefined || row.status !== current.status) {
     await notifyIssueChanged(deps, author, current, row).catch(() => {});
@@ -1264,6 +1268,81 @@ export async function updateIssue(
 }
 
 const reload = async (db: Database, row: IssueRow) => (await db.select().from(issues).where(eq(issues.id, row.id)))[0];
+
+/**
+ * Routines on `issue.moved` (ADR 0175): the card, the column it landed in and the one it left, the board and company it
+ * belongs to, who moved it and how deep in a chain of automations the move already is. A move a routine's own run made
+ * never fires that routine, and a chain stops at `MAX_MOVE_HOPS`.
+ */
+async function fireIssueMoved(
+  deps: IssueDeps,
+  orgId: string,
+  args: { view: IssueView; from: IssueRow; actor: IssueActor },
+) {
+  const { view, from, actor } = args;
+  const db = deps.db;
+  const columnIds = [view.columnId, from.columnId].filter((id): id is string => !!id);
+  const columns = columnIds.length
+    ? await db
+        .select({ id: schema.issueColumns.id, name: schema.issueColumns.name, stage: schema.issueColumns.stage })
+        .from(schema.issueColumns)
+        .where(inArray(schema.issueColumns.id, columnIds))
+    : [];
+  const columnName = (id: string | null) => {
+    const col = columns.find((c) => c.id === id);
+    return col?.name ?? (col ? col.stage : null);
+  };
+  const [board] = view.project
+    ? await db
+        .select({ spaceId: schema.issueProjects.spaceId })
+        .from(schema.issueProjects)
+        .where(eq(schema.issueProjects.id, view.project.id))
+    : [];
+  // The routine behind the move, when a routine moved it: it never fires itself, and the chain counts one more hop.
+  const authority =
+    actor.type === "agent" && actor.runId ? await runAuthorityById(db, orgId, actor.runId).catch(() => null) : null;
+  const routineRunId = authority?.kind === "routine" ? authority.brief?.routineRunId : undefined;
+  let depth = 1;
+  if (routineRunId) {
+    const [started] = await db
+      .select({ event: schema.routineRuns.event })
+      .from(schema.routineRuns)
+      .where(eq(schema.routineRuns.id, routineRunId));
+    depth = Number((started?.event as Record<string, unknown> | undefined)?.depth ?? 0) + 1;
+    if (depth > MAX_MOVE_HOPS) return 0;
+  }
+  const to = columnName(view.columnId ?? null);
+  await fireRoutineEvent(
+    deps,
+    orgId,
+    "issue.moved",
+    {
+      summary: `Task #${view.number} moved to ${to ?? STATUS_WORDS[view.status]} (id ${view.id})`,
+      issueId: view.id,
+      number: view.number,
+      from: from.status,
+      to: view.status,
+      fromColumnId: from.columnId ?? null,
+      columnId: view.columnId ?? null,
+      column: to,
+      projectId: view.project?.id ?? null,
+      spaceId: board?.spaceId ?? null,
+      by: actor.type,
+      depth,
+    },
+    {
+      exceptRoutineId: routineRunId && authority?.kind === "routine" ? (authority.brief?.routineId ?? null) : null,
+      match: {
+        projectId: view.project?.id ?? null,
+        spaceId: board?.spaceId ?? null,
+        columnId: view.columnId ?? null,
+        fromColumnId: from.columnId ?? null,
+      },
+      visibleTo: (userId) => personSees(db, userId, orgId, from),
+    },
+  );
+  return 1;
+}
 
 /**
  * The criteria a person edited in place: a kept one keeps its id and its check (and who checked it), a new one

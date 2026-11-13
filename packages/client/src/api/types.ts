@@ -3729,7 +3729,12 @@ export interface IssueColumn {
   position: number;
 }
 
-export type RoutineEvent = "sentry.issue_created" | "github.pr_opened" | "issue.created" | "deploy.succeeded";
+export type RoutineEvent =
+  | "sentry.issue_created"
+  | "github.pr_opened"
+  | "issue.created"
+  | "issue.moved"
+  | "deploy.succeeded";
 
 /**
  * The rule as the API sends it: monthly/yearly positions are in `byWeekday`

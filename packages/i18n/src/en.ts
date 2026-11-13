@@ -8202,6 +8202,7 @@ export const en = {
       "sentry.issue_created": "New Sentry error",
       "github.pr_opened": "PR opened on GitHub",
       "issue.created": "Task created in agentes",
+      "issue.moved": "Task moved to another column",
       "deploy.succeeded": "Deploy finished",
     },
     when: { event: "When: {{event}}" },

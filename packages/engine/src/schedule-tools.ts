@@ -176,6 +176,7 @@ const EVENT_WORDS: Record<RoutineEvent, string> = {
   "sentry.issue_created": "a new error comes in from Sentry",
   "github.pr_opened": "a pull request is opened on GitHub",
   "issue.created": "a task is created here",
+  "issue.moved": "a task moves to another column of its board (narrow it with `board` and `column`)",
   "deploy.succeeded": "a deploy succeeds",
   "email.received": "new mail arrives",
   "webhook.received": "its webhook address is called",
@@ -409,7 +410,102 @@ async function triggerOf(ctx: ToolContext, raw: Record<string, unknown>): Promis
   }
   const event = str(raw.event) as RoutineEvent;
   if (!TOOL_EVENTS.includes(event)) throw new Error(`Say which event (event): one of ${TOOL_EVENTS.join(", ")}.`);
-  return { type: "event", event };
+  const filter = event === "issue.moved" ? await moveFilterOf(ctx, raw) : undefined;
+  return { type: "event", event, ...(filter && Object.keys(filter).length > 0 ? { filter } : {}) };
+}
+
+/** The stage names a column can be named by, as the model would write them. */
+const STAGE_WORDS: Record<string, string> = {
+  todo: "todo",
+  backlog: "todo",
+  "a fazer": "todo",
+  "in progress": "in_progress",
+  "em andamento": "in_progress",
+  "em progresso": "in_progress",
+  "in review": "in_review",
+  "em revisão": "in_review",
+  "em revisao": "in_review",
+  done: "done",
+  feito: "done",
+  canceled: "canceled",
+  cancelado: "canceled",
+};
+
+/**
+ * `issue.moved`'s narrowing (ADR 0175), from names to ids: the board, the company, the column the task lands in and the
+ * one it leaves. A name nothing has is refused with the names that exist, so a guess never makes a routine that never
+ * fires.
+ */
+async function moveFilterOf(ctx: ToolContext, raw: Record<string, unknown>): Promise<Record<string, string>> {
+  const filter: Record<string, string> = {};
+  const board = str(raw.board).trim();
+  const company = str(raw.company).trim();
+  const column = str(raw.column).trim();
+  const fromColumn = str(raw.from_column).trim();
+  if (board) {
+    const [found] = await ctx.db
+      .select({ id: schema.issueProjects.id })
+      .from(schema.issueProjects)
+      .where(
+        and(eq(schema.issueProjects.orgId, ctx.orgId), sql`lower(${schema.issueProjects.name}) = lower(${board})`),
+      );
+    if (!found) {
+      const names = (
+        await ctx.db
+          .select({ name: schema.issueProjects.name })
+          .from(schema.issueProjects)
+          .where(and(eq(schema.issueProjects.orgId, ctx.orgId), isNull(schema.issueProjects.archivedAt)))
+      ).map((p) => `"${p.name}"`);
+      throw new Error(
+        names.length
+          ? `There is no board named "${board}". The boards are: ${names.join(", ")}.`
+          : `There is no board named "${board}", and no boards yet.`,
+      );
+    }
+    filter.projectId = found.id;
+  }
+  if (company) {
+    const [found] = await ctx.db
+      .select({ id: schema.issueSpaces.id })
+      .from(schema.issueSpaces)
+      .where(and(eq(schema.issueSpaces.orgId, ctx.orgId), sql`lower(${schema.issueSpaces.name}) = lower(${company})`));
+    if (!found) {
+      const names = (
+        await ctx.db
+          .select({ name: schema.issueSpaces.name })
+          .from(schema.issueSpaces)
+          .where(eq(schema.issueSpaces.orgId, ctx.orgId))
+      ).map((s) => `"${s.name}"`);
+      throw new Error(
+        names.length
+          ? `There is no company named "${company}". The companies are: ${names.join(", ")}.`
+          : `There is no company named "${company}", and no companies yet.`,
+      );
+    }
+    filter.spaceId = found.id;
+  }
+  const columnOf = async (name: string, key: "columnId" | "fromColumnId") => {
+    const wanted = STAGE_WORDS[name.toLowerCase()] ?? null;
+    const rows = await ctx.db
+      .select({ id: schema.issueColumns.id, name: schema.issueColumns.name, stage: schema.issueColumns.stage })
+      .from(schema.issueColumns)
+      .where(eq(schema.issueColumns.orgId, ctx.orgId));
+    const found = wanted
+      ? rows.find((c) => c.stage === wanted)
+      : rows.find((c) => (c.name ?? c.stage).toLowerCase() === name.toLowerCase());
+    if (!found) {
+      const names = [...new Set(rows.map((c) => `"${c.name ?? c.stage}"`))];
+      throw new Error(
+        names.length
+          ? `There is no column named "${name}". The columns are: ${names.join(", ")}.`
+          : `There is no column named "${name}".`,
+      );
+    }
+    filter[key] = found.id;
+  };
+  if (column) await columnOf(column, "columnId");
+  if (fromColumn) await columnOf(fromColumn, "fromColumnId");
+  return filter;
 }
 
 /**
@@ -487,6 +583,27 @@ const TRIGGER_SCHEMA = {
       type: "string",
       enum: TOOL_EVENTS,
       description: TOOL_EVENTS.map((e) => `${e}: ${EVENT_WORDS[e]}`).join("; "),
+    },
+    board: {
+      type: "string",
+      maxLength: 80,
+      description: 'With `issue.moved`: only tasks of this board, by its name ("CRM"). Left out, every board.',
+    },
+    company: {
+      type: "string",
+      maxLength: 80,
+      description: "With `issue.moved`: only tasks of this company's boards, by its name.",
+    },
+    column: {
+      type: "string",
+      maxLength: 80,
+      description:
+        'With `issue.moved`: only tasks that move INTO this column, by its name ("Ready for dev"). Also takes a stage name (todo, in progress, in review, done, canceled), which matches any column of it.',
+    },
+    from_column: {
+      type: "string",
+      maxLength: 80,
+      description: "With `issue.moved`: only tasks that move out of this column.",
     },
     mailbox: { type: "string", maxLength: 320 },
     folder: { type: "string", maxLength: 300 },

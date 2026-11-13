@@ -232,6 +232,11 @@ export const routines = pgTable(
     timezone: text(),
     description: text(),
     event: text(),
+    /**
+     * Narrows an event routine to some of its events (ADR 0175): `{ projectId, spaceId, columnId, fromColumnId }` for
+     * `issue.moved`, each one set only when the routine cares. Empty: every event of that kind.
+     */
+    eventFilter: jsonb().$type<Record<string, string>>().notNull().default({}),
     /** A structured schedule (`ScheduleRule`): wins over `cron`, which is kept when it can express it. */
     rule: jsonb().$type<Record<string, unknown>>(),
     active: boolean().notNull().default(true),

@@ -169,6 +169,7 @@ export const ROUTINE_EVENTS: RoutineEvent[] = [
   "sentry.issue_created",
   "github.pr_opened",
   "issue.created",
+  "issue.moved",
   "deploy.succeeded",
 ];
 
