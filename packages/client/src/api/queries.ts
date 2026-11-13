@@ -4402,6 +4402,15 @@ export const useIssueProjects = (orgId: string) => {
   return useQuery({ queryKey: keys.issueProjects(orgId), queryFn: () => api.issues.projects(orgId) });
 };
 
+/** A company's Painel for the last `days` days (ADR 0182), read when it opens and when the period changes. */
+export const useCompanyDashboard = (orgId: string, spaceId: string, days: 7 | 30 | 90) => {
+  const api = useApi();
+  return useQuery({
+    queryKey: keys.companyDashboard(orgId, spaceId, days),
+    queryFn: () => api.issues.companyDashboard(orgId, spaceId, days),
+  });
+};
+
 export function useIssueProjectAction(orgId: string) {
   const api = useApi();
   const qc = useQueryClient();

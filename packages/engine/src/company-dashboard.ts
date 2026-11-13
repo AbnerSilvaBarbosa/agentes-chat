@@ -21,6 +21,8 @@ export function normalizeDays(days: unknown): DashboardDays {
 
 export interface CompanyDashboard {
   days: DashboardDays;
+  /** Every task of the company the viewer sees, canceled left out, whatever the period: 0 is the empty company. */
+  total: number;
   /** Open tasks by stage, and the tasks concluded in the period. */
   stages: { todo: number; in_progress: number; in_review: number; done: number };
   /** Who carries the tasks, agents and people together; a person or agent that is gone is `removed` (no name). */
@@ -129,12 +131,14 @@ export async function companyDashboard(
 
   const [[stages], people, [times], weeks, [bounds], runs] = await Promise.all([
     over<{
+      total: number;
       todo: number;
       in_progress: number;
       in_review: number;
       done: number;
       unassigned: number;
-    }>(sql`select count(*) filter (where status = 'todo')::int as todo,
+      late: number;
+    }>(sql`select count(*)::int as total, count(*) filter (where status = 'todo')::int as todo,
         count(*) filter (where status = 'in_progress')::int as in_progress,
         count(*) filter (where status = 'in_review')::int as in_review,
         count(*) filter (where ${doneInPeriod})::int as done,
@@ -197,7 +201,15 @@ export async function companyDashboard(
           .then((r) => rowsOf<{ agent_id: string; name: string | null; nano: number }>(r))
       : Promise.resolve(null),
   ]);
-  const { unassigned = 0, late = 0, ...counts } = stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 };
+  const { total, unassigned, late, ...counts } = stages ?? {
+    total: 0,
+    unassigned: 0,
+    late: 0,
+    todo: 0,
+    in_progress: 0,
+    in_review: 0,
+    done: 0,
+  };
   const assignees = people
     .map((p) => ({
       type: p.removed ? ("removed" as const) : p.kind === "agent" ? ("agent" as const) : ("person" as const),
@@ -222,6 +234,7 @@ export async function companyDashboard(
   }
   return {
     days: period,
+    total,
     stages: counts,
     assignees,
     unassigned,

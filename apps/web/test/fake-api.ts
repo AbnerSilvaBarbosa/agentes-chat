@@ -26,6 +26,7 @@ import type {
   ChannelCategory,
   ChannelMember,
   ChannelOverride,
+  CompanyDashboard,
   ComposioUsage,
   Connection,
   ConnectorCatalog,
@@ -193,6 +194,8 @@ function fakePlanAccount(money: boolean): PlanAccountUsage {
 
 export interface FakeState {
   me: Me | null;
+  /** What a company's Painel holds beyond the counts the fake makes from its tasks (`issues.companyDashboard`). */
+  companyDashboard?: (spaceId: string, days: 7 | 30 | 90) => Partial<CompanyDashboard> | undefined;
   /** "Ver modelos de time" (`agents.teamTemplates`; default none). */
   teamTemplates?: TeamTemplate[];
   /** What a one-click proposed agent thinks with (default: what its draft suggested). */
@@ -4099,7 +4102,11 @@ export function createFakeApi(state: FakeState = seedState(), options: { seed?: 
       () => state.storageUsage,
     ),
     artifacts,
-    ...createMockPlanning(ctx, (method, ...args) => state.calls.push({ method, args })),
+    ...createMockPlanning(
+      ctx,
+      (method, ...args) => state.calls.push({ method, args }),
+      (spaceId, days) => state.companyDashboard?.(spaceId, days),
+    ),
     customConnectors,
     mail: mail.client,
     databases: databases.client,

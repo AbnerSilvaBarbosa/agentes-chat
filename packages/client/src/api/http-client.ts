@@ -76,6 +76,7 @@ import type {
   Choices,
   CodeSent,
   CommandApproval,
+  CompanyDashboard,
   ComposioUsage,
   ComputerDevice,
   ComputerQueue,
@@ -1566,6 +1567,8 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/image`, { method: "PUT", json: input }),
       clearSpaceImage: (orgId, spaceId) =>
         request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/image`, { method: "DELETE" }),
+      companyDashboard: (orgId, spaceId, days) =>
+        request<CompanyDashboard>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/dashboard`, { query: { days } }),
     },
     threads: {
       list: (orgId, filters = {}) => request<ThreadPage>(`${org(orgId)}/threads`, { query: threadQuery(filters) }),

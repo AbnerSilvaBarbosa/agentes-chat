@@ -102,6 +102,7 @@ import type {
   Choices,
   CodeSent,
   CommandApproval,
+  CompanyDashboard,
   ComposioUsage,
   ComputerDevice,
   ComputerDeviceInput,
@@ -1388,6 +1389,8 @@ export interface ApiClient {
     ): Promise<IssueSpaceRef>;
     /** Takes the image away: the color shows again. */
     clearSpaceImage(orgId: string, spaceId: string): Promise<IssueSpaceRef>;
+    /** A company's Painel (ADR 0182) over the last `days` days (7, 30 or 90). */
+    companyDashboard(orgId: string, spaceId: string, days: 7 | 30 | 90): Promise<CompanyDashboard>;
   };
   /** Threads (ADR 0029): the Threads page, a thread from a range, moving it, closing and archiving. */
   threads: {

@@ -6,6 +6,8 @@
  *   `POST …/issues/{id}/ask-agent { agentId }` (assigns, moves to "Em andamento", starts the run);
  *   board columns: `GET|POST …/issue-columns`, `PATCH|DELETE …/issue-columns/{id}`;
  *   projects: `GET|POST …/issue-projects`, `PATCH|DELETE …/issue-projects/{id}`, `GET …/issues?projectId`.
+ *   a company's Painel: `GET …/issue-spaces/{id}/dashboard?days`, counted from the tasks of its boards (stages,
+ *   total, unassigned, late); the rest comes from `dashboard`, what a test puts in `state.companyDashboard`.
  * - Routines: `GET|POST …/routines`, `POST …/routines/parse-schedule|parse-rule { phrase }` → cron, rule and
  *   description in the workspace time zone (phrases looked up in a table, standing in for the model),
  *   `PATCH …/routines/{id} { active }`, `POST …/routines/{id}/run`, `GET …/routines/{id}/runs`.
@@ -21,6 +23,7 @@ import type {
   BoardAlert,
   CalendarEvent,
   CalendarProposal,
+  CompanyDashboard,
   Issue,
   IssueActivity,
   IssueColumn,
@@ -246,6 +249,8 @@ interface Store {
 export function createMockPlanning(
   ctx: MockContext,
   record: (method: string, ...args: unknown[]) => void = () => {},
+  /** What a test says a company's Painel holds beyond the counts the fake makes (times, weeks, cost). */
+  dashboard: (spaceId: string, days: 7 | 30 | 90) => Partial<CompanyDashboard> | undefined = () => undefined,
 ): Pick<ApiClient, "issues" | "routines" | "calendar"> {
   /** The sets this fake workspace holds: the two it starts with, then the ones a test makes. */
   const templates: IssueColumnTemplate[] = clone(SEEDED_TEMPLATES);
@@ -956,6 +961,34 @@ export function createMockPlanning(
         record("issues.deleteColumnTemplate", templateId);
         const at = templates.findIndex((t) => t.id === templateId);
         if (at >= 0) templates.splice(at, 1);
+      },
+      companyDashboard: async (orgId, spaceId, days) => {
+        record("issues.companyDashboard", spaceId, days);
+        const s = await store(orgId);
+        if (!s.spaces.some((sp) => sp.id === spaceId)) throw new MockNotFoundError("Not found");
+        const boards = new Set(s.projects.filter((p) => p.spaceId === spaceId).map((p) => p.id));
+        const tasks = s.issues.filter((i) => i.project && boards.has(i.project.id) && i.status !== "canceled");
+        const open = tasks.filter((i) => i.status !== "done");
+        const count = (status: IssueStatus) => tasks.filter((i) => i.status === status).length;
+        const today = ctx.now().toISOString().slice(0, 10);
+        const none = { count: 0, medianMs: null, averageMs: null };
+        return clone({
+          days,
+          total: tasks.length,
+          stages: {
+            todo: count("todo"),
+            in_progress: count("in_progress"),
+            in_review: count("in_review"),
+            done: count("done"),
+          },
+          assignees: [],
+          unassigned: open.filter((i) => !i.assignee).length,
+          leadTime: none,
+          workTime: none,
+          weekly: [],
+          late: open.filter((i) => i.dueDate && i.dueDate < today).length,
+          ...dashboard(spaceId, days),
+        });
       },
       deleteSpace: async (orgId, spaceId) => {
         record("issues.deleteSpace", spaceId);

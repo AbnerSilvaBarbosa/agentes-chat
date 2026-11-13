@@ -86,8 +86,11 @@ describe("companyDashboard stages", () => {
     await task({ status: "in_review" });
     await task({ status: "done", moves: [["done", 3]] });
     await task({ status: "done", moves: [["done", 50]] });
+    await task({ status: "canceled" });
     const d = await read();
     expect(d.days).toBe(30);
+    // Every task of the company, whatever the period (the canceled ones never count).
+    expect(d.total).toBe(6);
     expect(d.stages).toEqual({ todo: 2, in_progress: 1, in_review: 1, done: 1 });
     expect((await read(90)).stages.done).toBe(2);
   });

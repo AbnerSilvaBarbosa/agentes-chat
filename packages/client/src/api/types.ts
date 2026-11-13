@@ -3701,6 +3701,26 @@ export interface IssueSpace extends IssueSpaceRef {
   open: number;
 }
 
+/** A company's Painel (ADR 0182): the numbers of the tasks you see on its boards over the last `days` days. */
+export interface CompanyDashboard {
+  days: 7 | 30 | 90;
+  /** The company's tasks you see, canceled left out, whatever the period: 0 is an empty company. */
+  total: number;
+  /** Open tasks by stage, and the tasks concluded in the period. */
+  stages: { todo: number; in_progress: number; in_review: number; done: number };
+  assignees: { type: "agent" | "person" | "removed"; id: string; name: string; open: number; done: number }[];
+  /** Open tasks with no assignee. */
+  unassigned: number;
+  leadTime: { count: number; medianMs: number | null; averageMs: number | null };
+  workTime: { count: number; medianMs: number | null; averageMs: number | null };
+  /** One entry per week of the period, Monday's date, a week with no delivery kept as 0. */
+  weekly: { weekStart: string; count: number }[];
+  /** Open tasks due before today, whatever the period. */
+  late: number;
+  /** Absent when you may not view usage. */
+  cost?: { totalUsd: number; byAgent: { agentId: string; name: string; usd: number }[] };
+}
+
 /** A task's project as its card shows it: a name and one of the roles' colors. Archived: offered to no new task. */
 export interface IssueProjectRef {
   id: string;

@@ -177,6 +177,9 @@ export const keys = {
   boardAlerts: (orgId: string, projectId = "") =>
     ["org", orgId, "issues", "alerts", ...(projectId ? [projectId] : [])] as const,
   issueColumnTemplates: (orgId: string) => ["org", orgId, "issues", "column-templates"] as const,
+  /** A company's Painel; under the issues prefix, so a task change refreshes it. */
+  companyDashboard: (orgId: string, spaceId: string, days: number) =>
+    ["org", orgId, "issues", "dashboard", spaceId, days] as const,
   issueProjects: (orgId: string) => ["org", orgId, "issues", "projects"] as const,
   /** Every thread view and list (prefix): a `thread.updated` refreshes them all. */
   threads: (orgId: string) => ["org", orgId, "threads"] as const,

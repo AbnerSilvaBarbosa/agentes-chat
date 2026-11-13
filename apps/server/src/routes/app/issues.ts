@@ -5,6 +5,7 @@ import {
   boardAlerts,
   clearSpaceImage,
   commentIssue,
+  companyDashboard,
   createColumnTemplate,
   createIssue,
   createIssueColumn,
@@ -91,6 +92,44 @@ const SpaceId = z.uuid().nullable().openapi({
   description: "The space the board joins (`null`: outside every space). An archived space takes no board.",
 });
 const SpaceParams = OrgParams.extend({ spaceId: z.uuid() });
+const SpanStats = z.object({
+  count: z.number().int(),
+  medianMs: z.number().int().nullable(),
+  averageMs: z.number().int().nullable(),
+});
+const CompanyDashboardBody = z
+  .object({
+    days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+    total: z.number().int().openapi({ description: "The company's tasks you see, canceled left out." }),
+    stages: z.object({
+      todo: z.number().int(),
+      in_progress: z.number().int(),
+      in_review: z.number().int(),
+      done: z.number().int(),
+    }),
+    assignees: z.array(
+      z.object({
+        type: z.enum(["agent", "person", "removed"]),
+        id: z.string(),
+        name: z.string(),
+        open: z.number().int(),
+        done: z.number().int(),
+      }),
+    ),
+    unassigned: z.number().int(),
+    leadTime: SpanStats,
+    workTime: SpanStats,
+    weekly: z.array(z.object({ weekStart: z.string(), count: z.number().int() })),
+    late: z.number().int(),
+    cost: z
+      .object({
+        totalUsd: z.number(),
+        byAgent: z.array(z.object({ agentId: z.string(), name: z.string(), usd: z.number() })),
+      })
+      .optional()
+      .openapi({ description: "Absent for a member who may not view usage." }),
+  })
+  .openapi("CompanyDashboard");
 const ProjectRef = z
   .object({
     id: z.uuid(),
@@ -874,6 +913,31 @@ export function issueRoutes(deps: AppDeps) {
     async (c) => {
       const { orgId, spaceId } = c.req.valid("param");
       return c.json(await updateIssueSpace(issues, c.get("user").id, orgId, spaceId, c.req.valid("json")), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/organizations/{orgId}/issue-spaces/{spaceId}/dashboard",
+      tags,
+      security,
+      summary:
+        "A company's Painel: its tasks' numbers over the last 7, 30 or 90 days, for the tasks you see (ADR 0182)",
+      request: { params: SpaceParams, query: z.object({ days: z.string().optional() }) },
+      responses: { 200: json(CompanyDashboardBody), ...errors },
+    }),
+    async (c) => {
+      const { orgId, spaceId } = c.req.valid("param");
+      const { cost, ...numbers } = await companyDashboard(
+        db,
+        c.get("user").id,
+        orgId,
+        spaceId,
+        c.req.valid("query").days,
+      );
+      // No cost for a member who may not view usage: the key is not in the body at all.
+      return c.json(cost ? { ...numbers, cost } : numbers, 200);
     },
   );
 
