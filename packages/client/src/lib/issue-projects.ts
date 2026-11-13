@@ -1,4 +1,5 @@
 import { AGENT_COLORS } from "@agenteschat/tokens/look";
+import { ApiError } from "../api/http";
 import type { IssueProject, IssueProjectRef, IssueSpace, IssueSpaceRef } from "../api/types";
 
 /** A project's name holds at most this (mirror of `PROJECT_NAME_MAX`, packages/engine/src/issue-projects.ts). */
@@ -6,6 +7,26 @@ export const PROJECT_NAME_MAX = 80;
 
 /** A space's name holds at most this (mirror of `SPACE_NAME_MAX`, packages/engine/src/issue-projects.ts). */
 export const SPACE_NAME_MAX = 80;
+
+/** A company's image holds at most this (mirror of `SPACE_IMAGE_LIMITS`, packages/engine/src/issue-projects.ts). */
+export const SPACE_IMAGE_MAX_BYTES = 1024 * 1024;
+
+/** The types a company's image takes (the server reads its bytes: this only spares a round trip). */
+export const SPACE_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+/**
+ * What the server would refuse in an image about to be sent (base64, as the crop made it), as the same error it
+ * answers with, so the dialog says it in the same words: another type, or over 1 MiB. Null: fine to send.
+ */
+export function spaceImageRefusal(image: { imageBase64: string; contentType: string }): ApiError | null {
+  const params = { maxMb: SPACE_IMAGE_MAX_BYTES / (1024 * 1024) };
+  if (!SPACE_IMAGE_TYPES.includes(image.contentType))
+    return new ApiError(400, "space_image.type", "Use a JPEG, PNG or WebP image", params);
+  const padding = /=*$/.exec(image.imageBase64)?.[0].length ?? 0;
+  if ((image.imageBase64.length * 3) / 4 - padding > SPACE_IMAGE_MAX_BYTES)
+    return new ApiError(400, "space_image.too_large", "The image is over 1 MB", params);
+  return null;
+}
 
 /** The colors a project can take: the roles' (mirror of `ROLE_COLORS`, packages/engine/src/permissions.ts). */
 export const PROJECT_COLORS = AGENT_COLORS.filter((c) => c !== "sky");

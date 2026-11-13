@@ -7502,6 +7502,12 @@ export const en = {
       boardCount_other: "{{count}} open tasks",
       boardsInside_one: "{{count}} board",
       boardsInside_other: "{{count}} boards",
+      image: "Image",
+      imageChoose: "Choose image",
+      imageChange: "Change image",
+      imageRemove: "Remove image",
+      imageTitle: "Company image",
+      imageHelp: "Drag to frame it. The square is what shows. PNG, JPEG or WebP, up to 1 MB.",
     },
     columns: {
       add: "Add column",

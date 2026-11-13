@@ -7502,6 +7502,12 @@ export const ptBR = {
       boardCount_other: "{{count}} tarefas abertas",
       boardsInside_one: "{{count}} board",
       boardsInside_other: "{{count}} boards",
+      image: "Imagem",
+      imageChoose: "Escolher imagem",
+      imageChange: "Trocar imagem",
+      imageRemove: "Remover imagem",
+      imageTitle: "Imagem da empresa",
+      imageHelp: "Arraste para enquadrar. O quadrado é o que aparece. PNG, JPEG ou WebP, até 1 MB.",
     },
     columns: {
       add: "Adicionar coluna",

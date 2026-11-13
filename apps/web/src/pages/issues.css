@@ -1972,6 +1972,16 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
   border-radius: var(--space-1);
   object-fit: cover;
 }
+/* "Nova empresa": the company's mark at control height, with its image's buttons beside it. */
+.space-image {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.space-image > .ac-colordot {
+  --dot-box: var(--control-h-md);
+  --dot-size: var(--space-4);
+}
 .space-board__count {
   font-size: 12.5px;
   color: var(--muted);

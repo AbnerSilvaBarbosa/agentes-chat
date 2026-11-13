@@ -1,4 +1,5 @@
 import { keys } from "@agenteschat/client";
+import { errorText } from "@agenteschat/client/lib/errors";
 import {
   Avatar,
   type AvatarProps,
@@ -113,6 +114,8 @@ interface ImageCropProps {
   remove: () => Promise<unknown>;
   onSaved: () => void;
   onRemoved: () => void;
+  /** Says why `save` refused in the dialog itself (and no toast), so the person picks another image. */
+  showRefusal?: boolean;
 }
 
 /** A square image: drop or pick an image, zoom and drag to frame the square, then Salvar (or Remover). */
@@ -129,6 +132,7 @@ export function ImageCropDialog({
   remove: drop,
   onSaved,
   onRemoved,
+  showRefusal,
 }: ImageCropProps) {
   const { t } = useTranslation();
   const input = useRef<HTMLInputElement>(null);
@@ -160,12 +164,14 @@ export function ImageCropDialog({
     if (!f.type.startsWith("image/")) return setError(t("photo.notImage"));
     if (f.size > MAX_PHOTO_BYTES) return setError(t("photo.tooBig"));
     setError(null);
+    save.reset();
     setFile(f);
     setCrop({ zoom: 1, x: 0, y: 0 });
     setSize({ w: 0, h: 0 });
     setUrl(typeof URL.createObjectURL === "function" ? URL.createObjectURL(f) : await readAsDataUrl(f));
   };
   const save = useMutation({
+    ...(showRefusal ? { meta: { silent: true } } : {}),
     mutationFn: async () => {
       if (!file) return;
       await send(await encode(file, img.current, crop, format));
@@ -296,6 +302,11 @@ export function ImageCropDialog({
           {error && (
             <p className="small" role="alert" style={{ color: "var(--danger)", margin: 0 }}>
               {error}
+            </p>
+          )}
+          {showRefusal && save.error && (
+            <p className="small" role="alert" style={{ color: "var(--danger)", margin: 0 }}>
+              {errorText(t, save.error)}
             </p>
           )}
         </DialogBody>

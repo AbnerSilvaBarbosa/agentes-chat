@@ -14,6 +14,7 @@ import {
   PROJECT_NAME_MAX,
   pickableProjects,
   SPACE_NAME_MAX,
+  spaceImageRefusal,
 } from "@agenteschat/client/lib/issue-projects";
 import {
   Button,
@@ -36,6 +37,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useFilterCopy } from "@/components/filters";
 import { useOrg } from "@/components/org-context";
+import { ImageCropDialog } from "@/components/ProfilePhoto";
 import "@/components/roles/roles.css";
 
 /** The first color no project wears yet, so a new one stands apart without a choice. */
@@ -79,18 +81,35 @@ export function SpaceDialog({
   const [name, setName] = useState(space?.name ?? "");
   const [picked, setPicked] = useState<string | null>(space?.color ?? null);
   const color = picked ?? freeColor(spaces);
+  // The image is cropped square here (512×512) and sent once the company exists: a new one, one chosen, or "removed".
+  const [image, setImage] = useState<{ url: string; imageBase64: string; contentType: string } | "removed" | null>(
+    null,
+  );
+  const [choosing, setChoosing] = useState(false);
+  const shownImage = image === "removed" ? null : image ? image.url : (space?.image ?? null);
   const save = () => {
     const value = name.trim();
     if (!value || action.isPending) return;
-    if (space && value === space.name && color === space.color) return onClose();
+    const unchanged = space && value === space.name && color === space.color;
+    if (unchanged && image === null) return onClose();
+    const finish = (saved: IssueSpaceRef) => {
+      onDone?.(saved);
+      onClose();
+    };
+    // The company is saved either way: an image the server refuses is said, never a second company.
+    const withImage = (saved: IssueSpaceRef) => {
+      if (image === null) return finish(saved);
+      action.mutate(
+        image === "removed"
+          ? { type: "clear-image", spaceId: saved.id }
+          : { type: "image", spaceId: saved.id, imageBase64: image.imageBase64, contentType: image.contentType },
+        { onSuccess: (done) => finish(done ?? saved), onError: () => finish(saved) },
+      );
+    };
+    if (unchanged) return withImage(space);
     action.mutate(
       space ? { type: "update", spaceId: space.id, name: value, color } : { type: "create", name: value, color },
-      {
-        onSuccess: (saved) => {
-          if (saved) onDone?.(saved);
-          onClose();
-        },
-      },
+      { onSuccess: (saved) => (saved ? withImage(saved) : onClose()) },
     );
   };
   return (
@@ -136,6 +155,19 @@ export function SpaceDialog({
                 />
               ))}
             </div>
+            <Field label={t("issues.spaces.image")} id="issue-space-image">
+              <div className="space-image">
+                <SpaceMark space={{ color, image: shownImage }} />
+                <Button type="button" size="sm" icon="image" onClick={() => setChoosing(true)}>
+                  {t(shownImage ? "issues.spaces.imageChange" : "issues.spaces.imageChoose")}
+                </Button>
+                {shownImage && (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setImage("removed")}>
+                    {t("issues.spaces.imageRemove")}
+                  </Button>
+                )}
+              </div>
+            </Field>
           </DialogBody>
         </Locked>
         <DialogFooter>
@@ -152,6 +184,25 @@ export function SpaceDialog({
           </Button>
         </DialogFooter>
       </form>
+      <ImageCropDialog
+        open={choosing}
+        onClose={() => setChoosing(false)}
+        title={t("issues.spaces.imageTitle")}
+        help={t("issues.spaces.imageHelp")}
+        placeholder={<SpaceMark space={{ color, image: shownImage }} />}
+        hasImage={false}
+        removeLabel={t("issues.spaces.imageRemove")}
+        format="image/png"
+        showRefusal
+        save={async (sent) => {
+          const refusal = spaceImageRefusal(sent);
+          if (refusal) throw refusal;
+          setImage({ ...sent, url: `data:${sent.contentType};base64,${sent.imageBase64}` });
+        }}
+        remove={async () => undefined}
+        onSaved={() => undefined}
+        onRemoved={() => undefined}
+      />
     </Dialog>
   );
 }
