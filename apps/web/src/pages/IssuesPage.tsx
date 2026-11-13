@@ -74,7 +74,15 @@ import { codeAndBold } from "@/lib/markdown";
 import { inPlaceClick } from "@/lib/navigate";
 import { useOpenParam } from "@/lib/open-param";
 import { type ToastText, useToast } from "@/lib/toast";
-import { AddColumnDialog, Board, type CardState, type IssueGroup, useMoveIssue, usePatchIssue } from "./IssueBoard";
+import {
+  AddColumnDialog,
+  Board,
+  BoardProject,
+  type CardState,
+  type IssueGroup,
+  useMoveIssue,
+  usePatchIssue,
+} from "./IssueBoard";
 import { IssueDeleteProvider, useIssueDeleting } from "./IssueDelete";
 import { IssueDialog } from "./IssuePage";
 import {
@@ -82,6 +90,7 @@ import {
   DeleteSpaceDialog,
   ProjectChip,
   ProjectDialog,
+  SpaceBoards,
   SpaceChip,
   SpaceDialog,
 } from "./IssueProjects";
@@ -185,8 +194,10 @@ export function IssuesPage() {
     setSpaceDialog(null);
     setSpaceParam(undefined);
   });
+  // A company's own page lists its boards: it asks for no tasks, and the board of one board is where tasks are read.
+  const onCompanyPage = Boolean(spaceParam) && !projectParam;
   const issues = useIssues(org.id, search, projectParam, spaceParam);
-  const columnsQuery = useIssueColumns(org.id);
+  const columnsQuery = useIssueColumns(org.id, projectParam);
   const columns = columnsQuery.data;
   const all = issues.data ?? [];
   const filtered = all.filter(
@@ -231,271 +242,289 @@ export function IssuesPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [adds]);
   return (
-    <IssueDeleteProvider onDeleted={() => setOpenParam(null)}>
-      <div className="page issues">
-        <div className="issues__main">
-          <PageHeader
-            className="issues-head"
-            title={
-              spaceParam ? (
-                <>
-                  <ColorDot color={space?.color} />
-                  {space ? space.name : t("issues.spaces.label")}
-                </>
-              ) : projectParam ? (
-                // Inside the title, so the dot stays on the first line of a name that wraps.
-                <>
-                  <ColorDot color={project?.color} />
-                  {project ? project.name : t("issues.projects.none")}
-                </>
-              ) : (
-                t("issues.title")
-              )
-            }
-            count={
-              <>
-                <span>
-                  {t("issues.summary", {
-                    open: open.length,
-                    agents: open.filter((i) => i.assignee?.type === "agent").length,
-                  })}
-                </span>
-                {open.some((i) => !i.assignee) && (
-                  <span> · {t("issues.unassigned", { count: open.filter((i) => !i.assignee).length })}</span>
-                )}
-                {project?.archived && <span> · {t("issues.projects.archivedMark")}</span>}
-              </>
-            }
-            actions={
-              // The empty state takes over this button: one way in, in the middle of the page.
-              !noIssues &&
-              adds && (
-                <Button variant="primary" icon="plus" kbd={["N"]} onClick={() => setCreating({ columnId: null })}>
-                  {t("issues.new")}
-                </Button>
-              )
-            }
-          />
-          <WorkingNow issues={all} onOpen={toggle} />
-          <Toolbar
-            label={t("issues.filters")}
-            search={
-              <SearchField
-                ref={searchRef}
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onClear={() => setQ("")}
-                clearLabel={copy.clearSearch}
-                placeholder={t("issues.search")}
-                aria-label={t("issues.search")}
-                shortcut={<Kbd aria-hidden="true">/</Kbd>}
-              />
-            }
-            actions={
-              <span className="issues-tools">
-                <DisplayButton view={view} onChange={changeView} />
-                {(view.group === "stage" || (project && posts)) && (
-                  <Menu
-                    align="end"
-                    label={t("issues.moreOptions")}
-                    trigger={<Button size="sm" iconOnly icon="more" aria-label={t("issues.moreOptions")} />}
-                  >
-                    {view.group === "stage" && (
-                      <MenuItem icon="layers" onSelect={() => setAddingColumn(true)} disabled={!columns}>
-                        {t("issues.columns.add")}
-                      </MenuItem>
-                    )}
-                    {project && posts && (
-                      <>
-                        {view.group === "stage" && <MenuSeparator />}
-                        <MenuItem icon="edit" onSelect={() => setProjectDialog("edit")}>
-                          {t("issues.projects.edit")}
-                        </MenuItem>
-                        <MenuItem
-                          icon="archive"
-                          disabled={projectAction.isPending}
-                          onSelect={() =>
-                            projectAction.mutate({ type: "update", projectId: project.id, archived: !project.archived })
-                          }
-                        >
-                          {t(project.archived ? "issues.projects.unarchive" : "issues.projects.archive")}
-                        </MenuItem>
-                        <MenuItem icon="trash" danger onSelect={() => setProjectDialog("delete")}>
-                          {t("issues.projects.delete")}
-                        </MenuItem>
-                      </>
-                    )}
-                    {space && posts && (
-                      <>
-                        <MenuSeparator />
-                        <MenuItem icon="edit" onSelect={() => setSpaceDialog("edit")}>
-                          {t("issues.spaces.edit")}
-                        </MenuItem>
-                        <MenuItem
-                          icon="archive"
-                          disabled={spaceAction.isPending}
-                          onSelect={() =>
-                            spaceAction.mutate({ type: "update", spaceId: space.id, archived: !space.archived })
-                          }
-                        >
-                          {t(space.archived ? "issues.spaces.unarchive" : "issues.spaces.archive")}
-                        </MenuItem>
-                        <MenuItem icon="trash" danger onSelect={() => setSpaceDialog("delete")}>
-                          {t("issues.spaces.delete")}
-                        </MenuItem>
-                      </>
-                    )}
-                  </Menu>
-                )}
-              </span>
-            }
-          >
-            <SpaceChip
-              data={projectsQuery.data}
-              value={spaceParam}
-              onChange={setSpaceParam}
-              onNew={posts ? () => setSpaceDialog("new") : undefined}
-            />
-            <ProjectChip
-              data={projectsQuery.data}
-              value={projectParam}
-              onChange={setProjectParam}
-              onNew={posts ? () => setProjectDialog("new") : undefined}
-            />
-            <IssueFilters view={view} issues={all} onChange={changeView} />
-          </Toolbar>
-          {(issues.isLoading || viewLoading || (!columns && columnsQuery.isLoading)) &&
-            (view.layout === "board" ? (
-              // In the board's own frame and sideways scroller, so it loads where it will stay.
-              <div className="issues-boardframe page-split">
-                <div className="issues-boardwrap">
-                  <div className="issues-board">
-                    {BOARD.map((status) => (
-                      <section key={status} className="issues-col" aria-label={t(`issues.status.${status}`)}>
-                        <div className="issues-col__head">
-                          <h2>{t(`issues.status.${status}`)}</h2>
-                        </div>
-                        <LoadingCards count={2} className="loading-cards loading-cards--tight" />
-                      </section>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <LoadingList count={5} avatar={false} trailing />
-            ))}
-          {issues.isError && !issues.data && <ErrorState error={issues.error} onRetry={() => void issues.refetch()} />}
-          {noIssues && (
-            <EmptyState
-              size="page"
-              agent={look}
-              title={t(posts ? "issues.emptyTitle" : "issues.emptyViewerTitle")}
-              actions={
-                posts && (
+    <BoardProject.Provider value={projectParam ?? null}>
+      <IssueDeleteProvider onDeleted={() => setOpenParam(null)}>
+        <div className="page issues">
+          <div className="issues__main">
+            <PageHeader
+              className="issues-head"
+              title={
+                spaceParam ? (
                   <>
-                    <Button variant="primary" icon="plus" onClick={() => setCreating({ columnId: null })}>
-                      {t("issues.new")}
-                    </Button>
-                    <AskAgentButton draft={t("issues.askFirst")} />
+                    <ColorDot color={space?.color} />
+                    {space ? space.name : t("issues.spaces.label")}
                   </>
+                ) : projectParam ? (
+                  // Inside the title, so the dot stays on the first line of a name that wraps.
+                  <>
+                    <ColorDot color={project?.color} />
+                    {project ? project.name : t("issues.projects.none")}
+                  </>
+                ) : (
+                  t("issues.title")
                 )
               }
-            >
-              {t(posts ? "issues.empty" : "issues.emptyViewer")}
-            </EmptyState>
-          )}
-          {emptyProject && (
-            <EmptyState
-              size="panel"
+              count={
+                <>
+                  <span>
+                    {t("issues.summary", {
+                      open: open.length,
+                      agents: open.filter((i) => i.assignee?.type === "agent").length,
+                    })}
+                  </span>
+                  {open.some((i) => !i.assignee) && (
+                    <span> · {t("issues.unassigned", { count: open.filter((i) => !i.assignee).length })}</span>
+                  )}
+                  {project?.archived && <span> · {t("issues.projects.archivedMark")}</span>}
+                </>
+              }
               actions={
-                adds &&
-                presetProject && (
-                  <Button variant="primary" icon="plus" onClick={() => setCreating({ columnId: null })}>
+                // The empty state takes over this button: one way in, in the middle of the page.
+                !noIssues &&
+                adds && (
+                  <Button variant="primary" icon="plus" kbd={["N"]} onClick={() => setCreating({ columnId: null })}>
                     {t("issues.new")}
                   </Button>
                 )
               }
-            >
-              {t(projectParam === NO_PROJECT ? "issues.noResults" : "issues.projects.empty")}
-            </EmptyState>
-          )}
-          {issues.isSuccess && filtered.length === 0 && (all.length > 0 || search) && (
-            <EmptyState
-              size="panel"
+            />
+            <WorkingNow issues={all} onOpen={toggle} />
+            <Toolbar
+              label={t("issues.filters")}
+              search={
+                <SearchField
+                  ref={searchRef}
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  onClear={() => setQ("")}
+                  clearLabel={copy.clearSearch}
+                  placeholder={t("issues.search")}
+                  aria-label={t("issues.search")}
+                  shortcut={<Kbd aria-hidden="true">/</Kbd>}
+                />
+              }
               actions={
-                <Button
-                  onClick={() => {
-                    setQ("");
-                    changeView({ assignees: [], priorities: [] });
-                  }}
-                >
-                  {copy.clearAll}
-                </Button>
+                <span className="issues-tools">
+                  <DisplayButton view={view} onChange={changeView} />
+                  {(view.group === "stage" || (project && posts)) && (
+                    <Menu
+                      align="end"
+                      label={t("issues.moreOptions")}
+                      trigger={<Button size="sm" iconOnly icon="more" aria-label={t("issues.moreOptions")} />}
+                    >
+                      {view.group === "stage" && (
+                        <MenuItem icon="layers" onSelect={() => setAddingColumn(true)} disabled={!columns}>
+                          {t("issues.columns.add")}
+                        </MenuItem>
+                      )}
+                      {project && posts && (
+                        <>
+                          {view.group === "stage" && <MenuSeparator />}
+                          <MenuItem icon="edit" onSelect={() => setProjectDialog("edit")}>
+                            {t("issues.projects.edit")}
+                          </MenuItem>
+                          <MenuItem
+                            icon="archive"
+                            disabled={projectAction.isPending}
+                            onSelect={() =>
+                              projectAction.mutate({
+                                type: "update",
+                                projectId: project.id,
+                                archived: !project.archived,
+                              })
+                            }
+                          >
+                            {t(project.archived ? "issues.projects.unarchive" : "issues.projects.archive")}
+                          </MenuItem>
+                          <MenuItem icon="trash" danger onSelect={() => setProjectDialog("delete")}>
+                            {t("issues.projects.delete")}
+                          </MenuItem>
+                        </>
+                      )}
+                      {space && posts && (
+                        <>
+                          <MenuSeparator />
+                          <MenuItem icon="edit" onSelect={() => setSpaceDialog("edit")}>
+                            {t("issues.spaces.edit")}
+                          </MenuItem>
+                          <MenuItem
+                            icon="archive"
+                            disabled={spaceAction.isPending}
+                            onSelect={() =>
+                              spaceAction.mutate({ type: "update", spaceId: space.id, archived: !space.archived })
+                            }
+                          >
+                            {t(space.archived ? "issues.spaces.unarchive" : "issues.spaces.archive")}
+                          </MenuItem>
+                          <MenuItem icon="trash" danger onSelect={() => setSpaceDialog("delete")}>
+                            {t("issues.spaces.delete")}
+                          </MenuItem>
+                        </>
+                      )}
+                    </Menu>
+                  )}
+                </span>
               }
             >
-              {t("issues.noResults")}
-            </EmptyState>
+              <SpaceChip
+                data={projectsQuery.data}
+                value={spaceParam}
+                onChange={setSpaceParam}
+                onNew={posts ? () => setSpaceDialog("new") : undefined}
+              />
+              <ProjectChip
+                data={projectsQuery.data}
+                value={projectParam}
+                onChange={setProjectParam}
+                onNew={posts ? () => setProjectDialog("new") : undefined}
+              />
+              <IssueFilters view={view} issues={all} onChange={changeView} />
+            </Toolbar>
+            {onCompanyPage && (
+              <SpaceBoards
+                space={space ?? null}
+                data={projectsQuery.data}
+                mayCreate={posts}
+                onOpen={(id) => setProjectParam(id)}
+                onNew={posts ? () => setProjectDialog("new") : undefined}
+              />
+            )}
+            {!onCompanyPage &&
+              (issues.isLoading || viewLoading || (!columns && columnsQuery.isLoading)) &&
+              (view.layout === "board" ? (
+                // In the board's own frame and sideways scroller, so it loads where it will stay.
+                <div className="issues-boardframe page-split">
+                  <div className="issues-boardwrap">
+                    <div className="issues-board">
+                      {BOARD.map((status) => (
+                        <section key={status} className="issues-col" aria-label={t(`issues.status.${status}`)}>
+                          <div className="issues-col__head">
+                            <h2>{t(`issues.status.${status}`)}</h2>
+                          </div>
+                          <LoadingCards count={2} className="loading-cards loading-cards--tight" />
+                        </section>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <LoadingList count={5} avatar={false} trailing />
+              ))}
+            {issues.isError && !issues.data && (
+              <ErrorState error={issues.error} onRetry={() => void issues.refetch()} />
+            )}
+            {!onCompanyPage && noIssues && (
+              <EmptyState
+                size="page"
+                agent={look}
+                title={t(posts ? "issues.emptyTitle" : "issues.emptyViewerTitle")}
+                actions={
+                  posts && (
+                    <>
+                      <Button variant="primary" icon="plus" onClick={() => setCreating({ columnId: null })}>
+                        {t("issues.new")}
+                      </Button>
+                      <AskAgentButton draft={t("issues.askFirst")} />
+                    </>
+                  )
+                }
+              >
+                {t(posts ? "issues.empty" : "issues.emptyViewer")}
+              </EmptyState>
+            )}
+            {!onCompanyPage && emptyProject && (
+              <EmptyState
+                size="panel"
+                actions={
+                  adds &&
+                  presetProject && (
+                    <Button variant="primary" icon="plus" onClick={() => setCreating({ columnId: null })}>
+                      {t("issues.new")}
+                    </Button>
+                  )
+                }
+              >
+                {t(projectParam === NO_PROJECT ? "issues.noResults" : "issues.projects.empty")}
+              </EmptyState>
+            )}
+            {!onCompanyPage && issues.isSuccess && filtered.length === 0 && (all.length > 0 || search) && (
+              <EmptyState
+                size="panel"
+                actions={
+                  <Button
+                    onClick={() => {
+                      setQ("");
+                      changeView({ assignees: [], priorities: [] });
+                    }}
+                  >
+                    {copy.clearAll}
+                  </Button>
+                }
+              >
+                {t("issues.noResults")}
+              </EmptyState>
+            )}
+            {!onCompanyPage && columnsQuery.isError && !columns && (
+              <ErrorState error={columnsQuery.error} onRetry={() => void columnsQuery.refetch()} />
+            )}
+            {!onCompanyPage && !viewLoading && filtered.length > 0 && columns && (
+              <IssuesBody
+                // A project's own board doesn't say its name again on every card.
+                view={projectParam ? { ...view, fields: { ...view.fields, project: false } } : view}
+                columns={columns}
+                issues={filtered.filter((i) => view.showCanceled || i.status !== "canceled")}
+                all={all}
+                openNumber={openNumber}
+                onOpen={toggle}
+                onNew={adds ? (columnId) => setCreating({ columnId }) : undefined}
+              />
+            )}
+          </div>
+          {opened && (
+            <IssueDialog issue={opened} focusMessageId={focusParam ?? undefined} onClose={() => setOpenParam(null)} />
           )}
-          {columnsQuery.isError && !columns && (
-            <ErrorState error={columnsQuery.error} onRetry={() => void columnsQuery.refetch()} />
+          <NewIssueDialog
+            open={creating !== false}
+            columnId={creating ? creating.columnId : null}
+            projectId={presetProject}
+            columns={columns ?? []}
+            onClose={() => setCreating(false)}
+          />
+          {projectDialog === "new" && (
+            <ProjectDialog onClose={() => setProjectDialog(null)} onDone={(p) => setProjectParam(p.id)} />
           )}
-          {!viewLoading && filtered.length > 0 && columns && (
-            <IssuesBody
-              // A project's own board doesn't say its name again on every card.
-              view={projectParam ? { ...view, fields: { ...view.fields, project: false } } : view}
+          {projectDialog === "edit" && project && (
+            <ProjectDialog project={project} onClose={() => setProjectDialog(null)} />
+          )}
+          {projectDialog === "delete" && project && (
+            <DeleteProjectDialog
+              project={project}
+              onClose={() => setProjectDialog(null)}
+              onDeleted={() => setProjectParam(undefined)}
+            />
+          )}
+          {spaceDialog === "new" && (
+            <SpaceDialog onClose={() => setSpaceDialog(null)} onDone={(s) => setSpaceParam(s.id)} />
+          )}
+          {spaceDialog === "edit" && space && <SpaceDialog space={space} onClose={() => setSpaceDialog(null)} />}
+          {spaceDialog === "delete" && space && (
+            <DeleteSpaceDialog
+              space={space}
+              onClose={() => setSpaceDialog(null)}
+              onDeleted={() => setSpaceParam(undefined)}
+            />
+          )}
+          {columns && (
+            <AddColumnDialog
+              open={addingColumn}
+              afterId={null}
               columns={columns}
-              issues={filtered.filter((i) => view.showCanceled || i.status !== "canceled")}
-              all={all}
-              openNumber={openNumber}
-              onOpen={toggle}
-              onNew={adds ? (columnId) => setCreating({ columnId }) : undefined}
+              onClose={() => setAddingColumn(false)}
             />
           )}
         </div>
-        {opened && (
-          <IssueDialog issue={opened} focusMessageId={focusParam ?? undefined} onClose={() => setOpenParam(null)} />
-        )}
-        <NewIssueDialog
-          open={creating !== false}
-          columnId={creating ? creating.columnId : null}
-          projectId={presetProject}
-          columns={columns ?? []}
-          onClose={() => setCreating(false)}
-        />
-        {projectDialog === "new" && (
-          <ProjectDialog onClose={() => setProjectDialog(null)} onDone={(p) => setProjectParam(p.id)} />
-        )}
-        {projectDialog === "edit" && project && (
-          <ProjectDialog project={project} onClose={() => setProjectDialog(null)} />
-        )}
-        {projectDialog === "delete" && project && (
-          <DeleteProjectDialog
-            project={project}
-            onClose={() => setProjectDialog(null)}
-            onDeleted={() => setProjectParam(undefined)}
-          />
-        )}
-        {spaceDialog === "new" && (
-          <SpaceDialog onClose={() => setSpaceDialog(null)} onDone={(s) => setSpaceParam(s.id)} />
-        )}
-        {spaceDialog === "edit" && space && <SpaceDialog space={space} onClose={() => setSpaceDialog(null)} />}
-        {spaceDialog === "delete" && space && (
-          <DeleteSpaceDialog
-            space={space}
-            onClose={() => setSpaceDialog(null)}
-            onDeleted={() => setSpaceParam(undefined)}
-          />
-        )}
-        {columns && (
-          <AddColumnDialog
-            open={addingColumn}
-            afterId={null}
-            columns={columns}
-            onClose={() => setAddingColumn(false)}
-          />
-        )}
-      </div>
-    </IssueDeleteProvider>
+      </IssueDeleteProvider>
+    </BoardProject.Provider>
   );
 }
 

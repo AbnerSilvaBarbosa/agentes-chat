@@ -81,8 +81,24 @@ export function NewIssueDialog({
   }
   if (!open && openedWith !== undefined) setOpenedWith(undefined);
   const chosenColumn = todoColumns.find((c) => c.id === column) ?? todoColumns[0];
-  const projects = pickableProjects(useIssueProjects(org.id).data?.projects ?? []);
+  // A board belongs to a company, so the company is the first pick and narrows the boards (ADR 0177). A task is never
+  // in a company of its own: it is in a board, and the board is in the company.
+  const boardData = useIssueProjects(org.id).data;
+  const [space, setSpace] = useState<string | null>(null);
+  const spaces = (boardData?.spaces ?? []).filter((sp) => !sp.archived);
+  const projects = pickableProjects(boardData?.projects ?? []).filter((p) => !space || p.spaceId === space);
   const chosenProject = projects.find((p) => p.id === project) ?? null;
+  const chosenSpace = spaces.find((sp) => sp.id === space) ?? null;
+  const pickSpace = (id: string | null) => {
+    setSpace(id);
+    // A board of another company leaves with the company it came from.
+    if (chosenProject && chosenProject.spaceId !== id) setProject(null);
+  };
+  const pickProject = (id: string | null) => {
+    setProject(id);
+    const board = (boardData?.projects ?? []).find((p) => p.id === id);
+    if (board) setSpace(board.spaceId);
+  };
   const actors = useActors();
   const action = useIssueAction(org.id);
   const start = useStartAgentOnTask(org.id);
@@ -233,6 +249,33 @@ export function NewIssueDialog({
   // the full one.
   const props = (
     <div className="ac-props issue-new__props">
+      {spaces.length > 0 && (
+        <Menu
+          label={t("issues.spaces.label")}
+          trigger={
+            <Button
+              size="sm"
+              icon={chosenSpace ? undefined : "grid"}
+              aria-label={chosenSpace ? `${t("issues.spaces.label")}: ${chosenSpace.name}` : t("issues.spaces.label")}
+            >
+              {chosenSpace && <ColorDot color={chosenSpace.color} />}
+              {chosenSpace ? chosenSpace.name : t("issues.spaces.label")}
+            </Button>
+          }
+        >
+          {[...spaces, null].map((sp) => (
+            <MenuCheckboxItem
+              key={sp?.id ?? "none"}
+              closes
+              checked={(sp?.id ?? null) === space}
+              onCheckedChange={() => pickSpace(sp?.id ?? null)}
+              leading={<ColorDot color={sp?.color} />}
+            >
+              {sp?.name ?? t("issues.spaces.none")}
+            </MenuCheckboxItem>
+          ))}
+        </Menu>
+      )}
       <Menu
         label={t("issues.projects.label")}
         trigger={
@@ -253,7 +296,7 @@ export function NewIssueDialog({
             key={p?.id ?? NO_PROJECT}
             closes
             checked={(p?.id ?? null) === (chosenProject?.id ?? null)}
-            onCheckedChange={() => setProject(p?.id ?? null)}
+            onCheckedChange={() => pickProject(p?.id ?? null)}
             leading={<ColorDot color={p?.color} />}
           >
             {p?.name ?? t("issues.projects.none")}

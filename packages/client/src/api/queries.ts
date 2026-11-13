@@ -117,6 +117,7 @@ import type {
   IssueActivity,
   IssueActivityEvent,
   IssueColumn,
+  IssueColumnTemplate,
   IssueInput,
   IssuePatch,
   IssueProjectRef,
@@ -4255,15 +4256,22 @@ export function useStartAgentOnTask(orgId: string) {
   });
 }
 
-/** The board's columns; they live under the issues key, so any issue change refreshes them too. */
-export const useIssueColumns = (orgId: string) => {
+/**
+ * A board's columns (ADR 0177); left out, the workspace's own. They live under the issues key, so any issue change
+ * refreshes them too.
+ */
+export const useIssueColumns = (orgId: string, projectId?: string | null) => {
   const api = useApi();
-  return useQuery({ queryKey: keys.issueColumns(orgId), queryFn: () => api.issues.columns(orgId) });
+  return useQuery({
+    queryKey: keys.issueColumns(orgId, projectId ?? ""),
+    queryFn: () => api.issues.columns(orgId, projectId),
+  });
 };
 
-export function useIssueColumnAction(orgId: string) {
+export function useIssueColumnAction(orgId: string, projectId?: string | null) {
   const api = useApi();
   const qc = useQueryClient();
+  const key = keys.issueColumns(orgId, projectId ?? "");
   return useMutation({
     mutationFn: (
       action:
@@ -4273,15 +4281,60 @@ export function useIssueColumnAction(orgId: string) {
     ): Promise<IssueColumn[]> => {
       switch (action.type) {
         case "add":
-          return api.issues.addColumn(orgId, { name: action.name, stage: action.stage, afterId: action.afterId });
+          return api.issues.addColumn(orgId, {
+            name: action.name,
+            stage: action.stage,
+            afterId: action.afterId,
+            projectId: projectId ?? null,
+          });
         case "update":
           return api.issues.updateColumn(orgId, action.columnId, { name: action.name, index: action.index });
         case "delete":
           return api.issues.deleteColumn(orgId, action.columnId, action.moveTo);
       }
     },
-    onSuccess: (columns) => qc.setQueryData(keys.issueColumns(orgId), columns),
+    onSuccess: (columns) => {
+      qc.setQueryData(key, columns);
+      // A board that had none just took the workspace's as its own: the workspace's key is still right.
+      if (projectId) void qc.invalidateQueries({ queryKey: keys.issueColumns(orgId) });
+    },
     // Deleting a column moves its tasks.
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.issues(orgId) }),
+  });
+}
+
+/** The column sets a board can be made from, and the two the workspace starts with. */
+export const useIssueColumnTemplates = (orgId: string) => {
+  const api = useApi();
+  return useQuery({ queryKey: keys.issueColumnTemplates(orgId), queryFn: () => api.issues.columnTemplates(orgId) });
+};
+
+export function useIssueColumnTemplateAction(orgId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      action:
+        | { type: "save"; name: string; projectId?: string | null }
+        | { type: "apply"; projectId: string; templateId: string }
+        | { type: "delete"; templateId: string },
+    ): Promise<IssueColumn[] | IssueColumnTemplate | undefined> => {
+      switch (action.type) {
+        case "save":
+          return api.issues.saveColumnTemplate(orgId, { name: action.name, projectId: action.projectId });
+        case "apply":
+          return api.issues.applyColumnTemplate(orgId, action.projectId, action.templateId);
+        case "delete":
+          return api.issues.deleteColumnTemplate(orgId, action.templateId).then(() => undefined);
+      }
+    },
+    onSuccess: (result, action) => {
+      if (Array.isArray(result) && action.type === "apply") {
+        qc.setQueryData(keys.issueColumns(orgId, action.projectId), result);
+      }
+      void qc.invalidateQueries({ queryKey: keys.issueColumnTemplates(orgId) });
+    },
+    // Applying a template moves the tasks whose column went away.
     onSettled: () => void qc.invalidateQueries({ queryKey: keys.issues(orgId) }),
   });
 }

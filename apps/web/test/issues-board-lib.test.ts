@@ -6,6 +6,7 @@ const col = (id: string, stage: IssueStatus, position = 0, name: string | null =
   id,
   stage,
   name,
+  projectId: null,
   position,
 });
 const defaults = [

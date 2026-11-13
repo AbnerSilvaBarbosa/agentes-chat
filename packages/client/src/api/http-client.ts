@@ -128,6 +128,7 @@ import type {
   Issue,
   IssueActivity,
   IssueColumn,
+  IssueColumnTemplate,
   IssueConversationRef,
   IssueProject,
   IssueProjectRef,
@@ -1494,7 +1495,12 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         request<Issue>(`${org(orgId)}/issues/${enc(id)}/ask-agent`, { json: { agentId } }),
       conversation: (orgId, id) =>
         request<IssueConversationRef>(`${org(orgId)}/issues/${enc(id)}/conversation`, { method: "POST" }),
-      columns: async (orgId) => (await request<{ columns: IssueColumn[] }>(`${org(orgId)}/issue-columns`)).columns,
+      columns: async (orgId, projectId) =>
+        (
+          await request<{ columns: IssueColumn[] }>(`${org(orgId)}/issue-columns`, {
+            query: projectId ? { projectId } : {},
+          })
+        ).columns,
       addColumn: async (orgId, input) =>
         (await request<{ columns: IssueColumn[] }>(`${org(orgId)}/issue-columns`, { json: input })).columns,
       updateColumn: async (orgId, columnId, patch) =>
@@ -1517,6 +1523,19 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         request<IssueProjectRef>(`${org(orgId)}/issue-projects/${enc(projectId)}`, { method: "PATCH", json: patch }),
       deleteProject: (orgId, projectId) =>
         request<void>(`${org(orgId)}/issue-projects/${enc(projectId)}`, { method: "DELETE" }),
+      columnTemplates: async (orgId) =>
+        (await request<{ templates: IssueColumnTemplate[] }>(`${org(orgId)}/issue-column-templates`)).templates,
+      saveColumnTemplate: (orgId, input) =>
+        request<IssueColumnTemplate>(`${org(orgId)}/issue-column-templates`, { json: input }),
+      applyColumnTemplate: async (orgId, projectId, templateId) =>
+        (
+          await request<{ columns: IssueColumn[] }>(`${org(orgId)}/issue-column-templates/${enc(templateId)}/apply`, {
+            method: "PUT",
+            json: { projectId },
+          })
+        ).columns,
+      deleteColumnTemplate: (orgId, templateId) =>
+        request<void>(`${org(orgId)}/issue-column-templates/${enc(templateId)}`, { method: "DELETE" }),
       createSpace: (orgId, input) => request<IssueSpace>(`${org(orgId)}/issue-spaces`, { json: input }),
       updateSpace: (orgId, spaceId, patch) =>
         request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}`, { method: "PATCH", json: patch }),

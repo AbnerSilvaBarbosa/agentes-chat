@@ -3727,6 +3727,17 @@ export interface IssueColumn {
   stage: IssueStatus;
   name: string | null;
   position: number;
+  /** The board it belongs to; null: the workspace's own set, which a board uses until it has its own. */
+  projectId: string | null;
+}
+
+/** A set of columns a board can be made from: saved once, used by every board that wants it. */
+export interface IssueColumnTemplate {
+  id: string;
+  name: string;
+  columns: { name: string; stage: IssueStatus }[];
+  /** One of the two the workspace started with. */
+  seeded: boolean;
 }
 
 export type RoutineEvent =

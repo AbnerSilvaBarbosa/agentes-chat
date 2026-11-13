@@ -1,10 +1,12 @@
 import {
+  applyColumnTemplate,
   askAgentToImplement,
   commentIssue,
   createIssue,
   createIssueColumn,
   createIssueProject,
   createIssueSpace,
+  deleteColumnTemplate,
   deleteIssue,
   deleteIssueColumn,
   deleteIssueProject,
@@ -12,6 +14,7 @@ import {
   getIssueDetail,
   type IssueDeps,
   issueFromMessage,
+  listColumnTemplates,
   listIssueActivity,
   listIssueColumns,
   listIssueProjects,
@@ -20,6 +23,7 @@ import {
   PROJECT_NAME_MAX,
   ROLE_COLORS,
   SPACE_NAME_MAX,
+  saveColumnTemplate,
   setCriterion,
   setIssueAudience,
   updateIssue,
@@ -205,6 +209,16 @@ const Column = z
 const Columns = z.object({
   columns: z.array(Column).openapi({ description: "Board order: by stage, then position." }),
 });
+const ColumnTemplate = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    columns: z
+      .array(z.object({ name: z.string(), stage: Status }))
+      .openapi({ description: "In the order the board shows them." }),
+    seeded: z.boolean().openapi({ description: "One of the two the workspace started with, which it may not delete." }),
+  })
+  .openapi("IssueColumnTemplate");
 const ColumnParams = OrgParams.extend({ columnId: z.uuid() });
 
 /** Native issues: numbers per org, acceptance criteria, activity, "ask an agent to implement". */
@@ -405,13 +419,19 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-columns",
       tags,
       security,
-      summary: "The board's columns, each in a fixed stage",
-      request: { params: OrgParams },
+      summary: "A board's columns, each in a fixed stage (the workspace's own when the board has none)",
+      request: {
+        params: OrgParams,
+        query: z.object({
+          projectId: z.uuid().optional().openapi({ description: "The board. Left out: the workspace's own columns." }),
+        }),
+      },
       responses: { 200: json(Columns), ...errors },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      return c.json({ columns: await listIssueColumns(db, c.get("user").id, orgId) }, 200);
+      const { projectId } = c.req.valid("query");
+      return c.json({ columns: await listIssueColumns(db, c.get("user").id, orgId, projectId ?? null) }, 200);
     },
   );
 
@@ -425,7 +445,15 @@ export function issueRoutes(deps: AppDeps) {
       request: {
         params: OrgParams,
         body: body(
-          z.object({ name: z.string().min(1).max(40), stage: Status, afterId: z.uuid().nullable().optional() }),
+          z.object({
+            name: z.string().min(1).max(40),
+            stage: Status,
+            afterId: z.uuid().nullable().optional(),
+            projectId: z.uuid().nullable().optional().openapi({
+              description:
+                "The board whose columns change (it takes the workspace's as its own first). Left out: the workspace's.",
+            }),
+          }),
         ),
       },
       responses: { 201: json(Columns, "Created"), ...errors },
@@ -470,6 +498,86 @@ export function issueRoutes(deps: AppDeps) {
       const { orgId, columnId } = c.req.valid("param");
       const { moveTo } = c.req.valid("query");
       return c.json({ columns: await deleteIssueColumn(issues, c.get("user").id, orgId, columnId, moveTo) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/organizations/{orgId}/issue-column-templates",
+      tags,
+      security,
+      summary: "The column sets a board can be made from (the workspace starts with two)",
+      request: { params: OrgParams },
+      responses: { 200: json(z.object({ templates: z.array(ColumnTemplate) })), ...errors },
+    }),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      return c.json({ templates: await listColumnTemplates(db, c.get("user").id, orgId) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/organizations/{orgId}/issue-column-templates",
+      tags,
+      security,
+      summary: "Save a board's columns (or the workspace's) as a template",
+      description: "`issue_template.name_taken`: another template has that name.",
+      request: {
+        params: OrgParams,
+        body: body(
+          z.object({
+            name: z.string().min(1).max(60),
+            projectId: z
+              .uuid()
+              .nullable()
+              .optional()
+              .openapi({ description: "The board to copy. Left out: the workspace's." }),
+          }),
+        ),
+      },
+      responses: { 201: json(ColumnTemplate, "Created"), ...errors },
+    }),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      return c.json(await saveColumnTemplate(issues, c.get("user").id, orgId, c.req.valid("json")), 201);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "put",
+      path: "/organizations/{orgId}/issue-column-templates/{templateId}/apply",
+      tags,
+      security,
+      summary: "Make a board's columns this template's: the board gets its own copy, and its tasks keep a column",
+      request: { params: OrgParams.extend({ templateId: z.uuid() }), body: body(z.object({ projectId: z.uuid() })) },
+      responses: { 200: json(Columns), ...errors },
+    }),
+    async (c) => {
+      const { orgId, templateId } = c.req.valid("param");
+      const { projectId } = c.req.valid("json");
+      const columns = await applyColumnTemplate(issues, c.get("user").id, orgId, projectId, templateId);
+      return c.json({ columns }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/organizations/{orgId}/issue-column-templates/{templateId}",
+      tags,
+      security,
+      summary: "Delete a template. The boards made from it keep their columns",
+      request: { params: OrgParams.extend({ templateId: z.uuid() }) },
+      responses: { 204: noContent[204], ...errors },
+    }),
+    async (c) => {
+      const { orgId, templateId } = c.req.valid("param");
+      await deleteColumnTemplate(issues, c.get("user").id, orgId, templateId);
+      return c.body(null, 204);
     },
   );
 

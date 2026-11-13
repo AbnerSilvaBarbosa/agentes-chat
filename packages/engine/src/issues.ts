@@ -29,7 +29,7 @@ import {
   publishUserEvent,
 } from "./events";
 import { cutText } from "./format";
-import { boardColumns, columnForMove, columnOf, topRank } from "./issue-columns";
+import { allColumns, columnForMove, columnOf, topRank } from "./issue-columns";
 import { type IssueProjectRef, projectForTask, projectsById } from "./issue-projects";
 import type { IssueWorkMeta } from "./issue-work";
 import { fileIdsOf, getMessage, insertMessage, type MessageView, messageView, postPersonMessage } from "./messages";
@@ -181,6 +181,8 @@ export interface IssueInput {
   labels?: string[];
   githubUrl?: string | null;
   projectId?: string | null;
+  /** The board column it starts in (ADR 0176): the task takes that column's stage. */
+  columnId?: string | null;
 }
 
 export type IssuePatch = Partial<{
@@ -564,7 +566,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
   const byId = new Map(files.map((f) => [f.id, f]));
   const orgId = rows[0]?.orgId;
   const [columns, tied, projects] = await Promise.all([
-    orgId ? boardColumns(db, orgId) : [],
+    orgId ? allColumns(db, orgId) : [],
     tiedPeople(db, rows),
     projectsById(
       db,
@@ -868,6 +870,8 @@ export async function createIssue(
         : (made?.scope ?? { ...WORKSPACE_SCOPE, channelId: made?.tiedTo ?? input.channelId ?? null });
   await checkAssignee(db, orgId, input.assignee, scope);
   const project = input.projectId ? await projectForTask(db, orgId, input.projectId) : null;
+  // Born in a column (ADR 0176): it takes that column's stage, and no `issue.moved` fires for a card starting there.
+  const bornIn = input.columnId ? await columnForMove(db, orgId, input.columnId, input.projectId ?? null) : null;
   const author = actorOf(actor);
   const source: IssueSource =
     input.source ?? (actor.type === "agent" ? { type: "agent", agentId: actor.agentId } : { type: "manual" });
@@ -886,6 +890,7 @@ export async function createIssue(
         description: (input.description ?? "").slice(0, 50_000),
         priority: input.priority ?? "normal",
         boardRank: topRank(),
+        ...(bornIn ? { status: bornIn.stage, columnId: bornIn.id } : {}),
         projectId: project?.id ?? null,
         assigneeType: input.assignee?.type ?? null,
         assigneeId: input.assignee?.id ?? null,
@@ -1123,7 +1128,14 @@ export async function updateIssue(
     events.push({ text: "edited the description", event: "description_changed" });
   }
   // A board column carries its stage; a bare status lands on top of the stage's first column.
-  const column = patch.columnId ? await columnForMove(db, orgId, patch.columnId) : null;
+  const column = patch.columnId
+    ? await columnForMove(
+        db,
+        orgId,
+        patch.columnId,
+        patch.projectId !== undefined ? patch.projectId : current.projectId,
+      )
+    : null;
   const status = column?.stage ?? patch.status;
   if (column) set.columnId = column.id;
   if (status && status !== current.status) {

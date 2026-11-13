@@ -19,7 +19,7 @@ import {
   useDragScroll,
 } from "@agenteschat/ui";
 import { type Query, useQueryClient } from "@tanstack/react-query";
-import { type CSSProperties, type ReactNode, useRef, useState } from "react";
+import { type CSSProperties, createContext, type ReactNode, useContext, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrg } from "@/components/org-context";
 import {
@@ -328,7 +328,8 @@ function ColumnHead({
   const toast = useToast();
   const title = useColumnTitle();
   const stageName = useStageName();
-  const action = useIssueColumnAction(org.id);
+  const projectId = useBoardProject();
+  const action = useIssueColumnAction(org.id, projectId);
   const name = title(col);
   const only = siblings.length === 1;
   const save = (value: string) => {
@@ -443,6 +444,10 @@ function ColumnHead({
 }
 
 /** "Nova coluna": a name and one question, the stage. */
+/** The board the page shows (`?project=`), for the column dialogs: a board's columns are its own (ADR 0177). */
+export const BoardProject = createContext<string | null>(null);
+const useBoardProject = () => useContext(BoardProject);
+
 export function AddColumnDialog({
   open,
   afterId,
@@ -459,7 +464,8 @@ export function AddColumnDialog({
   const toast = useToast();
   const title = useColumnTitle();
   const stageName = useStageName();
-  const action = useIssueColumnAction(org.id);
+  const projectId = useBoardProject();
+  const action = useIssueColumnAction(org.id, projectId);
   const after = afterId ? columns.find((c) => c.id === afterId) : undefined;
   const [name, setName] = useState("");
   const [stage, setStage] = useState<IssueStatus | null>(null);
@@ -592,7 +598,8 @@ function DeleteColumnDialog({
   const toast = useToast();
   const title = useColumnTitle();
   const stageName = useStageName();
-  const action = useIssueColumnAction(org.id);
+  const projectId = useBoardProject();
+  const action = useIssueColumnAction(org.id, projectId);
   const issueAction = useIssueAction(org.id);
   const others = columns.filter((c) => c.id !== col.id && c.stage !== "canceled");
   const [dest, setDest] = useState(() => columnsOf(others, col.stage)[0]?.id ?? others[0]?.id ?? "");

@@ -1,5 +1,11 @@
 import type { IssueProject, IssueProjectRef, IssueProjects, IssueSpaceRef } from "@agenteschat/client";
-import { useIssueProjectAction, useIssueProjects, useIssueSpaceAction } from "@agenteschat/client";
+import {
+  useIssueColumnTemplateAction,
+  useIssueColumnTemplates,
+  useIssueProjectAction,
+  useIssueProjects,
+  useIssueSpaceAction,
+} from "@agenteschat/client";
 import {
   boardFilterRows,
   NO_PROJECT,
@@ -18,6 +24,7 @@ import {
   Field,
   FilterChip,
   type FilterOption,
+  Icon,
   Input,
   Locked,
   Select,
@@ -34,6 +41,9 @@ const freeColor = (worn: { color: string }[]) =>
 
 /** No space: a board that belongs to no company (the empty option of a space picker). */
 export const NO_SPACE = "";
+
+/** No template: a board that keeps the workspace's own columns. */
+export const NO_TEMPLATE = "";
 
 /** "Nova empresa" and "Editar empresa": a name and one of the roles' colors, as a board has. Mounted while open. */
 export function SpaceDialog({
@@ -197,11 +207,15 @@ export function ProjectDialog({
   const { org } = useOrg();
   const action = useIssueProjectAction(org.id);
   const data = useIssueProjects(org.id).data;
+  const templateAction = useIssueColumnTemplateAction(org.id);
+  const templates = useIssueColumnTemplates(org.id).data ?? [];
   const projects = data?.projects ?? [];
   const spaces = data?.spaces ?? [];
   const [name, setName] = useState(project?.name ?? "");
   const [picked, setPicked] = useState<string | null>(project?.color ?? null);
   const [spaceId, setSpaceId] = useState<string>(project?.spaceId ?? NO_SPACE);
+  // A new board starts from a set of columns (ADR 0177); editing one keeps the columns it has.
+  const [template, setTemplate] = useState<string>(NO_TEMPLATE);
   const color = picked ?? freeColor(projects);
   const pickableSpaces = spaces.filter((s) => !s.archived || s.id === project?.spaceId);
   const save = () => {
@@ -217,6 +231,9 @@ export function ProjectDialog({
         onSuccess: (saved) => {
           if (saved) onDone?.(saved);
           onClose();
+          // The board exists either way: a template that fails is said, never a second board.
+          if (!project && saved && template !== NO_TEMPLATE)
+            templateAction.mutate({ type: "apply", projectId: saved.id, templateId: template });
         },
       },
     );
@@ -262,6 +279,20 @@ export function ProjectDialog({
                 />
               ))}
             </div>
+            {!project && (
+              <Field label={t("issues.columns.template")} id="issue-project-template">
+                <Select
+                  id="issue-project-template"
+                  aria-label={t("issues.columns.template")}
+                  value={template}
+                  onValueChange={setTemplate}
+                  options={[
+                    { value: NO_TEMPLATE, label: t("issues.columns.templateWorkspace") },
+                    ...templates.map((tpl) => ({ value: tpl.id, label: tpl.name })),
+                  ]}
+                />
+              </Field>
+            )}
             <Field label={t("issues.spaces.label")} id="issue-project-space">
               <Select
                 id="issue-project-space"
@@ -471,4 +502,57 @@ export function useProjectOptions(current: IssueProjectRef | null | undefined, m
     { value: NO_PROJECT, label: t("issues.projects.none"), leading: <ColorDot /> },
     ...(mayCreate ? [{ value: NEW_PROJECT, label: t("issues.projects.new"), action: true }] : []),
   ];
+}
+
+/**
+ * A company's own page (ADR 0177): its boards, each with the tasks open in it, and "Novo board" beside them. Picking a
+ * board opens its kanban; the company itself holds no task, so this is where a person chooses what to look at.
+ */
+export function SpaceBoards({
+  space,
+  data,
+  mayCreate,
+  onOpen,
+  onNew,
+}: {
+  space: IssueSpaceRef | null;
+  data: IssueProjects | undefined;
+  mayCreate: boolean;
+  onOpen: (projectId: string) => void;
+  onNew?: () => void;
+}) {
+  const { t } = useTranslation();
+  const boards = (data?.projects ?? []).filter((p) => p.spaceId === space?.id && !p.archived);
+  return (
+    <div className="space-boards">
+      {boards.length === 0 ? (
+        <div className="space-boards__empty">
+          <p>{t("issues.spaces.noBoards")}</p>
+          {mayCreate && onNew && (
+            <Button variant="primary" icon="plus" onClick={onNew}>
+              {t("issues.projects.new")}
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="space-boards__grid">
+          {boards.map((b) => (
+            <button key={b.id} type="button" className="space-board" onClick={() => onOpen(b.id)}>
+              <span className="space-board__name">
+                <ColorDot color={b.color} />
+                {b.name}
+              </span>
+              <span className="space-board__count">{t("issues.spaces.boardCount", { count: b.open })}</span>
+            </button>
+          ))}
+          {mayCreate && onNew && (
+            <button type="button" className="space-board space-board--new" onClick={onNew}>
+              <Icon name="plus" />
+              {t("issues.projects.new")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

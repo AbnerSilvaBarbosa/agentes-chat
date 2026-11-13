@@ -166,6 +166,7 @@ import type {
   Issue,
   IssueActivity,
   IssueColumn,
+  IssueColumnTemplate,
   IssueConversationRef,
   IssueInput,
   IssuePatch,
@@ -1309,11 +1310,11 @@ export interface ApiClient {
     /** The task's conversation (made on first use): the thread the chat's routes read and post to (ADR 0145). */
     conversation(orgId: string, id: string): Promise<IssueConversationRef>;
     /** The board's columns, board order: by stage, then position. */
-    columns(orgId: string): Promise<IssueColumn[]>;
+    columns(orgId: string, projectId?: string | null): Promise<IssueColumn[]>;
     /** Adds a column to a stage (after `afterId` when it is in the same stage, else at the stage's end). */
     addColumn(
       orgId: string,
-      input: { name: string; stage: IssueStatus; afterId?: string | null },
+      input: { name: string; stage: IssueStatus; afterId?: string | null; projectId?: string | null },
     ): Promise<IssueColumn[]>;
     /** Renames a column, or moves it inside its stage (`index`). */
     updateColumn(orgId: string, columnId: string, patch: { name?: string; index?: number }): Promise<IssueColumn[]>;
@@ -1330,8 +1331,15 @@ export interface ApiClient {
       projectId: string,
       patch: { name?: string; color?: string; archived?: boolean; spaceId?: string | null },
     ): Promise<IssueProjectRef>;
-    /** Its tasks stay, with no project. */
+    /** Its boards stay, with no company. */
     deleteProject(orgId: string, projectId: string): Promise<void>;
+    /** The column sets a board can be made from. */
+    columnTemplates(orgId: string): Promise<IssueColumnTemplate[]>;
+    /** Saves a board's columns (or the workspace's) as a template. */
+    saveColumnTemplate(orgId: string, input: { name: string; projectId?: string | null }): Promise<IssueColumnTemplate>;
+    /** Makes a board's columns this template's. */
+    applyColumnTemplate(orgId: string, projectId: string, templateId: string): Promise<IssueColumn[]>;
+    deleteColumnTemplate(orgId: string, templateId: string): Promise<void>;
     /** A space groups boards (a company, a client): its tasks are its boards'. */
     createSpace(orgId: string, input: { name: string; color?: string }): Promise<IssueSpace>;
     updateSpace(

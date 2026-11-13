@@ -6,6 +6,7 @@ import { type ArtifactDeps, fileRefOf, shareArtifact } from "./artifacts";
 import { canTalkTo, speakerFor } from "./audience";
 import { UUID } from "./authority";
 import { callableAgents, notCallableText } from "./brakes";
+import { boardColumnsOf } from "./issue-columns";
 import { projectByName } from "./issue-projects";
 import {
   askAgentToImplement,
@@ -82,10 +83,97 @@ async function assigneeNames(deps: IssueDeps, ctx: ToolContext, list: IssueView[
   return names;
 }
 
-const line = (i: IssueView, names: Map<string, string>) =>
-  `#${i.number} [${i.status}] ${i.title}${i.project ? ` [project: ${i.project.name}]` : ""}${
+const line = (i: IssueView, names: Map<string, string>, place?: string) =>
+  `#${i.number} [${i.status}] ${i.title}${place ? ` [${place}]` : ""}${
     i.assignee ? ` (assignee: ${names.get(i.assignee.id) ?? `${i.assignee.type} ${i.assignee.id}`})` : ""
   }${i.dueDate ? ` due ${i.dueDate}` : ""} id=${i.id}`;
+
+/**
+ * The words that stand for a stage, as a person or a model writes them.
+ */
+const STAGE_WORD: Record<string, IssueStatus> = {
+  todo: "todo",
+  backlog: "todo",
+  "a fazer": "todo",
+  "in progress": "in_progress",
+  "em andamento": "in_progress",
+  "em progresso": "in_progress",
+  "in review": "in_review",
+  "em revisão": "in_review",
+  "em revisao": "in_review",
+  done: "done",
+  feito: "done",
+  canceled: "canceled",
+  cancelado: "canceled",
+};
+
+/**
+ * Where a task sits, as its line says it: its company, its board and its column, the three words a person sees on the
+ * Tarefas screen (ADR 0174, 0176). A board outside every company says its board and column.
+ */
+async function placeOf(db: IssueDeps["db"], list: IssueView[]) {
+  const spaceIds = [
+    ...new Set(list.map((i) => i.project?.spaceId).filter((id): id is string => typeof id === "string")),
+  ];
+  const columnIds = [...new Set(list.map((i) => i.columnId).filter((id): id is string => typeof id === "string"))];
+  const [spaces, columns] = await Promise.all([
+    spaceIds.length
+      ? db
+          .select({ id: schema.issueSpaces.id, name: schema.issueSpaces.name })
+          .from(schema.issueSpaces)
+          .where(inArray(schema.issueSpaces.id, spaceIds))
+      : Promise.resolve([] as { id: string; name: string }[]),
+    columnIds.length
+      ? db
+          .select({ id: schema.issueColumns.id, name: schema.issueColumns.name, stage: schema.issueColumns.stage })
+          .from(schema.issueColumns)
+          .where(inArray(schema.issueColumns.id, columnIds))
+      : Promise.resolve([] as { id: string; name: string | null; stage: string }[]),
+  ]);
+  const spaceName = new Map(spaces.map((sp) => [sp.id, sp.name]));
+  const columnName = new Map(columns.map((c) => [c.id, c.name ?? c.stage]));
+  return (i: IssueView) => {
+    // Only a task with a board has a place to say: its status is already on the line.
+    if (!i.project) return undefined;
+    const parts = [
+      i.project.spaceId ? spaceName.get(i.project.spaceId) : undefined,
+      i.project.name,
+      i.columnId ? columnName.get(i.columnId) : undefined,
+    ].filter((p): p is string => !!p);
+    return parts.join(" · ");
+  };
+}
+
+/**
+ * The column a write names, by its name or by a stage word (`todo`, `in progress`, `in review`, `done`, `canceled`),
+ * which takes that stage's first column. An unknown name is refused with the ones that exist, so a guess never moves a
+ * card to a column nothing has (ADR 0176).
+ */
+async function namedColumn(deps: IssueDeps, ctx: ToolContext, name: string, projectId: string | null = null) {
+  const wanted = name.trim();
+  const stage = STAGE_WORD[wanted.toLowerCase()];
+  // A board has its own columns (ADR 0177); the workspace's stand in for a board that never made any.
+  const columns = await boardColumnsOf(deps.db, ctx.orgId, projectId);
+  const found = stage
+    ? columns.find((c) => c.stage === stage)
+    : columns.find((c) => (c.name ?? c.stage).toLowerCase() === wanted.toLowerCase());
+  if (!found) {
+    const names = [...new Set(columns.map((c) => `"${c.name ?? c.stage}"`))];
+    throw new Error(
+      names.length
+        ? `There is no column named "${wanted}". The columns are: ${names.join(", ")}.`
+        : `There is no column named "${wanted}".`,
+    );
+  }
+  return found;
+}
+
+const columnField = {
+  type: "string",
+  maxLength: 80,
+  description:
+    'The board column the task goes to, by its name ("Ready for dev", "QA"); a stage word (todo, in progress, in review, done, canceled) takes that stage\'s first column. list_boards shows them.',
+};
 
 const projectField = (unset: string) => ({
   type: "string",
@@ -99,6 +187,115 @@ const newProjectField = {
 };
 const projectOf = (input: Record<string, unknown>) => str(input.project).trim();
 
+/**
+ * The company a tool names, by its name in any capitals. An unknown name is refused with the ones that exist, so a
+ * guess never filters a list to nothing (ADR 0176).
+ */
+async function spaceByName(deps: IssueDeps, ctx: ToolContext, name: string) {
+  const [found] = await deps.db
+    .select({ id: schema.issueSpaces.id, name: schema.issueSpaces.name })
+    .from(schema.issueSpaces)
+    .where(
+      and(eq(schema.issueSpaces.orgId, ctx.orgId), sql`lower(${schema.issueSpaces.name}) = lower(${name.trim()})`),
+    );
+  if (found) return found;
+  const names = (
+    await deps.db
+      .select({ name: schema.issueSpaces.name })
+      .from(schema.issueSpaces)
+      .where(and(eq(schema.issueSpaces.orgId, ctx.orgId), isNull(schema.issueSpaces.archivedAt)))
+  ).map((sp) => `"${sp.name}"`);
+  throw new Error(
+    names.length
+      ? `There is no company named "${name.trim()}". The companies are: ${names.join(", ")}.`
+      : `There is no company named "${name.trim()}", and no companies yet.`,
+  );
+}
+
+/**
+ * The workspace's boards as a person sees the Tarefas screen (ADR 0176): each company over its boards, each board
+ * with the tasks open in it and the columns the workspace has. What an agent reads instead of opening the screen, which
+ * is a person's and asks them to sign in.
+ */
+async function boardOverview(deps: IssueDeps, ctx: ToolContext) {
+  const [spaces, projects, columns, counts] = await Promise.all([
+    deps.db
+      .select({ id: schema.issueSpaces.id, name: schema.issueSpaces.name, archivedAt: schema.issueSpaces.archivedAt })
+      .from(schema.issueSpaces)
+      .where(eq(schema.issueSpaces.orgId, ctx.orgId)),
+    deps.db
+      .select({
+        id: schema.issueProjects.id,
+        name: schema.issueProjects.name,
+        spaceId: schema.issueProjects.spaceId,
+        archivedAt: schema.issueProjects.archivedAt,
+      })
+      .from(schema.issueProjects)
+      .where(eq(schema.issueProjects.orgId, ctx.orgId)),
+    deps.db
+      .select({
+        name: schema.issueColumns.name,
+        stage: schema.issueColumns.stage,
+        position: schema.issueColumns.position,
+        projectId: schema.issueColumns.projectId,
+      })
+      .from(schema.issueColumns)
+      .where(eq(schema.issueColumns.orgId, ctx.orgId)),
+    deps.db
+      .select({ projectId: schema.issues.projectId, open: sql<number>`count(*)::int` })
+      .from(schema.issues)
+      .where(and(eq(schema.issues.orgId, ctx.orgId), sql`${schema.issues.status} not in ('done', 'canceled')`))
+      .groupBy(schema.issues.projectId),
+  ]);
+  const open = new Map(counts.map((c) => [c.projectId, c.open]));
+  const board = (p: (typeof projects)[number]) =>
+    `  · ${p.name} (${open.get(p.id) ?? 0} open)${p.archivedAt ? " — archived" : ""}`;
+  const lines: string[] = [];
+  for (const space of spaces) {
+    lines.push(`${space.name}${space.archivedAt ? " — archived" : ""}`);
+    const mine = projects.filter((p) => p.spaceId === space.id);
+    lines.push(...(mine.length ? mine.map(board) : ["  · (no boards yet)"]));
+  }
+  const loose = projects.filter((p) => !p.spaceId || !spaces.some((sp) => sp.id === p.spaceId));
+  if (loose.length > 0) {
+    lines.push("No company");
+    lines.push(...loose.map(board));
+  }
+  const stages = ["todo", "in_progress", "in_review", "done", "canceled"];
+  const wordOf = (columnsOfBoard: typeof columns) =>
+    stages
+      .map((s) => {
+        const names = columnsOfBoard
+          .filter((c) => c.stage === s)
+          .sort((a, b) => a.position - b.position)
+          .map((c) => `"${c.name ?? c.stage}"`);
+        return names.length ? `${s}: ${names.join(", ")}` : "";
+      })
+      .filter(Boolean)
+      .join(" · ");
+  const own = new Map<string, typeof columns>();
+  for (const c of columns) {
+    if (!c.projectId) continue;
+    const list = own.get(c.projectId) ?? [];
+    list.push(c);
+    own.set(c.projectId, list);
+  }
+  const workspaceColumns = columns.filter((c) => !c.projectId);
+  const boardLines = projects.map((p) => {
+    const mine = own.get(p.id);
+    return `  · ${p.name}: ${wordOf(mine ?? workspaceColumns) || "no columns"}${mine ? "" : " (the workspace's)"}`;
+  });
+  return [
+    lines.length ? lines.join("\n") : "No boards yet: this workspace has no company and no board.",
+    "",
+    "Columns per board:",
+    ...(boardLines.length ? boardLines : ["  · (no boards yet)"]),
+    "",
+    `The workspace's own columns (used by a board that has none): ${wordOf(workspaceColumns) || "none"}`,
+    "A task is moved by naming its column (update_issue with `column`), and the tasks of one company or board are listed with list_issues (`company`, `project`).",
+  ].join("\n");
+}
+
 /** The project a write names: undefined when it says nothing, null for "none", else its id (made when asked). */
 async function chosenProject(deps: IssueDeps, ctx: ToolContext, input: Record<string, unknown>) {
   const name = projectOf(input);
@@ -108,7 +305,8 @@ async function chosenProject(deps: IssueDeps, ctx: ToolContext, input: Record<st
 }
 
 /** One issue's line with its assignee's name. */
-const lineOf = async (deps: IssueDeps, ctx: ToolContext, i: IssueView) => line(i, await assigneeNames(deps, ctx, [i]));
+const lineOf = async (deps: IssueDeps, ctx: ToolContext, i: IssueView) =>
+  line(i, await assigneeNames(deps, ctx, [i]), (await placeOf(deps.db, [i]))(i));
 
 /**
  * An issue just given to another agent: the assignment wakes nobody (only `askAgentToImplement` starts the assignee's
@@ -433,7 +631,13 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           project: {
             type: "string",
             maxLength: 80,
-            description: 'Only the tasks of this project, by its name; "none" for tasks with no project',
+            description: 'Only the tasks of this board, by its name; "none" for tasks with no board',
+          },
+          company: {
+            type: "string",
+            maxLength: 80,
+            description:
+              "Only the tasks of this company's boards, by its name (its whole pipeline at once). list_boards shows them.",
           },
           issue: issueRef,
         },
@@ -458,11 +662,28 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
                   : projectOf(input)
                     ? (await projectByName(deps, ctx.orgId, projectOf(input), "list")).id
                     : undefined,
+              spaceId: str(input.company).trim() ? (await spaceByName(deps, ctx, str(input.company))).id : undefined,
               limit: 30,
             },
           );
           const names = await assigneeNames(deps, ctx, list);
-          return { content: list.length ? list.map((i) => line(i, names)).join("\n") : "No issues." };
+          const place = await placeOf(deps.db, list);
+          return { content: list.length ? list.map((i) => line(i, names, place(i))).join("\n") : "No issues." };
+        } catch (error) {
+          return failed(error);
+        }
+      },
+    },
+    {
+      name: "list_boards",
+      description:
+        "The workspace's boards and their columns: each company (a client, a product line) over its boards, each board with the tasks open in it, and the columns every board shares. This is what the person sees on the Tarefas screen; read it here instead of opening the screen, which is theirs and asks them to sign in. Use it to know which board a card belongs to and which column to move it to.",
+      scope: "issues:read",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      async execute(_input, ctx) {
+        try {
+          if (await rightHandAway(ctx)) return ONLY_IN_DM;
+          return { content: await boardOverview(deps, ctx) };
         } catch (error) {
           return failed(error);
         }
@@ -481,7 +702,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           criteria: { type: "array", items: { type: "string", maxLength: 500 }, maxItems: 30 },
           priority: { enum: PRIORITIES },
           labels: { type: "array", items: { type: "string", maxLength: 40 }, maxItems: 10 },
-          project: projectField("Left out: no project."),
+          project: projectField("Left out: no board."),
+          column: columnField,
           new_project: newProjectField,
           assignee: assigneeField,
           due_date: { type: "string", maxLength: 10, description: "Due date as YYYY-MM-DD" },
@@ -505,6 +727,9 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           }
           const audience = await chosenAudience(ctx, input.visible_to);
           const projectId = await chosenProject(deps, ctx, input);
+          const column = str(input.column).trim()
+            ? await namedColumn(deps, ctx, str(input.column), projectId ?? null)
+            : null;
           // Into this conversation, whose readers a task made here has. One whose audience was chosen (a person
           // assigned sees it too) or made where no person reads (the workspace's) takes only files all its readers
           // open already, never a copy.
@@ -532,6 +757,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
                 priority: (input.priority as IssuePriority | undefined) ?? undefined,
                 labels: Array.isArray(input.labels) ? input.labels.map(String) : undefined,
                 ...(projectId ? { projectId } : {}),
+                ...(column ? { columnId: column.id } : {}),
                 ...(assignee !== undefined ? { assignee } : {}),
                 ...(str(input.due_date) ? { dueDate: str(input.due_date) } : {}),
                 ...(str(input.github_url) ? { githubUrl: str(input.github_url) } : {}),
@@ -589,6 +815,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
         properties: {
           issue: issueRef,
           status: { enum: STATUSES },
+          column: columnField,
           priority: { enum: PRIORITIES },
           title: { type: "string", maxLength: 300 },
           description: { type: "string", maxLength: 20000 },
@@ -636,6 +863,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
             if (refused) return { content: refused, isError: true };
           }
           const due = typeof input.due_date === "string" ? input.due_date.trim() : undefined;
+          const columnName = str(input.column).trim();
           const projectId = await chosenProject(deps, ctx, input);
           let before: Record<string, unknown> = {};
           const asked = givenFiles(input) ?? [];
@@ -648,9 +876,19 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
               const d = { ...deps, db };
               const current = await find(d, ctx, str(input.issue));
               before = issueSnapshot(current);
+              // The board the task is in (or moves to) says which columns it may land in.
+              const column = columnName
+                ? await namedColumn(
+                    d,
+                    ctx,
+                    columnName,
+                    projectId !== undefined ? projectId : (current.project?.id ?? null),
+                  )
+                : null;
               const i = await updateIssue(d, actorOf(ctx), ctx.orgId, current.id, {
                 ...(files.brought.length ? { addFiles: files.brought } : {}),
                 status: (input.status as IssueStatus | undefined) ?? undefined,
+                ...(column ? { columnId: column.id } : {}),
                 priority: (input.priority as IssuePriority | undefined) ?? undefined,
                 title: str(input.title) || undefined,
                 description: typeof input.description === "string" ? input.description : undefined,

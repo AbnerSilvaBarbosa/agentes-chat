@@ -1,17 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { schema } from "@agenteschat/db";
+import { eq, schema } from "@agenteschat/db";
 import {
+  applyColumnTemplate,
   createIssue,
+  createIssueColumn,
   createIssueProject,
   createIssueSpace,
   createIssueToolSource,
   createOrganization,
+  createRoutine,
   deleteIssueProject,
   deleteIssueSpace,
   ForbiddenError,
   getIssue,
   grantScopes,
+  listColumnTemplates,
   listIssueActivity,
+  listIssueColumns,
   listIssueProjects,
   listIssues,
   openTasksBrief,
@@ -222,10 +227,10 @@ describe("task projects", () => {
     // Its name in any capitals is the same project.
     const made = await run("create_issue", { title: "Agenda", project: "clínica teo" });
     expect(made).toMatchObject({ isError: false });
-    expect(made.content).toContain("Agenda [project: Clínica Teo]");
+    expect(made.content).toContain("Agenda [Clínica Teo · todo]");
     // Asked for a new one: made on the spot, once.
     const fresh = await run("create_issue", { title: "Vitrine", project: "Mercado Ana", new_project: true });
-    expect(fresh.content).toContain("[project: Mercado Ana]");
+    expect(fresh.content).toContain("[Mercado Ana · todo]");
     await run("create_issue", { title: "Preços", project: "mercado ana", new_project: true });
     const names = (await listIssueProjects(f.db, f.owner.id, f.org.id)).projects.map((p) => p.name);
     expect(names).toEqual(["Clínica Teo", "Mercado Ana", "Antigo"]);
@@ -242,15 +247,15 @@ describe("task projects", () => {
 
     const [agenda] = await listIssues(f.db, person(f.owner.id), f.org.id, { q: "Agenda" });
     const moved = await run("update_issue", { issue: `#${agenda?.number}`, project: "Mercado Ana" });
-    expect(moved.content).toContain("[project: Mercado Ana]");
+    expect(moved.content).toContain("[Mercado Ana · todo]");
     const cleared = await run("update_issue", { issue: `#${agenda?.number}`, project: "none" });
-    expect(cleared.content).not.toContain("[project:");
+    expect(cleared.content).not.toContain("[Clínica Teo · todo]");
     expect((await run("list_issues", { project: "none" })).content).toContain("Agenda");
     expect((await run("list_issues", { project: "None" })).content).toContain("Agenda");
     // A change that names no project leaves it where it is.
     await run("update_issue", { issue: `#${agenda?.number}`, project: "Clínica Teo" });
     const kept = await run("update_issue", { issue: `#${agenda?.number}`, priority: "high" });
-    expect(kept.content).toContain("[project: Clínica Teo]");
+    expect(kept.content).toContain("[Clínica Teo · todo]");
   });
 
   test("an agent's open tasks say each one's project", async () => {
@@ -328,5 +333,141 @@ describe("task spaces", () => {
     const deps = { db: f.db, pubsub: f.pubsub };
     const denied = await createIssueSpace(deps, "someone-else", f.org.id, { name: "Nova" }).catch((e: unknown) => e);
     expect(denied).toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe("what an agent sees of the boards", () => {
+  /** An agent's tools, holding the issue scopes, in the general channel. */
+  const agentTools = async (f: Fixture) => {
+    const ctx = {
+      db: f.db,
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      runId: crypto.randomUUID(),
+      channelId: f.general.id,
+      threadRootId: crypto.randomUUID(),
+      triggerMessageId: crypto.randomUUID(),
+    };
+    await grantScopes(
+      f.db,
+      f.org.id,
+      f.agent.id,
+      ["issues:read", "issues:write"].map((scope) => ({ connectionId: null, scope })),
+    );
+    const tools = await createIssueToolSource(f.artifactDeps).tools(ctx);
+    return async (name: string, input: Record<string, unknown> = {}) => {
+      const out = await tools.find((t) => t.name === name)?.execute(input, ctx);
+      return { content: String(out?.content ?? ""), isError: out?.isError === true };
+    };
+  };
+
+  test("list_boards shows each company over its boards and the columns, and list_issues lines say where a task sits", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const run = await agentTools(f);
+    const acme = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa A" });
+    const crm = await createIssueProject(deps, f.owner.id, f.org.id, { name: "CRM", spaceId: acme.id });
+    await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site", spaceId: acme.id });
+    const issue = await createIssue(deps, person(f.owner.id), f.org.id, { title: "Criar lead", projectId: crm.id });
+
+    const boards = await run("list_boards");
+    expect(boards.isError).toBe(false);
+    expect(boards.content).toContain("Empresa A");
+    expect(boards.content).toContain("· CRM (1 open)");
+    expect(boards.content).toContain("· Site (0 open)");
+    expect(boards.content).toContain("Columns per board:");
+    expect(boards.content).toContain("· CRM: todo:");
+
+    const all = await run("list_issues");
+    expect(all.content).toContain(`#${issue.number} [todo] Criar lead [Empresa A · CRM ·`);
+    const onlyCompany = await run("list_issues", { company: "empresa a" });
+    expect(onlyCompany.content).toContain("Criar lead");
+    const typo = await run("list_issues", { company: "Empresa B" });
+    expect(typo.isError).toBe(true);
+    expect(typo.content).toContain('The companies are: "Empresa A".');
+  });
+
+  test("update_issue moves a card to a column by name, and refuses a column nothing has", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const run = await agentTools(f);
+    const columns = await listIssueColumns(f.db, f.owner.id, f.org.id);
+    const qa = await createIssueColumn(deps, f.owner.id, f.org.id, { name: "QA", stage: "in_review", afterId: null });
+    const issue = await createIssue(deps, person(f.owner.id), f.org.id, { title: "Login quebrado" });
+
+    const moved = await run("update_issue", { issue: `#${issue.number}`, column: "qa" });
+    expect(moved.isError).toBe(false);
+    const after = await getIssue(f.db, person(f.owner.id), f.org.id, { id: issue.id });
+    expect(after.columnId).toBe(qa.find((c) => c.name === "QA")?.id ?? null);
+    expect(after.status).toBe("in_review");
+
+    const typo = await run("update_issue", { issue: `#${issue.number}`, column: "Em testes" });
+    expect(typo.isError).toBe(true);
+    expect(typo.content).toContain('There is no column named "Em testes"');
+    expect(columns.length).toBeGreaterThan(0);
+  });
+
+  test("create_issue starts the card in the column it names, without firing issue.moved", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const run = await agentTools(f);
+    const ready = await createIssueColumn(deps, f.owner.id, f.org.id, {
+      name: "Ready for dev",
+      stage: "in_progress",
+      afterId: null,
+    });
+    const watcher = await createRoutine({ db: f.db, pubsub: f.pubsub } as never, f.owner.id, f.org.id, {
+      agentId: f.agent.id,
+      prompt: "Implemente.",
+      target: { type: "channel", channelId: f.general.id },
+      trigger: { type: "event", event: "issue.moved" },
+    });
+    const made = await run("create_issue", { title: "Carrinho", column: "Ready for dev" });
+    expect(made.isError).toBe(false);
+    const [created] = await listIssues(f.db, person(f.owner.id), f.org.id, { q: "Carrinho" });
+    expect(created?.status).toBe("in_progress");
+    expect(created?.columnId).toBe(ready.find((c) => c.name === "Ready for dev")?.id);
+    const runs = await f.db.select().from(schema.routineRuns).where(eq(schema.routineRuns.routineId, watcher.id));
+    expect(runs).toHaveLength(0);
+  });
+});
+
+describe("a board's own columns", () => {
+  test("a template gives the board its own columns, and moving a card resolves them inside that board", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const templates = await listColumnTemplates(f.db, f.owner.id, f.org.id);
+    const dev = templates.find((t) => t.name === "Desenvolvimento");
+    expect(dev).toBeDefined();
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Produto" });
+    await applyColumnTemplate(deps, f.owner.id, f.org.id, board.id, dev?.id ?? "");
+
+    const columns = await listIssueColumns(f.db, f.owner.id, f.org.id, board.id);
+    expect(columns.map((c) => c.name)).toEqual([
+      "Backlog",
+      "Especificar",
+      "Ready for dev",
+      "Em dev",
+      "Ajuste",
+      "Deploy",
+      "PR / Develop",
+      "QA",
+      "Concluído",
+    ]);
+    expect(columns.every((c) => c.projectId === board.id)).toBe(true);
+    // The workspace's own set is untouched: another board still follows it.
+    const workspace = await listIssueColumns(f.db, f.owner.id, f.org.id);
+    expect(workspace.every((c) => c.projectId === null)).toBe(true);
+
+    const issue = await createIssue(deps, person(f.owner.id), f.org.id, { title: "Checkout", projectId: board.id });
+    const moved = await updateIssue(deps, person(f.owner.id), f.org.id, issue.id, {
+      columnId: columns.find((c) => c.name === "QA")?.id ?? "",
+    });
+    expect(moved.status).toBe("in_review");
+    // A column of the workspace is not one of this board's.
+    const foreign = await rejection(
+      updateIssue(deps, person(f.owner.id), f.org.id, issue.id, { columnId: workspace[0]?.id ?? "" }),
+    );
+    expect((foreign as unknown as { message?: string })?.message).toContain("board");
   });
 });

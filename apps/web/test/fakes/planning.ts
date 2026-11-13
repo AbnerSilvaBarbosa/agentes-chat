@@ -23,6 +23,7 @@ import type {
   Issue,
   IssueActivity,
   IssueColumn,
+  IssueColumnTemplate,
   IssuePatch,
   IssueProjectRef,
   IssueSpaceRef,
@@ -188,9 +189,34 @@ export function startOfWeek(d: Date) {
 }
 
 const STAGES: IssueStatus[] = ["todo", "in_progress", "in_review", "done", "canceled"];
+/** The two templates every workspace starts with, as the server seeds them. */
+const SEEDED_TEMPLATES: IssueColumnTemplate[] = [
+  {
+    id: "tpl-kanban",
+    name: "Kanban",
+    seeded: true,
+    columns: [
+      { name: "A fazer", stage: "todo" },
+      { name: "Em andamento", stage: "in_progress" },
+      { name: "Em revisão", stage: "in_review" },
+      { name: "Concluído", stage: "done" },
+    ],
+  },
+  {
+    id: "tpl-dev",
+    name: "Desenvolvimento",
+    seeded: true,
+    columns: [
+      { name: "Backlog", stage: "todo" },
+      { name: "Ready for dev", stage: "in_progress" },
+      { name: "QA", stage: "in_review" },
+      { name: "Concluído", stage: "done" },
+    ],
+  },
+];
 /** Every org starts with one unnamed column per stage (ids `col-<stage>`). */
 const defaultColumns = (): IssueColumn[] =>
-  STAGES.map((stage) => ({ id: `col-${stage}`, stage, name: null, position: 0 }));
+  STAGES.map((stage) => ({ id: `col-${stage}`, stage, name: null, position: 0, projectId: null }));
 /** Board order: by stage, then position. */
 const boardOrder = (cols: IssueColumn[]) =>
   [...cols].sort((a, b) => STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage) || a.position - b.position);
@@ -705,11 +731,22 @@ export function createMockPlanning(
         }
         return { channelId: i.conversation.channelId, rootId: i.conversation.rootId };
       },
-      columns: async (orgId) => clone((await columnsOf(orgId)).columns),
+      columns: async (orgId, projectId) =>
+        clone(
+          projectId
+            ? (await columnsOf(orgId)).columns.filter((c) => c.projectId === projectId || c.projectId === null)
+            : (await columnsOf(orgId)).columns.filter((c) => c.projectId === null),
+        ),
       addColumn: async (orgId, input) => {
         record("issues.addColumn", input);
         const s = await columnsOf(orgId);
-        const col: IssueColumn = { id: mockId("col"), stage: input.stage, name: input.name.trim(), position: 0 };
+        const col: IssueColumn = {
+          id: mockId("col"),
+          stage: input.stage,
+          name: input.name.trim(),
+          position: 0,
+          projectId: input.projectId ?? null,
+        };
         const after = input.afterId ? s.columns.find((c) => c.id === input.afterId) : undefined;
         const at =
           after && after.stage === input.stage
@@ -799,6 +836,30 @@ export function createMockPlanning(
         if (!space) throw new MockNotFoundError("Empresa não encontrada.");
         Object.assign(space, patch);
         return clone(space);
+      },
+      columnTemplates: async () => clone(SEEDED_TEMPLATES),
+      saveColumnTemplate: async (orgId, input) => {
+        record("issues.saveColumnTemplate", input);
+        const s = await columnsOf(orgId);
+        return {
+          id: mockId("tpl"),
+          name: input.name,
+          seeded: false,
+          columns: s.columns.map((c) => ({ name: c.name ?? c.stage, stage: c.stage })),
+        };
+      },
+      applyColumnTemplate: async (orgId, projectId, templateId) => {
+        record("issues.applyColumnTemplate", projectId, templateId);
+        const template = SEEDED_TEMPLATES.find((t) => t.id === templateId);
+        const s = await columnsOf(orgId);
+        if (!template) throw new MockNotFoundError("Modelo não encontrado.");
+        s.columns = s.columns.filter((c) => c.projectId !== projectId);
+        for (const [i, c] of template.columns.entries())
+          s.columns.push({ id: mockId("col"), stage: c.stage, name: c.name, position: i, projectId });
+        return clone(boardOrder(s.columns.filter((c) => c.projectId === projectId)));
+      },
+      deleteColumnTemplate: async (_orgId, templateId) => {
+        record("issues.deleteColumnTemplate", templateId);
       },
       deleteSpace: async (orgId, spaceId) => {
         record("issues.deleteSpace", spaceId);

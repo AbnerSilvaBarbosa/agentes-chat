@@ -48,11 +48,37 @@ export const issueColumns = pgTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     stage: issueStatusEnum().notNull(),
     name: text(),
+    /**
+     * The board these columns belong to (ADR 0177); null: the workspace's own set, which a board uses until it
+     * personalizes them. A board's columns go with the board.
+     */
+    projectId: uuid().references((): AnyPgColumn => issueProjects.id, { onDelete: "cascade" }),
     /** Order inside its stage. */
     position: doublePrecision().notNull(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index().on(t.orgId, t.stage, t.position)],
+  (t) => [index().on(t.orgId, t.stage, t.position), index().on(t.projectId)],
+);
+
+/**
+ * A set of columns a board can be created from (ADR 0177): a name and the columns, in order. A workspace starts with
+ * two of them (a simple kanban and a development pipeline) and saves its own from a board.
+ */
+export const issueColumnTemplates = pgTable(
+  "issue_column_templates",
+  {
+    id: uuid()
+      .primaryKey()
+      .$defaultFn(() => Bun.randomUUIDv7()),
+    orgId: uuid()
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text().notNull(),
+    /** `[{ name, stage }]`, in the order the board shows them. */
+    columns: jsonb().$type<{ name: string; stage: string }[]>().notNull().default([]),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("issue_column_templates_org_name").on(t.orgId, sql`lower(${t.name})`)],
 );
 
 /**
