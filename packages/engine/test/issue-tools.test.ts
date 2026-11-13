@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   applyColumnTemplate,
+  createAgent,
   createIssueColumn,
   createIssueProject,
   createIssueSpace,
@@ -112,6 +113,14 @@ describe("what agents can do with cards", () => {
   test("update_issue sets and clears the owner", async () => {
     f = await setup();
     const bia = await addMember(f.db, f.org.id, "member", "bia");
+    const other = await createAgent(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { name: "Other", handle: "other", credentialId: f.credential.id },
+      { model: "claude-sonnet-5-5" },
+    );
+    expect(other.id).not.toBe(f.agent.id);
     const { run } = await agentTools(f);
     const id = issueOf((await run("create_issue", { title: "Contrato" })).data);
     const assigneeOf = async () => (await getIssue(f.db, person(f.owner.id), f.org.id, { id })).assignee;
@@ -119,6 +128,12 @@ describe("what agents can do with cards", () => {
     await run("update_issue", { issue: id, assignee: "me" });
     expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
     await run("update_issue", { issue: id, assignee: "@dev" });
+    expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
+    // Another agent's handle sets that agent, not the caller.
+    const toOther = await run("update_issue", { issue: id, assignee: "@other" });
+    expect(toOther.isError).toBe(false);
+    expect(await assigneeOf()).toEqual({ type: "agent", id: other.id });
+    await run("update_issue", { issue: id, assignee: "me" });
     expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
     const toPerson = await run("update_issue", { issue: id, assignee: "bia" });
     expect(toPerson.isError).toBe(false);
