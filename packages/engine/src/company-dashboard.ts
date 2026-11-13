@@ -1,4 +1,4 @@
-import { type Database, rowsOf, schema, sql } from "@agenteschat/db";
+import { type Database, rowsOf, type SQL, schema, sql } from "@agenteschat/db";
 import { NotFoundError } from "./errors";
 import { requireActiveMembership } from "./organizations";
 import { taskSeenSql } from "./task-access";
@@ -21,7 +21,13 @@ export interface CompanyDashboard {
   days: DashboardDays;
   /** Open tasks by stage, and the tasks concluded in the period. */
   stages: { todo: number; in_progress: number; in_review: number; done: number };
+  /** Who carries the tasks, agents and people together; a person or agent that is gone is `removed` (no name). */
+  assignees: { type: "agent" | "person" | "removed"; id: string; name: string; open: number; done: number }[];
+  /** Open tasks with no assignee (the screen's last row). */
+  unassigned: number;
 }
+
+const OPEN = sql`status in ('todo', 'in_progress', 'in_review')`;
 
 /**
  * The tasks of the company's boards (archived boards included) that `userId` sees, as a CTE named `vis`. Canceled
@@ -69,16 +75,51 @@ export async function companyDashboard(
   if (!space) throw new NotFoundError("Not found");
   const since = new Date(now.getTime() - period * 86_400_000).toISOString();
 
-  const [stages] = rowsOf<{ todo: number; in_progress: number; in_review: number; done: number }>(
-    await db.execute(sql`with ${visibleTasks(userId, orgId, spaceId)}, ${CONCLUDED}
-      select count(*) filter (where status = 'todo')::int as todo,
+  /** One read over the company's tasks: `select` sees `c`, each task with its conclusion and start. */
+  const over = async <T>(select: SQL) =>
+    rowsOf<T>(await db.execute(sql`with ${visibleTasks(userId, orgId, spaceId)}, ${CONCLUDED} ${select}`));
+  const doneInPeriod = sql`done_at >= ${since}::timestamptz`;
+
+  const [[stages], people] = await Promise.all([
+    over<{
+      todo: number;
+      in_progress: number;
+      in_review: number;
+      done: number;
+      unassigned: number;
+    }>(sql`select count(*) filter (where status = 'todo')::int as todo,
         count(*) filter (where status = 'in_progress')::int as in_progress,
         count(*) filter (where status = 'in_review')::int as in_review,
-        count(*) filter (where done_at >= ${since}::timestamptz)::int as done
+        count(*) filter (where ${doneInPeriod})::int as done,
+        count(*) filter (where ${OPEN} and assignee_id is null)::int as unassigned
       from c`),
-  );
-  return {
-    days: period,
-    stages: stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 },
-  };
+    over<{
+      kind: string;
+      id: string;
+      agent_name: string | null;
+      person_name: string | null;
+      removed: boolean;
+      open: number;
+      done: number;
+    }>(sql`select c.assignee_type as kind, c.assignee_id as id, ag.name as agent_name, u.name as person_name,
+        (ag.id is null and u.id is null) as removed,
+        count(*) filter (where ${OPEN})::int as open, count(*) filter (where ${doneInPeriod})::int as done
+      from c
+      left join ${schema.agents} ag on c.assignee_type = 'agent' and ag.id::text = c.assignee_id and ag.org_id = ${orgId}::uuid
+      left join ${schema.users} u on c.assignee_type = 'person' and u.id = c.assignee_id
+      where c.assignee_id is not null
+      group by c.assignee_type, c.assignee_id, ag.id, ag.name, u.id, u.name
+      having count(*) filter (where ${OPEN}) > 0 or count(*) filter (where ${doneInPeriod}) > 0`),
+  ]);
+  const { unassigned = 0, ...counts } = stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 };
+  const assignees = people
+    .map((p) => ({
+      type: p.removed ? ("removed" as const) : p.kind === "agent" ? ("agent" as const) : ("person" as const),
+      id: p.id,
+      name: p.agent_name ?? p.person_name ?? "",
+      open: p.open,
+      done: p.done,
+    }))
+    .sort((a, b) => b.open - a.open || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  return { days: period, stages: counts, assignees, unassigned };
 }

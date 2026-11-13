@@ -137,3 +137,52 @@ describe("companyDashboard stages", () => {
     );
   });
 });
+
+describe("companyDashboard assignees", () => {
+  const as = (type: "agent" | "person", id: string) => ({ assigneeType: type, assigneeId: id });
+
+  test("lists each assignee with open and done tasks", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({ status: "todo", ...as("agent", f.agent.id) });
+    await task({ status: "in_review", ...as("agent", f.agent.id) });
+    await task({ status: "done", moves: [["done", 4]], ...as("agent", f.agent.id) });
+    await task({ status: "done", moves: [["done", 60]], ...as("agent", f.agent.id) });
+    await task({ status: "canceled", ...as("agent", f.agent.id) });
+    const d = await read();
+    expect(d.assignees).toEqual([{ type: "agent", id: f.agent.id, name: f.agent.name, open: 2, done: 1 }]);
+    expect(d.unassigned).toBe(0);
+  });
+
+  test("orders assignees by open tasks then name", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const ana = await addMember(f.db, f.org.id, "member", "Ana");
+    const caio = await addMember(f.db, f.org.id, "member", "Caio");
+    // The fixture agent is "Ada"; Ana and Ada tie on two, Caio has three.
+    for (const [who, n] of [
+      [as("person", caio.id), 3],
+      [as("person", ana.id), 2],
+      [as("agent", f.agent.id), 2],
+    ] as const) {
+      for (let i = 0; i < n; i++) await task({ status: "todo", ...who });
+    }
+    await task({ status: "todo" });
+    const d = await read();
+    expect(d.assignees.map((a) => [a.name, a.open])).toEqual([
+      ["Caio", 3],
+      ...[f.agent.name, "Ana"].sort().map((name) => [name, 2]),
+    ]);
+    expect(d.assignees.map((a) => a.type)).toContain("agent");
+    expect(d.unassigned).toBe(1);
+  });
+
+  test("shows a missing assignee as removed with its counts", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const gone = crypto.randomUUID();
+    await task({ status: "todo", ...as("agent", gone) });
+    await task({ status: "done", moves: [["done", 2]], ...as("agent", gone) });
+    expect((await read()).assignees).toEqual([{ type: "removed", id: gone, name: "", open: 1, done: 1 }]);
+  });
+});
