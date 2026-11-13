@@ -509,3 +509,13 @@ threw its rows away. The owner decided it has every tool an agent can have, by d
   change after it waits on a card, a send still asks a person, and its replies keep the scrub of §4.
 - Its one budget on an API key (§13) now also carries the turns that read the web, write files and do long work for
   everyone who talks to it.
+
+## Amended 2026-11-13: tasks wherever it is asked (§13)
+
+In a channel the right hand told people that tasks and boards "only work in a private conversation", so a request made
+in a channel (to open a board, to move a card) went unanswered. Its task tools (`list_issues`, `list_boards`,
+`create_issue`, `update_issue`, `comment_issue`) no longer refuse away from the person's DM: anywhere it is asked it
+works as every other agent does, for the person who asked, under the same audience rules (a task limited to a few
+people is not listed to a channel, and a person never reaches a task they cannot open). In the DM the reading and the
+checks of §13 are unchanged. What stays in the DM alone is what is one person's, as before: their Vault, their mailbox
+and what it remembers for them.

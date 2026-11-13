@@ -177,19 +177,23 @@ describe("what it may use", () => {
 describe("tasks stay in the person's DM, and go no further than they could", () => {
   const issueTools = () => [createIssueToolSource(f.artifactDeps)];
 
-  test("called in a channel it neither lists nor makes one: others read that reply", async () => {
+  test("called in a channel it lists and makes tasks as any agent does, for the person who asked", async () => {
     f = await setup({ rightHand: true });
     const made = await createIssue({ db: f.db, pubsub: f.pubsub }, { type: "person", userId: f.owner.id }, f.org.id, {
       title: "Reajuste de salários",
       audience: { mode: "people", userIds: [f.owner.id] },
     });
     const ctx = await lodiRun(f.owner.id, "@lodi quais as tarefas?", f.general.id);
-    for (const input of [{}, { issue: `#${made.number}` }]) {
-      const out = await use(issueTools(), ctx, "list_issues", input);
-      expect(out.isError).toBe(true);
-      expect(out.content).not.toContain("Reajuste");
-    }
-    expect((await use(issueTools(), ctx, "create_issue", { title: "Nova" })).isError).toBe(true);
+    // Both calls work, as for any agent: the list is the agent's own view (a task limited to the owner is not in
+    // what a channel reads), and a task asked for by number opens for the person who asked.
+    const listed = await use(issueTools(), ctx, "list_issues", {});
+    expect(listed.isError).toBeFalsy();
+    expect(listed.content).not.toContain("Reajuste");
+    const opened = await use(issueTools(), ctx, "list_issues", { issue: `#${made.number}` });
+    expect(opened.isError).toBeFalsy();
+    expect(opened.content).toContain("Reajuste");
+    expect((await use(issueTools(), ctx, "create_issue", { title: "Nova" })).isError).toBeFalsy();
+    expect((await f.db.select().from(schema.issues)).map((i) => i.title)).toContain("Nova");
   });
 
   test("other agents keep their tasks in a channel", async () => {
@@ -213,7 +217,7 @@ describe("tasks stay in the person's DM, and go no further than they could", () 
     expect(out.content).not.toContain("Sigilo");
   });
 
-  test("it changes a task the person sees, with Undo; not one they don't, nor in a channel", async () => {
+  test("it changes a task the person sees, with Undo, in their DM and in a channel; not one they don't", async () => {
     f = await setup({ rightHand: true });
     const bia = await addMember(f.db, f.org.id, "member", "Bia");
     const issue = (title: string, userIds: string[]) =>
@@ -243,12 +247,12 @@ describe("tasks stay in the person's DM, and go no further than they could", () 
     });
     expect(itself.isError).toBe(true);
     const away = await lodiRun(f.owner.id, "@lodi fecha a tarefa", f.general.id);
-    expect((await use(issueTools(), away, "update_issue", { issue: `#${hers.number}`, status: "done" })).isError).toBe(
-      true,
-    );
+    const there = await use(issueTools(), away, "update_issue", { issue: `#${hers.number}`, status: "in_progress" });
+    expect(there.isError).toBeFalsy();
+    expect(await status(hers.id)).toBe("in_progress");
   });
 
-  test("it comments on a task the person sees; not on one they don't, nor from a channel", async () => {
+  test("it comments on a task the person sees, from their DM and from a channel; not on one they don't", async () => {
     f = await setup({ rightHand: true });
     const bia = await addMember(f.db, f.org.id, "member", "Bia");
     const issue = (title: string, userIds: string[]) =>
@@ -265,10 +269,10 @@ describe("tasks stay in the person's DM, and go no further than they could", () 
     expect(hidden.isError).toBe(true);
     const away = await lodiRun(f.owner.id, "@lodi comenta", f.general.id);
     const there = await use(issueTools(), away, "comment_issue", { issue: `#${hers.number}`, text: "Oi" });
-    expect(there.isError).toBe(true);
+    expect(there.isError).toBeFalsy();
     const lodi = await lodiOf();
     const written = await f.db.select().from(schema.messages).where(eq(schema.messages.authorAgentId, lodi.id));
-    expect(written.map((m) => m.body)).toEqual(["Entregue."]);
+    expect(written.map((m) => m.body).sort()).toEqual(["Entregue.", "Oi"]);
   });
 
   test("it never takes a task itself", async () => {

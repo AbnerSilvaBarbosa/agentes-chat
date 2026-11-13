@@ -28,7 +28,7 @@ import {
 import { fileIdsOf, getMessage } from "./messages";
 import { can, getMembership, listMembers } from "./organizations";
 import { chosenAudience, personBehindCall, visibleToField } from "./requester";
-import { isRightHand, rightHandAway, rightHandReader } from "./right-hand";
+import { isRightHand, rightHandReader } from "./right-hand";
 import { replyThreadOf } from "./runs";
 import { type Audience, audienceOfConversation } from "./task-access";
 import { ensureTaskConversation } from "./task-conversation";
@@ -61,8 +61,6 @@ const failed = (error: unknown): ToolOutput => ({
   content: `Failed: ${error instanceof Error ? error.message : String(error)}`,
   isError: true,
 });
-/** The right hand's tasks are its person's, in their DM (ADR 0137 §13): in a channel, others read the reply. */
-const ONLY_IN_DM: ToolOutput = { content: "Tasks only in your private conversation with a person.", isError: true };
 
 /** Who each assignee is, as the agent can name them: "@ada (you)", "Walter (@walter)". */
 async function assigneeNames(deps: IssueDeps, ctx: ToolContext, list: IssueView[]) {
@@ -681,7 +679,6 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
       async execute(input, ctx) {
         try {
-          if (await rightHandAway(ctx)) return ONLY_IN_DM;
           if (str(input.issue))
             return { content: await describeIssue(deps, ctx, await find(deps, ctx, str(input.issue))) };
           const reader = await rightHandReader(ctx);
@@ -726,7 +723,6 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       async execute(_input, ctx) {
         try {
-          if (await rightHandAway(ctx)) return ONLY_IN_DM;
           return { content: await boardOverview(deps, ctx) };
         } catch (error) {
           return failed(error);
@@ -763,7 +759,6 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
       async execute(input, ctx) {
         try {
-          if (await rightHandAway(ctx)) return ONLY_IN_DM;
           const assignee = str(input.assignee) ? await assigneeOf(deps, ctx, str(input.assignee)) : undefined;
           const reader = await rightHandReader(ctx);
           if (reader) {
@@ -897,8 +892,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
       async execute(input, ctx) {
         try {
-          // The right hand changes a task for the person in their DM, one they see, as they could (ADR 0137 §13).
-          if (await rightHandAway(ctx)) return ONLY_IN_DM;
+          // The right hand changes a task for the person in their DM, one they see, as they could (ADR 0137 §13); in
+          // a channel it acts as any agent does (ADR 0137, amended 2026-11-13).
           const reader = await rightHandReader(ctx);
           const url = str(input.pull_request_url);
           const number = typeof input.pull_request_number === "number" ? input.pull_request_number : undefined;
@@ -986,7 +981,6 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       async execute(input, ctx) {
         try {
           // The right hand comments for the person in their DM, on a task they see (ADR 0137 §13).
-          if (await rightHandAway(ctx)) return ONLY_IN_DM;
           const reader = await rightHandReader(ctx);
           if (reader)
             await getIssue(deps.db, { type: "person", userId: reader }, ctx.orgId, issueKey(str(input.issue)));
