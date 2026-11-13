@@ -24,6 +24,7 @@ import {
   projectByName,
   updateIssue,
   updateIssueProject,
+  updateIssueSpace,
   ValidationError,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
@@ -305,6 +306,16 @@ describe("task spaces", () => {
     const box = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Box" });
     const taken = await rejection(createIssueSpace(deps, f.owner.id, f.org.id, { name: "box" }));
     expect(taken?.code).toBe("issue_space.name_taken");
+    // Padding and other capitals are the same name too, on create and on a rename.
+    expect((await rejection(createIssueSpace(deps, f.owner.id, f.org.id, { name: "  BOX " })))?.code).toBe(
+      "issue_space.name_taken",
+    );
+    const lab = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Lab" });
+    expect((await rejection(updateIssueSpace(deps, f.owner.id, f.org.id, lab.id, { name: "bOx" })))?.code).toBe(
+      "issue_space.name_taken",
+    );
+    // Its own name in other capitals is a rename, not a clash.
+    expect((await updateIssueSpace(deps, f.owner.id, f.org.id, box.id, { name: "BOX" })).name).toBe("BOX");
 
     const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "App", spaceId: box.id });
     const moved = await updateIssueProject(deps, f.owner.id, f.org.id, board.id, { spaceId: null });
