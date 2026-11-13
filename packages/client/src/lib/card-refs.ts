@@ -10,13 +10,16 @@ import { CHANNEL_PICK_LIMIT, channelOptions } from "./channel-refs";
 export type CardRefPart = { text: string; number?: undefined } | { text: string; number: number };
 
 /**
- * `#<number>` after a space or punctuation, never `a#12`, `&#39;`, `##12` or `#12-plan` (a channel's name). No leading
- * zero, and at most nine digits.
+ * `#<number>` after a space or punctuation, never `a#12`, `&#39;`, `##12`, a URL's `?a=#12` or `/p#12`, `#12-plan` (a
+ * channel's name) or `#12é`. No leading zero, and at most nine digits.
  */
-const CARD_REF = /(^|[^\w#&/])#([1-9][0-9]{0,8})(?![\w-])/g;
+const CARD_REF = /(^|[^\w#&/=?])#([1-9][0-9]{0,8})(?![\w-]|\p{L})/gu;
 
-/** The words right before a number that make it GitHub's: `PR #123`, `pull request #123`, `issue #123`. */
-const GITHUB_WORD = /(?:^|[^\w])(?:PR|pull request|issue)\s$/i;
+/**
+ * The words right before a number that make it GitHub's: `PR #123`, `PRs: #123`, `pull request (#123)`,
+ * `pull-requests #123`, `issue #123`, with any whitespace between (`PR#123` is a word character before the mark).
+ */
+const GITHUB_WORD = /(?:^|[^\w])(?:PRs?|pull[\s-]requests?|issues?)[\s:(]*$/i;
 
 /** A text split around the card numbers it holds ("veja #128." → "veja ", "#128" (128), "."). */
 export function splitCardRefs(text: string): CardRefPart[] {

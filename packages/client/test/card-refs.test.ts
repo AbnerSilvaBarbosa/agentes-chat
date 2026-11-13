@@ -18,11 +18,34 @@ test("finds only a number that stands alone", () => {
   expect(splitCardRefs("#128 e #128").filter((p) => p.number === 128)).toHaveLength(2);
 });
 
+test("a URL fragment and a number followed by a letter stay text", () => {
+  for (const text of ["x.com?a=#128", "https://a.b/p#128", "a.b/x?y=1&#128", "key=#128", "#128é", "#128Ç", "#128a"]) {
+    expect([text, splitCardRefs(text).some((p) => p.number !== undefined)]).toEqual([text, false]);
+  }
+  expect(splitCardRefs("(#128) e #128.").filter((p) => p.number === 128)).toHaveLength(2);
+});
+
 test("leaves a number after PR as text", () => {
   for (const words of ["PR #123", "pr #123", "pull request #123", "Pull Request #123", "issue #123", "Issue #123"]) {
     expect(splitCardRefs(`veja ${words}, e #5`).map((p) => p.number)).toEqual([undefined, 5, undefined]);
   }
   expect(splitCardRefs("PR #123")).toEqual([{ text: "PR #123" }]);
+  // Whatever whitespace, a colon or a bracket between the word and the number, the plurals and the dashed form.
+  for (const words of [
+    "PR  #123",
+    "PR\n#123",
+    "PR: #123",
+    "PR (#123)",
+    "PRs #123",
+    "pull-request #123",
+    "pull requests #123",
+    "Pull-Requests: #123",
+    "issues #123",
+    "ISSUE:#123",
+    "PR#123",
+  ]) {
+    expect([words, splitCardRefs(`veja ${words}`).some((p) => p.number !== undefined)]).toEqual([words, false]);
+  }
   // Other words in between, or the word inside another word, do not count.
   expect(splitCardRefs("a PR com #123").some((p) => p.number === 123)).toBe(true);
   expect(splitCardRefs("sprint #123").some((p) => p.number === 123)).toBe(true);
