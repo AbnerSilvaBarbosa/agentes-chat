@@ -129,3 +129,19 @@ test("status sets API: a name over 40 characters answers the engine's code at an
   const huge = await owner(base, { json: { name: "n".repeat(201), columns: lead } });
   expect(huge.status).toBe(400);
 });
+
+test("status sets API: saving a board's columns takes the same name rule", async () => {
+  const owner = browser(t);
+  await signUp(owner, "owner@example.com");
+  const { orgId } = await seedOrg(owner);
+  const base = `/api/app/organizations/${orgId}/issue-column-templates`;
+  const board = await owner(`/api/app/organizations/${orgId}/issue-projects`, { json: { name: "Pipeline" } });
+  const project = (await board.json()) as { id: string };
+
+  for (const length of [41, 60]) {
+    const refused = await owner(base, { json: { name: "c".repeat(length), projectId: project.id } });
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ error: { code: "issue_template.name_invalid" } });
+  }
+  expect((await owner(base, { json: { name: "c".repeat(40), projectId: project.id } })).status).toBe(201);
+});

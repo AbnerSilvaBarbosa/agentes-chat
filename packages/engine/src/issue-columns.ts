@@ -506,8 +506,7 @@ export async function saveColumnTemplate(
   input: { name: string; projectId?: string | null },
 ): Promise<ColumnTemplateView> {
   await requirePoster(deps.db, userId, orgId);
-  const name = input.name.trim().slice(0, 60);
-  if (!name) throw new ValidationError("name is required");
+  const name = templateName(input.name);
   const columns = (await boardColumnsOf(deps.db, orgId, input.projectId ?? null)).map((c) => ({
     name: c.name ?? c.stage,
     stage: c.stage,
