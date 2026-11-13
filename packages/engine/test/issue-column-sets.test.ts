@@ -107,6 +107,58 @@ describe("status sets", () => {
     expect(stored?.columns).toEqual([{ name: "Lead", stage: "in_progress" }]);
   });
 
+  test("a column renamed in place keeps its place and stage", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const made = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Vendas",
+      columns: [
+        { name: "Lead", stage: "todo" },
+        { name: "Proposta", stage: "in_progress" },
+        { name: "Fechado", stage: "done" },
+      ],
+    });
+    const renamed = await updateColumnTemplate(deps, f.owner.id, f.org.id, made.id, {
+      columns: [
+        { name: "Lead", stage: "todo" },
+        { name: "Proposta enviada", stage: "in_progress" },
+        { name: "Fechado", stage: "done" },
+      ],
+    });
+    expect(renamed.columns).toEqual([
+      { name: "Lead", stage: "todo" },
+      { name: "Proposta enviada", stage: "in_progress" },
+      { name: "Fechado", stage: "done" },
+    ]);
+  });
+
+  test("columns reordered with their names unchanged keep names and stages", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const made = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Vendas",
+      columns: [
+        { name: "Lead", stage: "todo" },
+        { name: "Proposta", stage: "in_progress" },
+        { name: "Fechado", stage: "done" },
+      ],
+    });
+    const reordered = await updateColumnTemplate(deps, f.owner.id, f.org.id, made.id, {
+      columns: [
+        { name: "Fechado", stage: "done" },
+        { name: "Lead", stage: "todo" },
+        { name: "Proposta", stage: "in_progress" },
+      ],
+    });
+    expect(reordered.columns).toEqual([
+      { name: "Fechado", stage: "done" },
+      { name: "Lead", stage: "todo" },
+      { name: "Proposta", stage: "in_progress" },
+    ]);
+    const stored = (await listColumnTemplates(f.db, f.owner.id, f.org.id)).find((t) => t.id === made.id);
+    expect(stored?.columns.map((c) => c.name)).toEqual(["Fechado", "Lead", "Proposta"]);
+  });
+
   test("deleting a set keeps the boards' columns", async () => {
     f = await setup();
     const deps = { db: f.db, pubsub: f.pubsub };
