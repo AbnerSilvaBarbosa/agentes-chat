@@ -557,7 +557,8 @@ async function inConversation(ctx: ToolContext, agentId: string, channelId: stri
 
 /** The refusals that mean the person doesn't manage the agent's routines (others, like taking it over first, say their own). */
 const notManager = (error: unknown) =>
-  error instanceof ForbiddenError && (error.code === "forbidden" || error.code === "routine.editor_only");
+  error instanceof ForbiddenError &&
+  (error.code === "forbidden" || error.code === "routine.editor_only" || error.code === "routine.manage_forbidden");
 
 /** Why the person may not set up or change another agent's routine, and what to offer instead. */
 const notTheirs = (handle: string, error: unknown): ToolOutput => ({
