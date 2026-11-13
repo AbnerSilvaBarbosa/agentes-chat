@@ -1341,6 +1341,17 @@ export interface ApiClient {
     columnTemplates(orgId: string): Promise<IssueColumnTemplate[]>;
     /** Saves a board's columns (or the workspace's) as a template. */
     saveColumnTemplate(orgId: string, input: { name: string; projectId?: string | null }): Promise<IssueColumnTemplate>;
+    /** Makes a status set from a name and its columns. */
+    createColumnTemplate(
+      orgId: string,
+      input: { name: string; columns: IssueColumnTemplate["columns"] },
+    ): Promise<IssueColumnTemplate>;
+    /** Renames a status set and/or replaces its columns; the sets come back. */
+    updateColumnTemplate(
+      orgId: string,
+      templateId: string,
+      patch: { name?: string; columns?: IssueColumnTemplate["columns"] },
+    ): Promise<IssueColumnTemplate[]>;
     /** Makes a board's columns this template's. */
     applyColumnTemplate(orgId: string, projectId: string, templateId: string): Promise<IssueColumn[]>;
     deleteColumnTemplate(orgId: string, templateId: string): Promise<void>;

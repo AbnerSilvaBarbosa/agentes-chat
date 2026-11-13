@@ -1527,6 +1527,15 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         (await request<{ templates: IssueColumnTemplate[] }>(`${org(orgId)}/issue-column-templates`)).templates,
       saveColumnTemplate: (orgId, input) =>
         request<IssueColumnTemplate>(`${org(orgId)}/issue-column-templates`, { json: input }),
+      createColumnTemplate: (orgId, input) =>
+        request<IssueColumnTemplate>(`${org(orgId)}/issue-column-templates`, { json: input }),
+      updateColumnTemplate: async (orgId, templateId, patch) =>
+        (
+          await request<{ templates: IssueColumnTemplate[] }>(
+            `${org(orgId)}/issue-column-templates/${enc(templateId)}`,
+            { method: "PUT", json: patch },
+          )
+        ).templates,
       applyColumnTemplate: async (orgId, projectId, templateId) =>
         (
           await request<{ columns: IssueColumn[] }>(`${org(orgId)}/issue-column-templates/${enc(templateId)}/apply`, {

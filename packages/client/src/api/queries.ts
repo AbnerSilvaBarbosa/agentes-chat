@@ -4320,12 +4320,21 @@ export function useIssueColumnTemplateAction(orgId: string) {
     mutationFn: (
       action:
         | { type: "save"; name: string; projectId?: string | null }
+        | { type: "create"; name: string; columns: IssueColumnTemplate["columns"] }
+        | { type: "update"; templateId: string; name?: string; columns?: IssueColumnTemplate["columns"] }
         | { type: "apply"; projectId: string; templateId: string }
         | { type: "delete"; templateId: string },
-    ): Promise<IssueColumn[] | IssueColumnTemplate | undefined> => {
+    ): Promise<IssueColumn[] | IssueColumnTemplate | IssueColumnTemplate[] | undefined> => {
       switch (action.type) {
         case "save":
           return api.issues.saveColumnTemplate(orgId, { name: action.name, projectId: action.projectId });
+        case "create":
+          return api.issues.createColumnTemplate(orgId, { name: action.name, columns: action.columns });
+        case "update":
+          return api.issues.updateColumnTemplate(orgId, action.templateId, {
+            name: action.name,
+            columns: action.columns,
+          });
         case "apply":
           return api.issues.applyColumnTemplate(orgId, action.projectId, action.templateId);
         case "delete":

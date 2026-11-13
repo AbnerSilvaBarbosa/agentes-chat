@@ -243,6 +243,8 @@ export function createMockPlanning(
   ctx: MockContext,
   record: (method: string, ...args: unknown[]) => void = () => {},
 ): Pick<ApiClient, "issues" | "routines" | "calendar"> {
+  /** The sets this fake workspace holds: the two it starts with, then the ones a test makes. */
+  const templates: IssueColumnTemplate[] = clone(SEEDED_TEMPLATES);
   const me = async (): Promise<Actor> => ({ type: "person", id: (await ctx.lookup.me())?.user.id ?? "me" });
   const store = perOrg<Store>(async (orgId) => {
     const s: Store = {
@@ -837,7 +839,7 @@ export function createMockPlanning(
         Object.assign(space, patch);
         return clone(space);
       },
-      columnTemplates: async () => clone(SEEDED_TEMPLATES),
+      columnTemplates: async () => clone(templates),
       saveColumnTemplate: async (orgId, input) => {
         record("issues.saveColumnTemplate", input);
         const s = await columnsOf(orgId);
@@ -850,13 +852,32 @@ export function createMockPlanning(
       },
       applyColumnTemplate: async (orgId, projectId, templateId) => {
         record("issues.applyColumnTemplate", projectId, templateId);
-        const template = SEEDED_TEMPLATES.find((t) => t.id === templateId);
+        const template = templates.find((t) => t.id === templateId);
         const s = await columnsOf(orgId);
         if (!template) throw new MockNotFoundError("Modelo não encontrado.");
         s.columns = s.columns.filter((c) => c.projectId !== projectId);
         for (const [i, c] of template.columns.entries())
           s.columns.push({ id: mockId("col"), stage: c.stage, name: c.name, position: i, projectId });
         return clone(boardOrder(s.columns.filter((c) => c.projectId === projectId)));
+      },
+      createColumnTemplate: async (_orgId, input) => {
+        record("issues.createColumnTemplate", input);
+        const made: IssueColumnTemplate = {
+          id: mockId("tpl"),
+          name: input.name,
+          seeded: false,
+          columns: input.columns,
+        };
+        templates.push(made);
+        return clone(made);
+      },
+      updateColumnTemplate: async (_orgId, templateId, patch) => {
+        record("issues.updateColumnTemplate", templateId, patch);
+        const found = templates.find((t) => t.id === templateId);
+        if (!found) throw new MockNotFoundError("Modelo não encontrado.");
+        if (patch.name !== undefined) found.name = patch.name;
+        if (patch.columns !== undefined) found.columns = patch.columns;
+        return clone(templates);
       },
       deleteColumnTemplate: async (_orgId, templateId) => {
         record("issues.deleteColumnTemplate", templateId);
