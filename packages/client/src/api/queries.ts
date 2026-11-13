@@ -4276,7 +4276,7 @@ export function useIssueColumnAction(orgId: string, projectId?: string | null) {
     mutationFn: (
       action:
         | { type: "add"; name: string; stage: IssueStatus; afterId?: string | null }
-        | { type: "update"; columnId: string; name?: string; index?: number }
+        | { type: "update"; columnId: string; name?: string; index?: number; stage?: IssueStatus }
         | { type: "delete"; columnId: string; moveTo: string },
     ): Promise<IssueColumn[]> => {
       switch (action.type) {
@@ -4288,7 +4288,11 @@ export function useIssueColumnAction(orgId: string, projectId?: string | null) {
             projectId: projectId ?? null,
           });
         case "update":
-          return api.issues.updateColumn(orgId, action.columnId, { name: action.name, index: action.index });
+          return api.issues.updateColumn(orgId, action.columnId, {
+            name: action.name,
+            index: action.index,
+            stage: action.stage,
+          });
         case "delete":
           return api.issues.deleteColumn(orgId, action.columnId, action.moveTo);
       }

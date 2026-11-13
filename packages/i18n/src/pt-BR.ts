@@ -10,6 +10,7 @@ export const ptBR = {
   app: { name: "agentes" },
   common: {
     close: "Fechar",
+    done: "Pronto",
     joinSentences: "{{a}} {{b}}",
     cantUndo: "Não dá para desfazer.",
     removeName: "Remover {{name}}",
@@ -7477,8 +7478,10 @@ export const ptBR = {
       delete: "Excluir board",
       deleteTitle: "Excluir o board {{name}}?",
       deleteBody: "As tarefas dele continuam, sem board.",
+      boardOptions: "Opções do board {{name}}",
       empty: "Nenhuma tarefa neste board ainda.",
     },
+    allTasks: "Todas as tarefas",
     /** A empresa: a companhia, cliente ou linha de produto que agrupa boards. */
     spaces: {
       label: "Empresa",
@@ -7497,6 +7500,8 @@ export const ptBR = {
       noBoards: "Esta empresa ainda não tem boards. Crie o primeiro e as tarefas ficam nele.",
       boardCount_one: "{{count}} tarefa aberta",
       boardCount_other: "{{count}} tarefas abertas",
+      boardsInside_one: "{{count}} board",
+      boardsInside_other: "{{count}} boards",
     },
     columns: {
       add: "Adicionar coluna",
@@ -7504,6 +7509,13 @@ export const ptBR = {
       templateWorkspace: "As do workspace",
       templates: "Modelos de colunas",
       saveTemplate: "Salvar como modelo",
+      configTitle: "Colunas do board",
+      configBody: "Renomeie, mova entre etapas e reordene. Ao trocar a etapa, as tarefas da coluna vão junto.",
+      stage: "Etapa",
+      workspaceNote: "Estas são as colunas do workspace: todo board que não tem as suas usa estas.",
+      templateName: "Nome do modelo",
+      templateSaved: 'Modelo "{{name}}" salvo',
+      applied: 'Modelo "{{name}}" aplicado ao board',
       applyTemplate: "Aplicar modelo",
       options: "Opções da coluna {{name}}",
       rename: "Renomear",

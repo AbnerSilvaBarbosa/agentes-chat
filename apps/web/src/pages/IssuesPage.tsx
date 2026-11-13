@@ -1,4 +1,12 @@
-import type { Actor, Issue, IssueColumn, IssuePriority, IssueStatus, IssuesView } from "@agenteschat/client";
+import type {
+  Actor,
+  Issue,
+  IssueColumn,
+  IssuePriority,
+  IssueProjectRef,
+  IssueStatus,
+  IssuesView,
+} from "@agenteschat/client";
 import {
   useIssue,
   useIssueColumns,
@@ -74,6 +82,7 @@ import { codeAndBold } from "@/lib/markdown";
 import { inPlaceClick } from "@/lib/navigate";
 import { useOpenParam } from "@/lib/open-param";
 import { type ToastText, useToast } from "@/lib/toast";
+import { BoardColumnsDialog } from "./BoardColumns";
 import {
   AddColumnDialog,
   Board,
@@ -93,6 +102,7 @@ import {
   SpaceBoards,
   SpaceChip,
   SpaceDialog,
+  SpaceList,
 } from "./IssueProjects";
 import { DisplayButton, IssueFilters, PRIORITY_ICON } from "./IssuesToolbar";
 import { type CardMove, type DropResult, type IssueDrag, useIssueDrag } from "./issue-drag";
@@ -118,7 +128,7 @@ function useProjectParam(): [string | undefined, (value: string | undefined) => 
       to: ".",
       search: ((prev: Record<string, unknown>) => {
         // A board belongs to a company: picking one leaves the company's own board.
-        const { project: _project, space: _space, open: _open, m: _m, ...rest } = prev;
+        const { project: _project, space: _space, all: _all, open: _open, m: _m, ...rest } = prev;
         return next ? { ...rest, project: next } : rest;
       }) as never,
     });
@@ -126,8 +136,26 @@ function useProjectParam(): [string | undefined, (value: string | undefined) => 
 }
 
 /**
- * The company whose board this is, in the URL (`?space=<id>`): every task of its boards at once. Picking one leaves the
- * board of a single board, as picking a board leaves the company.
+ * `?all=1`: every task of the workspace, whatever its company or board (ADR 0179). Tarefas opens on the companies
+ * instead, so this is what a person picks to look at everything.
+ */
+function useAllParam(): [boolean, (on: boolean) => void] {
+  const value = useRouterState({ select: (s) => Boolean((s.location.search as { all?: string }).all) });
+  const navigate = useNavigate();
+  const set = (on: boolean) =>
+    void navigate({
+      to: ".",
+      search: ((prev: Record<string, unknown>) => {
+        const { project: _project, space: _space, all: _all, open: _open, m: _m, ...rest } = prev;
+        return on ? { ...rest, all: "1" } : rest;
+      }) as never,
+    });
+  return [value, set];
+}
+
+/**
+ * The company whose board this is, in the URL (`?space=<id>`): its boards, and the tasks of all of them. Picking one
+ * leaves the board of a single board, as picking a board leaves the company.
  */
 function useSpaceParam(): [string | undefined, (value: string | undefined) => void] {
   const value = useRouterState({ select: (s) => (s.location.search as { space?: string }).space });
@@ -136,7 +164,7 @@ function useSpaceParam(): [string | undefined, (value: string | undefined) => vo
     void navigate({
       to: ".",
       search: ((prev: Record<string, unknown>) => {
-        const { project: _project, space: _space, open: _open, m: _m, ...rest } = prev;
+        const { project: _project, space: _space, all: _all, open: _open, m: _m, ...rest } = prev;
         return next ? { ...rest, space: next } : rest;
       }) as never,
     });
@@ -195,7 +223,17 @@ export function IssuesPage() {
     setSpaceParam(undefined);
   });
   // A company's own page lists its boards: it asks for no tasks, and the board of one board is where tasks are read.
+  const [allParam, setAllParam] = useAllParam();
+  // Tarefas opens on the companies; inside one, on its boards; in a board, on its kanban (ADR 0179).
+  const onRootPage = !spaceParam && !projectParam && !allParam;
   const onCompanyPage = Boolean(spaceParam) && !projectParam;
+  // A board opened from a company's grid: its dialogs live with the page's, as the board of the URL's do.
+  const [gridDialog, setGridDialog] = useState<"edit" | "delete" | null>(null);
+  const [gridBoard, setGridBoard] = useState<IssueProjectRef | null>(null);
+  // "Colunas do board": the screen where columns are renamed, moved between stages and reordered (ADR 0179).
+  const [columnsDialog, setColumnsDialog] = useState(false);
+  // Tasks are read in a board or in the whole workspace, never on the companies' pages.
+  const readsTasks = !onRootPage && !onCompanyPage;
   const issues = useIssues(org.id, search, projectParam, spaceParam);
   const columnsQuery = useIssueColumns(org.id, projectParam);
   const columns = columnsQuery.data;
@@ -313,9 +351,14 @@ export function IssuesPage() {
                       trigger={<Button size="sm" iconOnly icon="more" aria-label={t("issues.moreOptions")} />}
                     >
                       {view.group === "stage" && (
-                        <MenuItem icon="layers" onSelect={() => setAddingColumn(true)} disabled={!columns}>
-                          {t("issues.columns.add")}
-                        </MenuItem>
+                        <>
+                          <MenuItem icon="layers" onSelect={() => setColumnsDialog(true)} disabled={!columns}>
+                            {t("issues.columns.configTitle")}
+                          </MenuItem>
+                          <MenuItem icon="plus" onSelect={() => setAddingColumn(true)} disabled={!columns}>
+                            {t("issues.columns.add")}
+                          </MenuItem>
+                        </>
                       )}
                       {project && posts && (
                         <>
@@ -380,6 +423,15 @@ export function IssuesPage() {
               />
               <IssueFilters view={view} issues={all} onChange={changeView} />
             </Toolbar>
+            {onRootPage && (
+              <SpaceList
+                data={projectsQuery.data}
+                mayCreate={posts}
+                onOpen={(id) => setSpaceParam(id)}
+                onAll={() => setAllParam(true)}
+                onNew={posts ? () => setSpaceDialog("new") : undefined}
+              />
+            )}
             {onCompanyPage && (
               <SpaceBoards
                 space={space ?? null}
@@ -387,9 +439,30 @@ export function IssuesPage() {
                 mayCreate={posts}
                 onOpen={(id) => setProjectParam(id)}
                 onNew={posts ? () => setProjectDialog("new") : undefined}
+                onEdit={
+                  posts
+                    ? (board) => {
+                        setGridBoard(board);
+                        setGridDialog("edit");
+                      }
+                    : undefined
+                }
+                onDelete={
+                  posts
+                    ? (board) => {
+                        setGridBoard(board);
+                        setGridDialog("delete");
+                      }
+                    : undefined
+                }
+                onArchive={
+                  posts
+                    ? (board) => projectAction.mutate({ type: "update", projectId: board.id, archived: true })
+                    : undefined
+                }
               />
             )}
-            {!onCompanyPage &&
+            {readsTasks &&
               (issues.isLoading || viewLoading || (!columns && columnsQuery.isLoading)) &&
               (view.layout === "board" ? (
                 // In the board's own frame and sideways scroller, so it loads where it will stay.
@@ -413,7 +486,7 @@ export function IssuesPage() {
             {issues.isError && !issues.data && (
               <ErrorState error={issues.error} onRetry={() => void issues.refetch()} />
             )}
-            {!onCompanyPage && noIssues && (
+            {readsTasks && noIssues && (
               <EmptyState
                 size="page"
                 agent={look}
@@ -432,7 +505,7 @@ export function IssuesPage() {
                 {t(posts ? "issues.empty" : "issues.emptyViewer")}
               </EmptyState>
             )}
-            {!onCompanyPage && emptyProject && (
+            {readsTasks && emptyProject && (
               <EmptyState
                 size="panel"
                 actions={
@@ -447,7 +520,7 @@ export function IssuesPage() {
                 {t(projectParam === NO_PROJECT ? "issues.noResults" : "issues.projects.empty")}
               </EmptyState>
             )}
-            {!onCompanyPage && issues.isSuccess && filtered.length === 0 && (all.length > 0 || search) && (
+            {readsTasks && issues.isSuccess && filtered.length === 0 && (all.length > 0 || search) && (
               <EmptyState
                 size="panel"
                 actions={
@@ -464,10 +537,10 @@ export function IssuesPage() {
                 {t("issues.noResults")}
               </EmptyState>
             )}
-            {!onCompanyPage && columnsQuery.isError && !columns && (
+            {readsTasks && columnsQuery.isError && !columns && (
               <ErrorState error={columnsQuery.error} onRetry={() => void columnsQuery.refetch()} />
             )}
-            {!onCompanyPage && !viewLoading && filtered.length > 0 && columns && (
+            {readsTasks && !viewLoading && filtered.length > 0 && columns && (
               <IssuesBody
                 // A project's own board doesn't say its name again on every card.
                 view={projectParam ? { ...view, fields: { ...view.fields, project: false } } : view}
@@ -503,6 +576,16 @@ export function IssuesPage() {
               onDeleted={() => setProjectParam(undefined)}
             />
           )}
+          {gridDialog === "edit" && gridBoard && (
+            <ProjectDialog project={gridBoard} onClose={() => setGridDialog(null)} />
+          )}
+          {gridDialog === "delete" && gridBoard && (
+            <DeleteProjectDialog
+              project={gridBoard}
+              onClose={() => setGridDialog(null)}
+              onDeleted={() => setGridDialog(null)}
+            />
+          )}
           {spaceDialog === "new" && (
             <SpaceDialog onClose={() => setSpaceDialog(null)} onDone={(s) => setSpaceParam(s.id)} />
           )}
@@ -512,6 +595,14 @@ export function IssuesPage() {
               space={space}
               onClose={() => setSpaceDialog(null)}
               onDeleted={() => setSpaceParam(undefined)}
+            />
+          )}
+          {columns && columnsDialog && (
+            <BoardColumnsDialog
+              open
+              projectId={projectParam ?? null}
+              columns={columns}
+              onClose={() => setColumnsDialog(false)}
             />
           )}
           {columns && (

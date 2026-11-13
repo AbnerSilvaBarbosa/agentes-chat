@@ -228,13 +228,17 @@ export async function createIssueColumn(
   return announce(deps, orgId);
 }
 
-/** Renames a column, or moves it inside its stage (`index`: its place among the stage's columns). */
+/**
+ * Renames a column, moves it inside its stage (`index`: its place among the stage's columns), or moves it to another
+ * stage (ADR 0179): its tasks follow it, each one's status becoming the new stage. Without this, changing where a
+ * column sits meant deleting it and making another, which moved every card by hand.
+ */
 export async function updateIssueColumn(
   deps: ColumnDeps,
   userId: string,
   orgId: string,
   columnId: string,
-  patch: { name?: string; index?: number },
+  patch: { name?: string; index?: number; stage?: IssueStatus },
 ): Promise<IssueColumnView[]> {
   await requirePoster(deps.db, userId, orgId);
   const column = (
@@ -252,6 +256,34 @@ export async function updateIssueColumn(
       .update(issueColumns)
       .set({ name: cleanName(patch.name) })
       .where(eq(issueColumns.id, column.id));
+  }
+  // To another stage: the column goes, and every task in it takes the new stage, each one's move in its activity.
+  if (patch.stage !== undefined && patch.stage !== column.stage) {
+    if (!BOARD_STAGES.includes(patch.stage)) throw new ValidationError("invalid stage");
+    const stage = patch.stage;
+    const at = columns.filter((c) => c.stage === stage).length;
+    await deps.db.transaction(async (tx) => {
+      await tx.update(issueColumns).set({ stage, position: at }).where(eq(issueColumns.id, column.id));
+      const moving = await tx
+        .select({ id: issues.id, status: issues.status })
+        .from(issues)
+        .where(and(eq(issues.orgId, orgId), eq(issues.columnId, column.id)));
+      for (const m of moving) {
+        if (m.status === stage) continue;
+        await tx.update(issues).set({ status: stage, updatedAt: new Date() }).where(eq(issues.id, m.id));
+        await tx.insert(issueActivity).values({
+          orgId,
+          issueId: m.id,
+          kind: "event",
+          authorType: "person",
+          authorId: userId,
+          text: `moved to ${column.name ?? stage} (its column moved to another stage)`,
+          event: "status_changed",
+          data: { from: m.status, to: stage },
+        });
+      }
+    });
+    column.stage = stage;
   }
   if (patch.index !== undefined) {
     const others = columns.filter((c) => c.stage === column.stage && c.id !== column.id);

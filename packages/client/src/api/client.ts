@@ -1317,7 +1317,11 @@ export interface ApiClient {
       input: { name: string; stage: IssueStatus; afterId?: string | null; projectId?: string | null },
     ): Promise<IssueColumn[]>;
     /** Renames a column, or moves it inside its stage (`index`). */
-    updateColumn(orgId: string, columnId: string, patch: { name?: string; index?: number }): Promise<IssueColumn[]>;
+    updateColumn(
+      orgId: string,
+      columnId: string,
+      patch: { name?: string; index?: number; stage?: IssueStatus },
+    ): Promise<IssueColumn[]>;
     /** Deletes a column; its tasks go to `moveTo`. A stage keeps at least one column. */
     deleteColumn(orgId: string, columnId: string, moveTo: string): Promise<IssueColumn[]>;
     projects(orgId: string): Promise<IssueProjects>;

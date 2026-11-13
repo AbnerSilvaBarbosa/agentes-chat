@@ -46,7 +46,7 @@ const tab = async (name: string | RegExp) => {
 
 describe("Issues (board and list)", () => {
   test("board by status with counts, summary, PR, priority and due date", async () => {
-    await go("issues");
+    await go("issues?all=1");
     expect(screen().getByRole("heading", { level: 1, name: "Tarefas" })).toBeTruthy();
     expect(screen().getByText("5 em aberto · 3 com agentes")).toBeTruthy();
     expect(cardTitles(column("A fazer"))).toEqual([
@@ -105,7 +105,7 @@ describe("Issues (board and list)", () => {
       );
       return [...all, ...extra];
     };
-    await go("issues", api);
+    await go("issues?all=1", api);
     const now = screen().getByRole("region", { name: "Agentes trabalhando agora" });
     expect(now.querySelectorAll(".issues-now__card")).toHaveLength(10);
     // Nothing comes after the board's split, up to the work area: when the cards above squeeze it, it keeps a window's
@@ -116,7 +116,7 @@ describe("Issues (board and list)", () => {
   });
 
   test("a click opens the details dialog (kept in the URL); Escape closes it", async () => {
-    const { router } = await go("issues");
+    const { router } = await go("issues?all=1");
     await click(screen().getByRole("link", { name: "#131 Confirmação do agendamento por WhatsApp" }));
     await settle(4);
     const dialog = screen().getByRole("dialog", { name: "Confirmação do agendamento por WhatsApp" });
@@ -124,7 +124,7 @@ describe("Issues (board and list)", () => {
     expect(within(dialog).getByRole("region", { name: "Pedir a um agente" })).toBeTruthy();
     expect(within(dialog).getByRole("group", { name: "Detalhes da tarefa" })).toBeTruthy();
     expect(within(dialog).queryByRole("complementary", { name: "Detalhes da tarefa" })).toBeNull();
-    expect(router.state.location.href).toContain("?open=131");
+    expect(router.state.location.href).toContain("open=131");
     await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
     await settle(2);
     expect(screen().queryByRole("dialog")).toBeNull();
@@ -132,7 +132,7 @@ describe("Issues (board and list)", () => {
   });
 
   test("the dialog's bar: #131 and the title, then one ⋯ beside the × with the conversation, its page and Excluir", async () => {
-    const { router } = await go("issues?open=131");
+    const { router } = await go("issues?all=1&open=131");
     const dialog = screen().getByRole("dialog", { name: "Confirmação do agendamento por WhatsApp" });
     const close = dialog.querySelector(".ac-details__close") as HTMLElement;
     expect([...close.querySelectorAll(".ac-btn")].map((b) => b.getAttribute("aria-label"))).toEqual([
@@ -152,13 +152,13 @@ describe("Issues (board and list)", () => {
   });
 
   test("an issue's link with ?open= reopens its details", async () => {
-    await go("issues?open=131");
+    await go("issues?all=1&open=131");
     expect(screen().getByRole("dialog", { name: "Confirmação do agendamento por WhatsApp" })).toBeTruthy();
   });
 
   test("Filtro: who has it and the priority, as chips; the search; the list from Exibição", async () => {
     const state = seedState();
-    await go("issues", createFakeApi(state));
+    await go("issues?all=1", createFakeApi(state));
     const filterMenu = async (name: string) => {
       const trigger = screen().getByRole("button", { name });
       trigger.focus();
@@ -227,7 +227,7 @@ describe("Issues (board and list)", () => {
     const [ada, atlas] = state.agents;
     if (ada) ada.appearance = { color: "green", accessory: "headphones" };
     if (atlas) atlas.appearance = { color: "rose", accessory: "crown" };
-    const { api } = await go("issues", createFakeApi(state));
+    const { api } = await go("issues?all=1", createFakeApi(state));
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
     const create = within(dialog).getByRole("button", { name: "Criar tarefa" });
@@ -298,7 +298,7 @@ describe("Issues (board and list)", () => {
         });
       return ask(orgId, id, agentId);
     };
-    await go("issues", api);
+    await go("issues?all=1", api);
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
     await type(within(dialog).getByLabelText("Título"), "Exportar agenda em PDF");
@@ -321,7 +321,7 @@ describe("Issues (board and list)", () => {
   });
 
   test("Nova tarefa: a stray press outside or Esc keeps what was written; × still closes it", async () => {
-    await go("issues");
+    await go("issues?all=1");
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
     // Empty, Esc closes it as before.
@@ -346,7 +346,7 @@ describe("Issues (board and list)", () => {
   });
 
   test("Nova tarefa → formulário completo: the text splits into description and criteria, and comes back", async () => {
-    await go("issues");
+    await go("issues?all=1");
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
     await type(within(dialog).getByLabelText("Título"), "Exportar agenda");
@@ -391,7 +391,7 @@ describe("Tarefas: custom board columns", () => {
   };
 
   test("Mais opções → Adicionar coluna: a name and the stage; the board then groups columns under stages", async () => {
-    const { api } = await go("issues");
+    const { api } = await go("issues?all=1");
     // The default board: one column per stage, no stage headers.
     expect(screen().queryByRole("region", { name: "Ideias" })).toBeNull();
     await click(within(await openMenu("Mais opções")).getByRole("menuitem", { name: "Adicionar coluna" }));
@@ -417,7 +417,7 @@ describe("Tarefas: custom board columns", () => {
   test("a stage with the most columns says so in the dialog, before any refusal", async () => {
     const api = createFakeApi(seedState());
     for (let i = 1; i < 10; i++) await api.issues.addColumn(ORG_ID, { name: `C${i}`, stage: "todo" });
-    await go("issues", api);
+    await go("issues?all=1", api);
     await click(within(await openMenu("Mais opções")).getByRole("menuitem", { name: "Adicionar coluna" }));
     await settle(3);
     const dialog = screen().getByRole("dialog", { name: "Nova coluna" });
@@ -428,7 +428,7 @@ describe("Tarefas: custom board columns", () => {
   });
 
   test("a column's menu: the first one says what lands there; the only one can't be deleted", async () => {
-    await go("issues");
+    await go("issues?all=1");
     const menu = await openMenu("Opções da coluna A fazer");
     expect(menu.textContent).toContain("Tarefas novas entram aqui.");
     expect(within(menu).getByRole("menuitem", { name: "Excluir coluna" }).getAttribute("aria-disabled")).toBe("true");
@@ -436,7 +436,7 @@ describe("Tarefas: custom board columns", () => {
   });
 
   test("the task's column picker moves it (keyboard way); grouped by stage", async () => {
-    const { api } = await go("issues");
+    const { api } = await go("issues?all=1");
     await api.issues.addColumn(ORG_ID, { name: "Esta semana", stage: "todo" });
     await click(screen().getByRole("link", { name: "#131 Confirmação do agendamento por WhatsApp" }));
     await settle(6);
@@ -570,7 +570,7 @@ describe("Issue detail", () => {
   });
 
   test("in the dialog: the task's page at full height; Esc in the title being edited saves it and stays", async () => {
-    const { api } = await go("issues?open=131");
+    const { api } = await go("issues?all=1&open=131");
     const dialog = screen().getByRole("dialog", { name: "Confirmação do agendamento por WhatsApp" });
     expect(dialog.className).toContain("ac-details--fill");
     expect(
@@ -618,7 +618,7 @@ describe("Issue detail", () => {
   });
 
   test("the conversation (variant B): Conversa in the bar's ⋯ opens the thread panel beside the details, chat's own box", async () => {
-    const { api } = await go("issues?open=131");
+    const { api } = await go("issues?all=1&open=131");
     const dialog = screen().getByRole("dialog", { name: "Confirmação do agendamento por WhatsApp" });
     // Where Discussão was: one line that opens it.
     const summary = within(dialog).getByRole("button", { name: /Conversar sobre a tarefa/ });
@@ -666,7 +666,7 @@ describe("Issue detail", () => {
       (await list(orgId, filters)).map((i) => (i.number === 131 ? { ...i, conversation } : i));
     const logged = spyOn(console, "error").mockImplementation(() => {});
     try {
-      await go("issues", api);
+      await go("issues?all=1", api);
       expect(logged.mock.calls.some((c) => String(c[0]).includes('unique "key"'))).toBe(false);
     } finally {
       logged.mockRestore();
@@ -1085,7 +1085,7 @@ describe("Calendário", () => {
 
 describe("sidebar", () => {
   test("Issues, Rotinas and Calendário are in the workspace navigation", async () => {
-    await go("issues");
+    await go("issues?all=1");
     const nav = screen().getByRole("navigation", { name: "Navegação do workspace" });
     for (const [name, path] of [
       ["Tarefas", "issues"],

@@ -1896,3 +1896,114 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
   font-size: 12.5px;
   color: var(--muted);
 }
+
+/* Uma empresa e os boards dela (ADR 0179): cartões numa grade, cada um com o seu próprio menu. */
+.space-boards {
+  padding: 18px 20px 32px;
+  overflow: auto;
+}
+.space-boards__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 12px;
+  max-width: 1180px;
+}
+.space-boards__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 460px;
+  color: var(--muted);
+}
+.space-board-wrap {
+  position: relative;
+}
+.space-board-wrap > .ac-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+}
+.space-board-wrap:hover > .ac-button,
+.space-board-wrap:focus-within > .ac-button {
+  opacity: 1;
+}
+.space-board {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--raised);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.space-board:hover {
+  border-color: var(--line-strong);
+}
+.space-board--new {
+  align-items: center;
+  justify-content: center;
+  min-height: 92px;
+  color: var(--muted);
+  border-style: dashed;
+}
+.space-board__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  padding-right: 24px;
+}
+.space-board__count {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.space-board__boards {
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+/* Colunas do board (ADR 0179): uma seção por etapa, uma linha por coluna. */
+.board-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.board-columns__stage h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.board-columns__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.board-columns__row > .ac-field,
+.board-columns__row > input,
+.board-columns__row > .ac-input {
+  flex: 1;
+  min-width: 0;
+}
+.board-columns__moves {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+.board-columns__note {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}

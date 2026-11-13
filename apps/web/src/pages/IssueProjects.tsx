@@ -28,6 +28,8 @@ import {
   Icon,
   Input,
   Locked,
+  Menu,
+  MenuItem,
   Select,
 } from "@agenteschat/ui";
 import { useState } from "react";
@@ -518,12 +520,19 @@ export function SpaceBoards({
   mayCreate,
   onOpen,
   onNew,
+  onEdit,
+  onDelete,
+  onArchive,
 }: {
   space: IssueSpaceRef | null;
   data: IssueProjects | undefined;
   mayCreate: boolean;
   onOpen: (projectId: string) => void;
   onNew?: () => void;
+  /** Who may create tasks edits, archives and deletes a board from its own card (ADR 0179). */
+  onEdit?: (board: IssueProjectRef) => void;
+  onDelete?: (board: IssueProjectRef) => void;
+  onArchive?: (board: IssueProjectRef) => void;
 }) {
   const { t } = useTranslation();
   const boards = (data?.projects ?? []).filter((p) => p.spaceId === space?.id && !p.archived);
@@ -541,13 +550,38 @@ export function SpaceBoards({
       ) : (
         <div className="space-boards__grid">
           {boards.map((b) => (
-            <button key={b.id} type="button" className="space-board" onClick={() => onOpen(b.id)}>
-              <span className="space-board__name">
-                <ColorDot color={b.color} />
-                {b.name}
-              </span>
-              <span className="space-board__count">{t("issues.spaces.boardCount", { count: b.open })}</span>
-            </button>
+            <div key={b.id} className="space-board-wrap">
+              <button type="button" className="space-board" onClick={() => onOpen(b.id)}>
+                <span className="space-board__name">
+                  <ColorDot color={b.color} />
+                  {b.name}
+                </span>
+                <span className="space-board__count">{t("issues.spaces.boardCount", { count: b.open })}</span>
+              </button>
+              {onEdit && (
+                <Menu
+                  label={t("issues.projects.boardOptions", { name: b.name })}
+                  trigger={
+                    <Button
+                      size="sm"
+                      iconOnly
+                      icon="more"
+                      aria-label={t("issues.projects.boardOptions", { name: b.name })}
+                    />
+                  }
+                >
+                  <MenuItem icon="edit" onSelect={() => onEdit(b)}>
+                    {t("issues.projects.edit")}
+                  </MenuItem>
+                  <MenuItem icon="archive" onSelect={() => onArchive?.(b)}>
+                    {t("issues.projects.archive")}
+                  </MenuItem>
+                  <MenuItem icon="trash" danger onSelect={() => onDelete?.(b)}>
+                    {t("issues.projects.delete")}
+                  </MenuItem>
+                </Menu>
+              )}
+            </div>
           ))}
           {mayCreate && onNew && (
             <button type="button" className="space-board space-board--new" onClick={onNew}>
@@ -557,6 +591,73 @@ export function SpaceBoards({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Tarefas opens here (ADR 0179): the companies, each with the open tasks in its boards and how many boards it has, the
+ * boards in no company after them, and "todas as tarefas" for the workspace's whole board. Picking a company opens its
+ * boards; picking a board opens its kanban.
+ */
+export function SpaceList({
+  data,
+  mayCreate,
+  onOpen,
+  onAll,
+  onNew,
+}: {
+  data: IssueProjects | undefined;
+  mayCreate: boolean;
+  onOpen: (spaceId: string) => void;
+  onAll: () => void;
+  onNew?: () => void;
+}) {
+  const { t } = useTranslation();
+  const spaces = (data?.spaces ?? []).filter((sp) => !sp.archived);
+  const boards = data?.projects ?? [];
+  const loose = boards.filter((b) => !b.spaceId && !b.archived);
+  return (
+    <div className="space-boards">
+      <div className="space-boards__grid">
+        {spaces.map((sp) => (
+          <button key={sp.id} type="button" className="space-board" onClick={() => onOpen(sp.id)}>
+            <span className="space-board__name">
+              <ColorDot color={sp.color} />
+              {sp.name}
+            </span>
+            <span className="space-board__count">{t("issues.spaces.boardCount", { count: sp.open })}</span>
+            <span className="space-board__boards">
+              {t("issues.spaces.boardsInside", {
+                count: boards.filter((b) => b.spaceId === sp.id && !b.archived).length,
+              })}
+            </span>
+          </button>
+        ))}
+        {mayCreate && onNew && (
+          <button type="button" className="space-board space-board--new" onClick={onNew}>
+            <Icon name="plus" />
+            {t("issues.spaces.new")}
+          </button>
+        )}
+        {loose.length > 0 && (
+          <button type="button" className="space-board" onClick={onAll}>
+            <span className="space-board__name">
+              <ColorDot />
+              {t("issues.spaces.none")}
+            </span>
+            <span className="space-board__count">
+              {t("issues.spaces.boardCount", { count: loose.reduce((n, b) => n + b.open, 0) })}
+            </span>
+          </button>
+        )}
+        <button type="button" className="space-board" onClick={onAll}>
+          <span className="space-board__name">
+            <Icon name="layers" />
+            {t("issues.allTasks")}
+          </span>
+        </button>
+      </div>
     </div>
   );
 }

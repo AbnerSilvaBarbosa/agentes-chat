@@ -470,10 +470,18 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-columns/{columnId}",
       tags,
       security,
-      summary: "Rename a column, or move it inside its stage (`index`)",
+      summary: "Rename a column, move it inside its stage (`index`), or move it to another stage",
       request: {
         params: ColumnParams,
-        body: body(z.object({ name: z.string().min(1).max(40).optional(), index: z.number().int().min(0).optional() })),
+        body: body(
+          z.object({
+            name: z.string().min(1).max(40).optional(),
+            index: z.number().int().min(0).optional(),
+            stage: Status.optional().openapi({
+              description: "Moves the column to this stage, at its end; its tasks take the new stage.",
+            }),
+          }),
+        ),
       },
       responses: { 200: json(Columns), ...errors },
     }),

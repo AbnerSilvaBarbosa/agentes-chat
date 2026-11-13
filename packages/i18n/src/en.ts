@@ -10,6 +10,7 @@ export const en = {
   app: { name: "agentes" },
   common: {
     close: "Close",
+    done: "Done",
     joinSentences: "{{a}} {{b}}",
     cantUndo: "This can't be undone.",
     removeName: "Remove {{name}}",
@@ -7477,8 +7478,10 @@ export const en = {
       delete: "Delete board",
       deleteTitle: "Delete the board {{name}}?",
       deleteBody: "Its tasks stay, with no board.",
+      boardOptions: "Options for the board {{name}}",
       empty: "No tasks in this board yet.",
     },
+    allTasks: "All tasks",
     /** A space: the company, client or product line that groups boards. */
     spaces: {
       label: "Company",
@@ -7497,6 +7500,8 @@ export const en = {
       noBoards: "This company has no boards yet. Make the first one; its tasks live there.",
       boardCount_one: "{{count}} open task",
       boardCount_other: "{{count}} open tasks",
+      boardsInside_one: "{{count}} board",
+      boardsInside_other: "{{count}} boards",
     },
     columns: {
       add: "Add column",
@@ -7504,6 +7509,13 @@ export const en = {
       templateWorkspace: "The workspace's",
       templates: "Column templates",
       saveTemplate: "Save as a template",
+      configTitle: "Board columns",
+      configBody: "Rename, move between stages and reorder. Moving a column to another stage takes its tasks with it.",
+      stage: "Stage",
+      workspaceNote: "These are the workspace's columns: every board without its own uses them.",
+      templateName: "Template name",
+      templateSaved: 'Template "{{name}}" saved',
+      applied: 'Template "{{name}}" applied to the board',
       applyTemplate: "Apply a template",
       options: "Options for column {{name}}",
       rename: "Rename",
