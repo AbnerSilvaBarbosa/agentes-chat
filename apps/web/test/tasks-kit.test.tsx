@@ -117,4 +117,23 @@ describe("the Tarefas screens hold to the kit", () => {
     await visit(api, "/issues");
     expect(screen().getByRole("button", { name: new RegExp(long.slice(0, 20)) })).toBeTruthy();
   });
+
+  test("a board card's options button sits inside the card's corner", async () => {
+    const { api, clinic } = await setup();
+    await api.issues.createProject(ORG_ID, { name: "Site", color: "teal", spaceId: clinic.id });
+    await visit(api, `/issues?space=${clinic.id}`);
+    const wrap = document.querySelector<HTMLElement>(".space-board-wrap");
+    const options = wrap?.querySelector<HTMLElement>(":scope > button[aria-label^='Opções']");
+    expect(options).toBeTruthy();
+    // The corner rule names the class the kit's Button really draws, or it never applies and the button falls under
+    // the card.
+    const css = await builtCss("src/styles.css", "src/pages/issues.css");
+    const corner =
+      css.match(/\.space-board-wrap>\.ac-btn\{[^}]*\}/)?.[0] ??
+      css.match(/\.space-board-wrap\s*>\s*\.ac-btn\s*\{[^}]*\}/)?.[0];
+    expect(options?.classList.contains("ac-btn")).toBe(true);
+    expect(corner).toContain("position:absolute");
+    expect(css).not.toContain(".space-board-wrap>.ac-button");
+    expect(css).not.toContain(".space-board-wrap > .ac-button");
+  });
 });

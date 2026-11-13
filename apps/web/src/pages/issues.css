@@ -1920,15 +1920,21 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
   position: relative;
   min-width: 0;
 }
-.space-board-wrap > .ac-button {
+.space-board-wrap > .ac-btn {
   position: absolute;
   top: var(--action-clear);
   right: var(--action-clear);
   opacity: 0;
 }
-.space-board-wrap:hover > .ac-button,
-.space-board-wrap:focus-within > .ac-button {
+.space-board-wrap:hover > .ac-btn,
+.space-board-wrap:focus-within > .ac-btn {
   opacity: 1;
+}
+/* No hover on a touch screen: the options stay in view, or they could not be opened. */
+@media (hover: none) {
+  .space-board-wrap > .ac-btn {
+    opacity: 1;
+  }
 }
 .space-board {
   display: flex;
