@@ -256,6 +256,44 @@ describe("the tools on top", () => {
     expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/my-tasks`);
   });
 
+  test("on its page the sidebar highlights Minhas tarefas and not Tarefas", async () => {
+    await renderApp(`/org/${ORG_ID}/my-tasks`, { api: createFakeApi(noneWaiting()) });
+    await settle(8);
+    const row = (name: string) => within(nav()).getByRole("link", { name }) as HTMLElement;
+    expect(row("Minhas tarefas").getAttribute("data-status")).toBe("active");
+    expect(row("Minhas tarefas").getAttribute("aria-current")).toBe("page");
+    expect(row("Tarefas").getAttribute("data-status")).not.toBe("active");
+    expect(row("Tarefas").getAttribute("aria-current")).toBeNull();
+    cleanup();
+    // And the other way round: Tarefas' own page leaves Minhas tarefas plain.
+    await renderApp(`/org/${ORG_ID}/issues`, { api: createFakeApi(noneWaiting()) });
+    await settle(8);
+    expect(row("Tarefas").getAttribute("data-status")).toBe("active");
+    expect(row("Minhas tarefas").getAttribute("data-status")).not.toBe("active");
+  });
+
+  test("Minhas tarefas opens by its address with the tool in More, and by the More menu", async () => {
+    const state = noneWaiting();
+    state.sidebarItems = { myTasks: "more" };
+    // By its address: the page is there and the list on top doesn't carry it.
+    const { router } = await renderApp(`/org/${ORG_ID}/my-tasks`, { api: createFakeApi(state) });
+    await settle(8);
+    expect(document.querySelector("h1")?.textContent).toBe("Minhas tarefas");
+    expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/my-tasks`);
+    expect(listed()).not.toContain("Minhas tarefas");
+    cleanup();
+    // By the More menu, from another page.
+    const from = await renderApp(`/org/${ORG_ID}/c/${ENG_ID}`, { api: createFakeApi(state) });
+    await settle(8);
+    expect(listed()).not.toContain("Minhas tarefas");
+    const more = await openMore();
+    expect(inMore(more)).toContain("Minhas tarefas");
+    await click(within(more).getByRole("link", { name: /Minhas tarefas/ }));
+    await settle(8);
+    expect(from.router.state.location.pathname).toBe(`/org/${ORG_ID}/my-tasks`);
+    expect(document.querySelector("h1")?.textContent).toBe("Minhas tarefas");
+  });
+
   test("Painéis and the task manager are tools like the rest: Sempre brings them into the list, each line one row", async () => {
     const state = await go(noneWaiting());
     const dialog = await openSetup();
