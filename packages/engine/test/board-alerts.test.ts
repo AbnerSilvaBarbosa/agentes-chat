@@ -187,7 +187,7 @@ describe("adding a rule", () => {
     const member = await addMember(f.db, f.org.id, "member", "Caio");
     await expect(
       alert(f, member.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id }),
-    ).rejects.toBeInstanceOf(ForbiddenError);
+    ).rejects.toMatchObject({ code: "routine.manage_forbidden" });
 
     // An admin manages routines, but not for an agent that answers only its owner.
     const admin = await addMember(f.db, f.org.id, "admin", "Bia");
@@ -197,7 +197,7 @@ describe("adding a rule", () => {
       .where(eq(schema.agents.id, f.agent.id));
     await expect(
       alert(f, admin.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/only replies to/);
     expect(await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).toEqual([]);
   });
 });

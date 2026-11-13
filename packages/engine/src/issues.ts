@@ -30,7 +30,7 @@ import {
   publishUserEvent,
 } from "./events";
 import { cutText } from "./format";
-import { allColumns, columnForMove, columnOf, topRank } from "./issue-columns";
+import { allColumns, boardColumnsOf, columnForMove, columnOf, topRank } from "./issue-columns";
 import { type IssueProjectRef, projectForTask, projectsById } from "./issue-projects";
 import type { IssueWorkMeta } from "./issue-work";
 import { fileIdsOf, getMessage, insertMessage, type MessageView, messageView, postPersonMessage } from "./messages";
@@ -1316,6 +1316,12 @@ async function fireIssueMoved(
     : [];
   // An archived board's rules stay listed and never fire (ADR 0175 addendum).
   const archivedBoard = board?.archivedAt && view.project ? view.project.id : null;
+  const archivedColumns = new Set(
+    archivedBoard ? (await boardColumnsOf(db, orgId, archivedBoard)).map((c) => c.id) : [],
+  );
+  // Where the card was is the column it sat in, even when its row stores none (it sat in its stage's first one).
+  const left = columnOf(await boardColumnsOf(db, orgId, from.projectId ?? null), from);
+  const fromColumnId = left?.id ?? from.columnId ?? null;
   // The routine behind the move, when a routine moved it: it never fires itself, and the chain counts one more hop.
   const authority =
     actor.type === "agent" && actor.runId ? await runAuthorityById(db, orgId, actor.runId).catch(() => null) : null;
@@ -1330,7 +1336,7 @@ async function fireIssueMoved(
     if (depth > MAX_MOVE_HOPS) return 0;
   }
   const to = columnName(view.columnId ?? null);
-  const fromName = columnName(from.columnId ?? null);
+  const fromName = left?.name ?? columnName(from.columnId ?? null);
   await fireRoutineEvent(
     deps,
     orgId,
@@ -1342,7 +1348,7 @@ async function fireIssueMoved(
       title: view.title,
       from: from.status,
       to: view.status,
-      fromColumnId: from.columnId ?? null,
+      fromColumnId,
       fromColumn: fromName,
       columnId: view.columnId ?? null,
       column: to,
@@ -1353,12 +1359,16 @@ async function fireIssueMoved(
     },
     {
       exceptRoutineId: routineRunId && authority?.kind === "routine" ? (authority.brief?.routineId ?? null) : null,
-      skip: (routine) => !!archivedBoard && routine.eventFilter?.projectId === archivedBoard,
+      skip: (routine) =>
+        !!archivedBoard &&
+        (routine.eventFilter?.projectId === archivedBoard ||
+          archivedColumns.has(routine.eventFilter?.columnId ?? "") ||
+          archivedColumns.has(routine.eventFilter?.fromColumnId ?? "")),
       match: {
         projectId: view.project?.id ?? null,
         spaceId: board?.spaceId ?? null,
         columnId: view.columnId ?? null,
-        fromColumnId: from.columnId ?? null,
+        fromColumnId,
       },
       visibleTo: (userId) => personSees(db, userId, orgId, from),
     },

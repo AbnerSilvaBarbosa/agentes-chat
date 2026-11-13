@@ -71,8 +71,7 @@ test("refuses a rule the member may not make", async () => {
 
   const refused = await member(base, { json: { agentId, columnId: progress?.id } });
   expect(refused.status).toBe(403);
-  const body = (await refused.json()) as { error: { message: string } };
-  expect(body.error.message).toBeTruthy();
+  expect(await refused.json()).toMatchObject({ error: { code: "routine.manage_forbidden" } });
   expect(((await (await owner(base)).json()) as { alerts: Alert[] }).alerts).toEqual([]);
 
   // A column that isn't the board's is a validation error with its code, from the owner too.

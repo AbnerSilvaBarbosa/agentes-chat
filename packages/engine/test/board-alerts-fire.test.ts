@@ -231,4 +231,31 @@ describe("a rule wakes its agent", () => {
     await updateIssue(deps(f), person(f), f.org.id, issue.id, { columnId: crm.column("Especificar").id });
     expect(await runsOf(f, alert.id)).toHaveLength(1);
   });
+
+  test("a rule with a source fires for a card whose row stores no column (it sat in its stage's first one)", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    const alert = await rule(f, crm.board.id, crm.column("Especificar").id, crm.column("Backlog").id);
+    // Made with no column and moved by the board: the row never stored Backlog, the card still sat in it.
+    const issue = await createIssue(deps(f), person(f), f.org.id, { title: "Lead", projectId: crm.board.id });
+    await move(f, issue.id, crm.column("Especificar").id);
+    const runs = await runsOf(f, alert.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.event).toMatchObject({ fromColumn: "Backlog", column: "Especificar" });
+  });
+
+  test("an archived board fires none of its rules that name only its columns", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    const alert = await rule(f, crm.board.id, crm.column("Especificar").id);
+    // The way an agent makes one, with a column and no board: still the board's by its column.
+    await f.db
+      .update(schema.routines)
+      .set({ eventFilter: { columnId: crm.column("Especificar").id } })
+      .where(eq(schema.routines.id, alert.id));
+    const issue = await createIssue(deps(f), person(f), f.org.id, { title: "Lead", projectId: crm.board.id });
+    await updateIssueProject(deps(f), f.owner.id, f.org.id, crm.board.id, { archived: true });
+    await move(f, issue.id, crm.column("Especificar").id);
+    expect(await runsOf(f, alert.id)).toHaveLength(0);
+  });
 });
