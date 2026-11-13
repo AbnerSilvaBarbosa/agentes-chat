@@ -94,3 +94,51 @@ describe("the header's action follows the level", () => {
     expect(screen().queryByRole("dialog", { name: "Nova tarefa" })).toBeNull();
   });
 });
+
+/** The toolbar's select triggers, by their words. */
+const triggers = () =>
+  [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger")].map((t) => t.textContent ?? "");
+const has = (word: string) => triggers().some((t) => t.startsWith(word));
+
+describe("the filters follow the level", () => {
+  test("root and company page show no Empresa or Board filter", async () => {
+    const { api, clinic } = await setup();
+    await visit(api, "");
+    expect(has("Empresa")).toBe(false);
+    expect(has("Board")).toBe(false);
+    cleanup();
+    await visit(api, `?space=${clinic.id}`);
+    expect(has("Empresa")).toBe(false);
+    expect(has("Board")).toBe(false);
+  });
+
+  test("inside a board no Empresa or Board filter", async () => {
+    const { api, site } = await setup();
+    await visit(api, `?project=${site.id}`);
+    // The toolbar is there, with the filters that read the board's own tasks.
+    expect(screen().getByRole("button", { name: /^Filtro/ })).toBeTruthy();
+    expect(has("Empresa")).toBe(false);
+    expect(has("Board")).toBe(false);
+  });
+
+  test("all tasks shows the Empresa and Board filters", async () => {
+    const { api } = await setup();
+    await visit(api, "?all=1");
+    expect(has("Empresa")).toBe(true);
+    expect(has("Board")).toBe(true);
+    // And they work: picking the company narrows the page to it.
+    const chip = [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger")].find((t) =>
+      t.textContent?.startsWith("Empresa"),
+    ) as HTMLElement;
+    await click(chip);
+    await settle(3);
+    const option = [...document.querySelectorAll<HTMLElement>("[role=option]")].find((o) =>
+      o.textContent?.includes("Clínica Teo"),
+    ) as HTMLElement;
+    await click(option);
+    await settle(6);
+    // Picking the company opens its page: its boards, with the path and no select left in the toolbar.
+    expect(screen().getByRole("navigation", { name: "Caminho" }).textContent).toContain("Clínica Teo");
+    expect(has("Empresa")).toBe(false);
+  });
+});

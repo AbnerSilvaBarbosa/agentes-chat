@@ -455,18 +455,22 @@ export function IssuesPage() {
                 </span>
               }
             >
-              <SpaceChip
-                data={projectsQuery.data}
-                value={spaceParam}
-                onChange={setSpaceParam}
-                onNew={posts ? () => setSpaceDialog("new") : undefined}
-              />
-              <ProjectChip
-                data={projectsQuery.data}
-                value={projectParam}
-                onChange={setProjectParam}
-                onNew={posts ? () => setProjectDialog("new") : undefined}
-              />
+              {chrome.filters.space && (
+                <SpaceChip
+                  data={projectsQuery.data}
+                  value={spaceParam}
+                  onChange={setSpaceParam}
+                  onNew={posts ? () => setSpaceDialog("new") : undefined}
+                />
+              )}
+              {chrome.filters.board && (
+                <ProjectChip
+                  data={projectsQuery.data}
+                  value={projectParam}
+                  onChange={setProjectParam}
+                  onNew={posts ? () => setProjectDialog("new") : undefined}
+                />
+              )}
               <IssueFilters view={view} issues={all} onChange={changeView} />
             </Toolbar>
             {onRootPage && (
