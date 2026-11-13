@@ -17,7 +17,7 @@ import { restoreSkillSnapshot, type SkillSnapshot } from "./skill-updates";
 import { writeSkillBody } from "./skills";
 import { closeThread, getThread, reopenThread, updateThread } from "./threads";
 import { canonicalJson } from "./tools/json-schema";
-import { deleteWikiPage, getWikiPage, getWikiVersion, restoreWikiPage, updateWikiPage } from "./wiki";
+import { deleteWikiPage, getWikiPage, getWikiVersion, moveWikiPage, restoreWikiPage, updateWikiPage } from "./wiki";
 import { revertWorkspaceAction } from "./workspace-actions";
 
 const {
@@ -488,6 +488,16 @@ const handlers: Record<string, Handler> = {
       body: v.body,
       note: direction === "undo" ? `undid the agent's edit (back to version ${wanted})` : "redid the agent's edit",
     });
+    return { version: saved.version };
+  },
+
+  async "wiki.page_moved"(deps, a, userId, direction) {
+    const actor = { type: "person" as const, userId };
+    const page = await getWikiPage(deps.db, actor, a.orgId, a.targetId);
+    const expected = obj(a.state).version ?? (direction === "undo" ? obj(a.after).version : undefined);
+    if (page.version !== expected) throw changedSince();
+    const folder = String((direction === "undo" ? obj(a.before) : obj(a.after)).folder ?? "");
+    const saved = await moveWikiPage({ db: deps.db, pubsub: deps.pubsub }, actor, a.orgId, page.id, folder);
     return { version: saved.version };
   },
 

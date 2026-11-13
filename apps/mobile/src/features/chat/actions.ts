@@ -28,6 +28,7 @@ export const RECEIPT_ICONS: Record<AgentActionKind, IconName> = {
   "channel.created": "hash",
   "wiki.page_created": "doc",
   "wiki.page_edited": "doc",
+  "wiki.page_moved": "doc",
   "thread.renamed": "chat",
   "thread.closed": "chat",
   "skill.created": "brain",

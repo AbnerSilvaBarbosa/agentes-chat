@@ -142,6 +142,9 @@ export function actionTextValues(
     case "wiki.page_created":
     case "wiki.page_edited":
       return p.restricted ? { context: "restricted" } : { title };
+    case "wiki.page_moved":
+      if (p.restricted) return { context: "restricted" };
+      return str(p.to) ? { title, folder: str(p.to) } : { title, context: "root" };
     case "thread.renamed":
       return { from: str(p.from), to: str(p.to) || title };
     case "routine.deleted":
@@ -251,6 +254,7 @@ const BLENDS: Partial<Record<AgentActionKind, Blend>> = {
   "channel.created": { ref: hashed("name") },
   "wiki.page_created": { ref: named("title") },
   "wiki.page_edited": { ref: named("title") },
+  "wiki.page_moved": { ref: named("title"), same: (a) => a.params.to ?? "", contexts: ["root"] },
   "thread.closed": { ref: named("title") },
   "skill.created": { ref: named("name") },
   "skill.updated": { ref: named("name") },

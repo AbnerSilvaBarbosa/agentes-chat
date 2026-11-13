@@ -3382,6 +3382,9 @@ export const ptBR = {
       page_created: "Criei a página <b>{{title}}</b> na wiki",
       page_edited: "Editei a página <b>{{title}}</b> da wiki",
       page_edited_restricted: "Editei uma página restrita da wiki",
+      page_moved: "Movi a página <b>{{title}}</b> da wiki para <b>{{folder}}</b>",
+      page_moved_root: "Movi a página <b>{{title}}</b> da wiki para o início",
+      page_moved_restricted: "Movi uma página restrita da wiki",
     },
     thread: {
       renamed: "Renomeei a conversa para <b>{{to}}</b>",
@@ -3490,6 +3493,8 @@ export const ptBR = {
       wiki: {
         page_created: "Criei na wiki as páginas {{refs}}",
         page_edited: "Editei na wiki as páginas {{refs}}",
+        page_moved: "Movi na wiki as páginas {{refs}} para <b>{{folder}}</b>",
+        page_moved_root: "Movi na wiki as páginas {{refs}} para o início",
       },
       thread: {
         closed: "Encerrei as conversas {{refs}}",

@@ -70,6 +70,7 @@ export const RECEIPT_ICONS: Record<AgentAction["kind"], IconName> = {
   "channel.created": "channel",
   "wiki.page_created": "page",
   "wiki.page_edited": "page",
+  "wiki.page_moved": "page",
   "thread.renamed": "thread",
   "thread.closed": "thread",
   "skill.created": "book",

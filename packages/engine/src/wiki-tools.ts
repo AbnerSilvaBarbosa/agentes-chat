@@ -329,7 +329,21 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
                 there.push(`[[${page.title}]] was in ${where} already`);
                 continue;
               }
-              const saved = await moveWikiPage({ ...wiki(ctx) }, actor, ctx.orgId, page.id, folder);
+              const saved = await actWithUndo(
+                ctx,
+                (db) => moveWikiPage({ ...wiki(ctx), db }, actor, ctx.orgId, page.id, folder),
+                (done): ActionRecord => ({
+                  kind: "wiki.page_moved",
+                  target: done.audience
+                    ? { type: "wiki_page" as const, id: done.id }
+                    : { type: "wiki_page" as const, id: done.id, title: done.title, slug: done.slug },
+                  params: done.audience
+                    ? { restricted: true }
+                    : { title: done.title, slug: done.slug, from: page.folder, to: done.folder },
+                  before: { folder: page.folder, version: page.version },
+                  after: { folder: done.folder, version: done.version },
+                }),
+              );
               moved.push(
                 `[[${saved.title}]] (slug ${saved.slug}) from ${page.folder ? `"${page.folder}"` : "the top level"}`,
               );

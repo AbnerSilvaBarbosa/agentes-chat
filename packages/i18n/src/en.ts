@@ -3462,6 +3462,9 @@ export const en = {
       page_created: "Created the wiki page <b>{{title}}</b>",
       page_edited: "Edited the wiki page <b>{{title}}</b>",
       page_edited_restricted: "Edited a restricted wiki page",
+      page_moved: "Moved the wiki page <b>{{title}}</b> to <b>{{folder}}</b>",
+      page_moved_root: "Moved the wiki page <b>{{title}}</b> to the top level",
+      page_moved_restricted: "Moved a restricted wiki page",
     },
     thread: {
       renamed: "Renamed the conversation to <b>{{to}}</b>",
@@ -3572,6 +3575,8 @@ export const en = {
       wiki: {
         page_created: "Created the wiki pages {{refs}}",
         page_edited: "Edited the wiki pages {{refs}}",
+        page_moved: "Moved the wiki pages {{refs}} to <b>{{folder}}</b>",
+        page_moved_root: "Moved the wiki pages {{refs}} to the top level",
       },
       thread: {
         closed: "Closed the conversations {{refs}}",

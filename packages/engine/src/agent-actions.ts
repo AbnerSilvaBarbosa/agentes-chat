@@ -37,6 +37,7 @@ export const AGENT_ACTION_KINDS = [
   "channel.created",
   "wiki.page_created",
   "wiki.page_edited",
+  "wiki.page_moved",
   "thread.renamed",
   "thread.closed",
   "skill.created",
@@ -296,6 +297,8 @@ export function describeAction(a: Pick<AgentActionView, "kind" | "target" | "par
       return `created the wiki page${title}`;
     case "wiki.page_edited":
       return `edited the wiki page${title}`;
+    case "wiki.page_moved":
+      return `moved the wiki page${title} to ${p.to ? `the folder "${String(p.to)}"` : "the top level"}`;
     case "thread.renamed":
       return `renamed the thread to "${String(p.to ?? "")}"`;
     case "thread.closed":

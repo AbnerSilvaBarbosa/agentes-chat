@@ -2924,6 +2924,7 @@ export const AGENT_ACTION_KINDS = [
   "channel.created",
   "wiki.page_created",
   "wiki.page_edited",
+  "wiki.page_moved",
   "thread.renamed",
   "thread.closed",
   "skill.created",
@@ -3002,6 +3003,7 @@ export interface AgentActionTarget {
  * - `channel.created`: `name` (undo archives it)
  * - `pr.merged`: `repo`, and `number` (a pull request) or `ref` (a branch); nothing undoes it
  * - `wiki.page_created` / `wiki.page_edited`: `title`, `slug`
+ * - `wiki.page_moved`: `title`, `slug`, `from`, `to` (folders; "" is the top level; undo puts it back)
  * - `thread.renamed`: `from`, `to`; `thread.closed`: `title`
  * - `agent.settings_changed` (ADR 0137): `agentName`, `fields`, `proposalId` (the right hand's card, applied by the
  *   person who clicked: Undo puts each setting back; or one row applied at once from what they asked, `fields` then

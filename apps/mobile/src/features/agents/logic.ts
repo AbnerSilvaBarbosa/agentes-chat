@@ -412,6 +412,10 @@ export function didLines(items: AgentForYouItem[] | undefined): DidLine[] {
         return p.restricted
           ? line("pageEditedRestricted", "pen", {}, null, chat)
           : line("pageEdited", "pen", { title }, null, chat);
+      case "wiki.page_moved":
+        return p.restricted
+          ? line("pageMovedRestricted", "pen", {}, null, chat)
+          : line(str(p.to) ? "pageMoved" : "pageMovedRoot", "pen", { title, folder: str(p.to) }, null, chat);
       case "thread.renamed":
         return line("threadRenamed", "chat", { to: str(p.to) }, null, {
           kind: "chat",
