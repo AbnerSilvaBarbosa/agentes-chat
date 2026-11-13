@@ -1,7 +1,21 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { schema } from "@agenteschat/db";
-import { createWikiPage, deleteWikiPage, getWikiPage, insertMessage, type ToolContext, type WikiActor } from "../src";
-import { type Fixture, setup } from "./fixtures";
+import {
+  createAgent,
+  createWikiPage,
+  DEFAULT_AGENT_SCOPES,
+  deleteWikiPage,
+  getWikiPage,
+  insertMessage,
+  setAgentScopes,
+  setWikiFolderAudience,
+  setWikiPageAudience,
+  setWikiPageLock,
+  type ToolContext,
+  WIKI_WRITE_REFUSAL,
+  type WikiActor,
+} from "../src";
+import { addMember, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
 afterEach(async () => {
@@ -159,5 +173,113 @@ describe("move_wiki_page", () => {
     expect(out.isError).toBe(true);
     expect(out.content).toContain("200");
     expect(await folderOf("curta")).toBe("");
+  });
+
+  test("a page the agent cannot see is no such page", async () => {
+    f = await setup({ wikiTools: true });
+    const other = await createAgent(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { name: "Infra", handle: "infra", role: "Infra", credentialId: f.credential.id },
+      { model: "claude-sonnet-5-5" },
+    );
+    await page("Segredo");
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "segredo", null, [other.id]);
+    const out = await move(await askedBy(f.owner.id), { pages: ["Segredo"], folder: "X" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toMatch(/Segredo: Page not found/);
+    expect(await folderOf("segredo")).toBe("");
+  });
+
+  test("a locked page is refused with the reason", async () => {
+    f = await setup({ wikiTools: true });
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await page("Trancada");
+    await page("Dela");
+    await setWikiPageLock(wikiDeps(), f.owner.id, f.org.id, "trancada", true);
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "dela", null, undefined, {
+      editors: { roleIds: [], userIds: [f.owner.id] },
+      agentEditorIds: null,
+    });
+    const out = await move(await askedBy(bia.id), { pages: ["Trancada", "Dela"], folder: "X" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toMatch(/Trancada: .*locked/);
+    expect(out.content).toMatch(/Dela: .*Only the people chosen edit this page/);
+    expect(await folderOf("trancada")).toBe("");
+    expect(await folderOf("dela")).toBe("");
+  });
+
+  test("refuses a move into a closed folder that would hide the page from who asked", async () => {
+    f = await setup({ wikiTools: true });
+    const ana = await addMember(f.db, f.org.id, "member", "ana");
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await page("Aberta");
+    await page("Livre");
+    await setWikiFolderAudience(wikiDeps(), f.owner.id, f.org.id, "Fechada", { roleIds: [], userIds: [ana.id] }, null);
+    const out = await move(await askedBy(bia.id), { pages: ["Aberta"], folder: "Fechada" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toMatch(/Aberta: You don't have access to this page/);
+    expect(await folderOf("aberta")).toBe("");
+    // A page already limited stays no wider where it lands: the folder cannot open it.
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "livre", null, [f.agent.id]);
+    const open = await move(await askedBy(f.owner.id), { pages: ["Livre"], folder: "Qualquer" });
+    expect(open.isError).toBeFalsy();
+    const [row] = (await f.db.select().from(schema.wikiPages)).filter((r) => r.slug === "livre");
+    expect(row).toMatchObject({ folder: "Qualquer", agentsLimited: true });
+    expect(row?.audienceAgentIds).toEqual([f.agent.id]);
+  });
+
+  test("a page entering a limited folder takes its audience", async () => {
+    f = await setup({ wikiTools: true });
+    const ana = await addMember(f.db, f.org.id, "member", "ana");
+    await page("Entrando");
+    await setWikiFolderAudience(wikiDeps(), f.owner.id, f.org.id, "Fechada", { roleIds: [], userIds: [ana.id] }, null);
+    const out = await move(await askedBy(f.owner.id), { pages: ["Entrando"], folder: "Fechada" });
+    expect(out.isError).toBeFalsy();
+    const [row] = (await f.db.select().from(schema.wikiPages)).filter((r) => r.slug === "entrando");
+    expect(row).toMatchObject({ folder: "Fechada", restricted: true, audienceFolder: "Fechada" });
+    expect(row?.audienceUserIds).toEqual([ana.id]);
+  });
+
+  test("a run no one asked is refused", async () => {
+    f = await setup({ wikiTools: true });
+    await page("Intocada");
+    const own = await insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId: f.general.id,
+      author: { type: "agent", agentId: f.agent.id, runId: null, hop: 0, stretchId: null },
+      body: "Vou organizar a wiki.",
+    });
+    const ctx: ToolContext = {
+      db: f.db,
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      runId: crypto.randomUUID(),
+      channelId: f.general.id,
+      threadRootId: own.id,
+      triggerMessageId: own.id,
+    };
+    expect(await move(ctx, { pages: ["Intocada"], folder: "X" })).toEqual({
+      content: WIKI_WRITE_REFUSAL,
+      isError: true,
+    });
+    expect(await folderOf("intocada")).toBe("");
+  });
+
+  test("without the wiki write scope the tool is not offered", async () => {
+    f = await setup({ wikiTools: true });
+    const ctx = await askedBy(f.owner.id);
+    expect((await f.tools?.list(ctx))?.map((t) => t.name)).toContain("move_wiki_page");
+    await setAgentScopes(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      f.agent.id,
+      DEFAULT_AGENT_SCOPES.filter((s) => s !== "wiki:write").map((scope) => ({ connectionId: null, scope })),
+    );
+    const listed = (await f.tools?.list(ctx))?.map((t) => t.name) ?? [];
+    expect(listed).toContain("read_wiki_page");
+    expect(listed).not.toContain("move_wiki_page");
   });
 });
