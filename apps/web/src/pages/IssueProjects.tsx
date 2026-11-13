@@ -48,6 +48,19 @@ export const NO_SPACE = "";
 /** No template: a board that keeps the workspace's own columns. */
 export const NO_TEMPLATE = "";
 
+/**
+ * A company's mark, drawn in one place for its card, the chip and the picker (ADR 0180): its image when it has one,
+ * else its color as the dot a board wears. The box is the dot's, so it sits where the dot sat in every row.
+ */
+export function SpaceMark({ space }: { space: Pick<IssueSpaceRef, "color" | "image"> }) {
+  if (!space.image) return <ColorDot color={space.color} />;
+  return (
+    <span className="ac-colordot space-mark" aria-hidden="true">
+      <img src={space.image} alt="" draggable={false} />
+    </span>
+  );
+}
+
 /** "Nova empresa" and "Editar empresa": a name and one of the roles' colors, as a board has. Mounted while open. */
 export function SpaceDialog({
   space,
@@ -307,7 +320,7 @@ export function ProjectDialog({
                   ...pickableSpaces.map((s) => ({
                     value: s.id,
                     label: s.name,
-                    leading: <ColorDot color={s.color} />,
+                    leading: <SpaceMark space={s} />,
                   })),
                 ]}
               />
@@ -467,10 +480,10 @@ export function SpaceChip({
       ? {
           value: s.id,
           label: s.name,
-          leading: <ColorDot color={s.color} />,
+          leading: <SpaceMark space={s} />,
           group: t("issues.projects.archived"),
         }
-      : { value: s.id, label: s.name, leading: <ColorDot color={s.color} />, count: s.open },
+      : { value: s.id, label: s.name, leading: <SpaceMark space={s} />, count: s.open },
   );
   return (
     <FilterChip
@@ -623,7 +636,7 @@ export function SpaceList({
         {spaces.map((sp) => (
           <button key={sp.id} type="button" className="space-board" onClick={() => onOpen(sp.id)}>
             <span className="space-board__name">
-              <ColorDot color={sp.color} />
+              <SpaceMark space={sp} />
               {sp.name}
             </span>
             <span className="space-board__count">{t("issues.spaces.boardCount", { count: sp.open })}</span>

@@ -1961,6 +1961,17 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
   font-size: 15px;
   padding-right: 24px;
 }
+/* A company's image (ADR 0180) takes the dot's box; on a card the mark is a face's size, in a row the icon's. */
+.space-board__name .space-mark {
+  --dot-box: var(--control-icon-lg);
+}
+.space-mark > img {
+  display: block;
+  width: var(--dot-box, var(--control-icon-sm));
+  height: var(--dot-box, var(--control-icon-sm));
+  border-radius: var(--space-1);
+  object-fit: cover;
+}
 .space-board__count {
   font-size: 12.5px;
   color: var(--muted);
