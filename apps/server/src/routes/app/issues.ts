@@ -1,6 +1,7 @@
 import {
   applyColumnTemplate,
   askAgentToImplement,
+  clearSpaceImage,
   commentIssue,
   createColumnTemplate,
   createIssue,
@@ -27,6 +28,8 @@ import {
   saveColumnTemplate,
   setCriterion,
   setIssueAudience,
+  setSpaceImage,
+  spaceImageFile,
   updateColumnTemplate,
   updateIssue,
   updateIssueColumn,
@@ -34,6 +37,8 @@ import {
   updateIssueSpace,
 } from "@agenteschat/engine";
 import { createRoute, z } from "@hono/zod-openapi";
+import { apiError, errorResponse } from "../../http/errors";
+import { imageFile } from "../../http/image-file";
 import {
   type AppDeps,
   body,
@@ -67,6 +72,9 @@ const SpaceRef = z
     id: z.uuid(),
     name: z.string(),
     color: z.string().openapi({ description: "One of the roles' colors." }),
+    image: z.string().nullable().openapi({
+      description: "The company's image (served to the workspace's members); `null`: its color shows.",
+    }),
     archived: z.boolean().openapi({ description: "Offered to no new board. Its boards keep their tasks." }),
   })
   .openapi("IssueSpaceRef");
@@ -230,6 +238,7 @@ export function issueRoutes(deps: AppDeps) {
   const app = createAppRouter(deps);
   app.use("/organizations/*", requireSession(deps.auth));
   const issues: IssueDeps = { db, pubsub: adapters.pubsub };
+  const blobDeps = { ...issues, blobs: adapters.platformBlobs };
   const person = (userId: string) => ({ type: "person" as const, userId });
 
   app.openapi(
@@ -782,6 +791,70 @@ export function issueRoutes(deps: AppDeps) {
       await deleteIssueSpace(issues, c.get("user").id, orgId, spaceId);
       return c.body(null, 204);
     },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "put",
+      path: "/organizations/{orgId}/issue-spaces/{spaceId}/image",
+      tags,
+      security,
+      summary: "Set a company's image (JPEG, PNG or WebP up to 1 MiB; metadata is removed), whoever may create tasks",
+      description:
+        "The app crops it square (512×512) before sending. 400 `space_image.type` or `space_image.too_large` (`params.maxMb`) name what is accepted; an unreadable file is refused and the old image stays.",
+      request: {
+        params: SpaceParams,
+        body: body(
+          z.object({
+            imageBase64: z
+              .string()
+              .min(1)
+              .max(3_000_000)
+              .openapi({ description: "The image bytes in base64 (a data: URL prefix is accepted)." }),
+            contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+          }),
+        ),
+      },
+      responses: { 200: json(SpaceRef), 429: errorResponse("Too many image changes"), ...errors },
+    }),
+    async (c) => {
+      const { orgId, spaceId } = c.req.valid("param");
+      const user = c.get("user");
+      const limit = await adapters.rateLimiter.consume(`issue-space-image:${user.id}`, {
+        limit: 60,
+        windowMs: 3600_000,
+      });
+      if (!limit.allowed) return apiError(c, 429, "rate_limited", "Too many image changes. Try again later.");
+      return c.json(await setSpaceImage(blobDeps, user.id, orgId, spaceId, c.req.valid("json")), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/organizations/{orgId}/issue-spaces/{spaceId}/image",
+      tags,
+      security,
+      summary: "Remove a company's image: its color shows again",
+      request: { params: SpaceParams },
+      responses: { 200: json(SpaceRef), ...errors },
+    }),
+    async (c) => {
+      const { orgId, spaceId } = c.req.valid("param");
+      return c.json(await clearSpaceImage(blobDeps, c.get("user").id, orgId, spaceId), 200);
+    },
+  );
+
+  // A company's image, for the workspace's members (a content hash names the file, so a new image gets a new address).
+  app.get("/organizations/:orgId/issue-space-images/:file", async (c) =>
+    imageFile(
+      await spaceImageFile(
+        { db, blobs: adapters.platformBlobs },
+        c.get("user").id,
+        c.req.param("orgId"),
+        c.req.param("file"),
+      ),
+    ),
   );
 
   app.openapi(
