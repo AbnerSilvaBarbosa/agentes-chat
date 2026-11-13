@@ -154,13 +154,16 @@ export async function companyDashboard(
       open: number;
       done: number;
     }>(sql`select c.assignee_type as kind, c.assignee_id as id, ag.name as agent_name, u.name as person_name,
-        (ag.id is null and u.id is null) as removed,
+        (ag.id is null and um.user_id is null) as removed,
         count(*) filter (where ${OPEN})::int as open, count(*) filter (where ${doneInPeriod})::int as done
       from c
       left join ${schema.agents} ag on c.assignee_type = 'agent' and ag.id::text = c.assignee_id and ag.org_id = ${orgId}::uuid
-      left join ${schema.users} u on c.assignee_type = 'person' and u.id = c.assignee_id
+      -- A person is an assignee only while a member of the workspace: one who left reads as removed.
+      left join ${schema.organizationMembers} um on c.assignee_type = 'person' and um.user_id = c.assignee_id
+        and um.org_id = ${orgId}::uuid
+      left join ${schema.users} u on um.user_id = u.id
       where c.assignee_id is not null
-      group by c.assignee_type, c.assignee_id, ag.id, ag.name, u.id, u.name
+      group by c.assignee_type, c.assignee_id, ag.id, ag.name, um.user_id, u.name
       having count(*) filter (where ${OPEN}) > 0 or count(*) filter (where ${doneInPeriod}) > 0`),
     over<{
       lead_count: number;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { eq, schema } from "@agenteschat/db";
+import { and, eq, schema, sql } from "@agenteschat/db";
 import {
   companyDashboard,
   createIssue,
@@ -170,10 +170,14 @@ describe("companyDashboard assignees", () => {
     const { task, read } = await scene();
     const ana = await addMember(f.db, f.org.id, "member", "Ana");
     const caio = await addMember(f.db, f.org.id, "member", "Caio");
-    // The fixture agent is "Dev"; Ana and Dev tie on two, Caio has three.
+    const eva = await addMember(f.db, f.org.id, "member", "Éva");
+    // The fixture agent is "Dev"; "ana" (lower case), Dev and Éva tie on two, Caio has three: the tie reads in the
+    // language's order (accents and capitals do not jump the queue), not by code unit.
+    await f.db.update(schema.users).set({ name: "ana" }).where(eq(schema.users.id, ana.id));
     for (const [who, n] of [
       [as("person", caio.id), 3],
       [as("person", ana.id), 2],
+      [as("person", eva.id), 2],
       [as("agent", f.agent.id), 2],
     ] as const) {
       for (let i = 0; i < n; i++) await task({ status: "todo", ...who });
@@ -182,7 +186,9 @@ describe("companyDashboard assignees", () => {
     const d = await read();
     expect(d.assignees.map((a) => [a.name, a.open])).toEqual([
       ["Caio", 3],
-      ...[f.agent.name, "Ana"].sort().map((name) => [name, 2]),
+      ["ana", 2],
+      ["Dev", 2],
+      ["Éva", 2],
     ]);
     expect(d.assignees.map((a) => a.type)).toContain("agent");
     expect(d.unassigned).toBe(1);
@@ -396,6 +402,10 @@ describe("companyDashboard weeks, late and unassigned", () => {
       .set({ spaceId: other?.id })
       .where(eq(schema.issueProjects.id, board?.id as string));
     expect((await read()).stages.done).toBe(0);
+    // The company the board moved to counts both tasks, the one concluded in another company included.
+    const there = await companyDashboard(f.db, f.owner.id, f.org.id, other?.id as string, 30, NOW);
+    expect(there.stages.done).toBe(2);
+    expect(there.total).toBe(2);
     expect(stays.id).not.toBe(moved.id);
   });
 
@@ -581,3 +591,159 @@ describe("companyDashboard size", () => {
     expect(took).toBeLessThan(1000);
   });
 });
+
+/** A run of `agentId` on `issueId` started at `at`, with one usage row costing `usd`. */
+async function addRun(issueId: string, agentId: string, at: Date, usd: number) {
+  const id = crypto.randomUUID();
+  const [r] = await f.db
+    .insert(schema.agentRuns)
+    .values({
+      orgId: f.org.id,
+      agentId,
+      channelId: f.general.id,
+      threadRootId: id,
+      triggerMessageId: id,
+      trigger: "mention",
+      hop: 1,
+      issueId,
+      createdAt: at,
+    })
+    .returning();
+  await f.db.insert(schema.usageRecords).values({
+    orgId: f.org.id,
+    agentId,
+    runId: r?.id,
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    requestedModel: "claude-sonnet-5-5",
+    inputTokens: 1,
+    outputTokens: 1,
+    costNanoUsd: usd * 1e9,
+    createdAt: at,
+  });
+}
+
+const as = (type: "agent" | "person", id: string) => ({ assigneeType: type, assigneeId: id });
+const EMPTY_SPAN = { count: 0, medianMs: null, averageMs: null };
+
+describe("companyDashboard review", () => {
+  test("leaves a task hidden from the viewer out of every number", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    // Bia may view usage, so the cost is computed for her and must not carry what she cannot see.
+    await f.db
+      .update(schema.orgRoles)
+      .set({ permissions: sql`array_append(${schema.orgRoles.permissions}, 'view_usage')` })
+      .where(and(eq(schema.orgRoles.orgId, f.org.id), eq(schema.orgRoles.kind, "everyone")));
+    const hiddenTo = { restricted: true, audienceUserIds: [f.owner.id] };
+    const visible = await task({ status: "todo" });
+    // Open, assigned, late, with a run.
+    const open = await task({ status: "in_progress", dueDate: "2026-10-01", ...hiddenTo, ...as("agent", f.agent.id) });
+    // Done in the period, assigned to a person, started, with a run.
+    const done = await task({
+      status: "done",
+      createdAt: ago(10),
+      moves: [
+        ["in_progress", 9],
+        ["done", 2],
+      ],
+      ...hiddenTo,
+      ...as("person", f.owner.id),
+    });
+    await addRun(open.id, f.agent.id, ago(1), 10);
+    await addRun(done.id, f.agent.id, ago(1), 10);
+    await addRun(visible.id, f.agent.id, ago(1), 0.5);
+
+    const seen = await read(30, member.id);
+    expect(seen.total).toBe(1);
+    expect(seen.stages).toEqual({ todo: 1, in_progress: 0, in_review: 0, done: 0 });
+    expect(seen.assignees).toEqual([]);
+    expect(seen.unassigned).toBe(1);
+    expect(seen.late).toBe(0);
+    expect(seen.leadTime).toEqual(EMPTY_SPAN);
+    expect(seen.workTime).toEqual(EMPTY_SPAN);
+    expect(seen.weekly.every((w) => w.count === 0)).toBe(true);
+    expect(seen.cost).toEqual({ totalUsd: 0.5, byAgent: [{ agentId: f.agent.id, name: f.agent.name, usd: 0.5 }] });
+    // The administrator sees all three, so the same rows are there to be hidden.
+    const all = await read(30, f.owner.id);
+    expect([all.total, all.late, all.stages.done, all.cost?.totalUsd]).toEqual([3, 1, 1, 20.5]);
+  });
+
+  test("keeps the cost of the runs of canceled tasks, which no count includes", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const canceled = await task({ status: "canceled", ...as("agent", f.agent.id) });
+    const open = await task({ status: "todo" });
+    await addRun(canceled.id, f.agent.id, ago(1), 20);
+    await addRun(open.id, f.agent.id, ago(1), 1);
+    const d = await read();
+    expect(d.cost?.totalUsd).toBe(21);
+    expect(d.total).toBe(1);
+    expect(d.assignees).toEqual([]);
+  });
+
+  test("a company whose tasks are all canceled or hidden has a total of zero", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    await task({ status: "canceled" });
+    await task({ status: "todo", restricted: true, audienceUserIds: [f.owner.id] });
+    expect((await read(30, member.id)).total).toBe(0);
+    expect((await read(30, f.owner.id)).total).toBe(1);
+  });
+
+  test("counts the tasks of an archived board and of an archived company", async () => {
+    f = await setup();
+    const { task, read, board, spaceId } = await scene();
+    await task({ status: "todo", ...as("agent", f.agent.id) });
+    await task(finishedAt(2));
+    await f.db
+      .update(schema.issueProjects)
+      .set({ archivedAt: NOW })
+      .where(eq(schema.issueProjects.id, board?.id as string));
+    await f.db.update(schema.issueSpaces).set({ archivedAt: NOW }).where(eq(schema.issueSpaces.id, spaceId));
+    const d = await read();
+    expect(d.total).toBe(2);
+    expect(d.stages).toEqual({ todo: 1, in_progress: 0, in_review: 0, done: 1 });
+    expect(d.assignees).toEqual([{ type: "agent", id: f.agent.id, name: f.agent.name, open: 1, done: 0 }]);
+  });
+
+  test("lists a person who left the workspace as removed, and drops an assignee with no count", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const left = await addUser(f.db, "Saiu");
+    const idle = await addMember(f.db, f.org.id, "member", "Parado");
+    await task({ status: "todo", ...as("person", left.id) });
+    // Concluded before the period and nothing open: no row.
+    await task({ ...finishedAt(50), ...as("person", idle.id) });
+    const d = await read();
+    expect(d.assignees).toEqual([{ type: "removed", id: left.id, name: "", open: 1, done: 0 }]);
+  });
+
+  test("measures the period at exactly 7, 30 and 90 days for deliveries and runs", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const open = await task({ status: "todo" });
+    for (const days of [7, 30, 90]) {
+      const edge = ago(days);
+      const justBefore = new Date(edge.getTime() - 1);
+      await task({ ...finishedAt(days) });
+      await task({ status: "done", moves: [["done", (NOW.getTime() - justBefore.getTime()) / DAY]] });
+      await addRun(open.id, f.agent.id, edge, days);
+      await addRun(open.id, f.agent.id, justBefore, 1000);
+    }
+    // Exactly N days back is in, a millisecond older is out. A period also holds the shorter ones' edges, and a
+    // millisecond past the 7 day edge is still inside 30 (and so on): 1, 3 and 5 deliveries; 7, 7+1000+30 and
+    // 7+1000+30+1000+90 dollars.
+    expect((await read(7)).stages.done).toBe(1);
+    expect((await read(30)).stages.done).toBe(3);
+    expect((await read(90)).stages.done).toBe(5);
+    expect((await read(7)).cost?.totalUsd).toBe(7);
+    expect((await read(30)).cost?.totalUsd).toBe(1037);
+    expect((await read(90)).cost?.totalUsd).toBe(2127);
+  });
+});
+
+/** A task concluded `days` before now, exactly. */
+const finishedAt = (days: number) => ({ status: "done" as const, moves: [["done", days]] as [Status, number][] });
