@@ -1330,17 +1330,20 @@ async function fireIssueMoved(
     if (depth > MAX_MOVE_HOPS) return 0;
   }
   const to = columnName(view.columnId ?? null);
+  const fromName = columnName(from.columnId ?? null);
   await fireRoutineEvent(
     deps,
     orgId,
     "issue.moved",
     {
-      summary: `Task #${view.number} moved to ${to ?? STATUS_WORDS[view.status]} (id ${view.id})`,
+      summary: `Task #${view.number} "${view.title}" moved ${fromName ? `from ${fromName} ` : ""}to ${to ?? STATUS_WORDS[view.status]} (id ${view.id})`,
       issueId: view.id,
       number: view.number,
+      title: view.title,
       from: from.status,
       to: view.status,
       fromColumnId: from.columnId ?? null,
+      fromColumn: fromName,
       columnId: view.columnId ?? null,
       column: to,
       projectId: view.project?.id ?? null,
