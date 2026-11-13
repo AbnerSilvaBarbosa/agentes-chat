@@ -4,6 +4,8 @@
  * card by it; one that is no card the reader may see stays the text as written.
  */
 
+import { CHANNEL_PICK_LIMIT, channelOptions } from "./channel-refs";
+
 /** A piece of text: words, or a `#<number>` that may name a card. */
 export type CardRefPart = { text: string; number?: undefined } | { text: string; number: number };
 
@@ -30,4 +32,36 @@ export function splitCardRefs(text: string): CardRefPart[] {
   }
   if (last < text.length) out.push({ text: text.slice(last) });
   return out;
+}
+
+/** What the "#" picker needs to know of a card. */
+export interface PickCard {
+  number: number;
+  title: string;
+}
+
+/** Rows kept for cards while channels are many, so a card is never out of reach of "#". */
+const CARD_ROOM = 2;
+
+/**
+ * What "#<query>" can mean: the channels first (`channelOptions`), then the cards: digits give the cards whose number
+ * starts with them, letters the cards whose title holds them (the ones it starts with first). At most `limit` rows.
+ * `cards` come in the order to show when nothing was typed.
+ */
+export function pickOptions<C extends { name: string; isMember: boolean }, K extends PickCard>(
+  query: string,
+  channels: readonly C[],
+  cards: readonly K[],
+  limit = CHANNEL_PICK_LIMIT,
+): { channels: C[]; cards: K[] } {
+  const q = query.toLowerCase();
+  const found = /^\d+$/.test(q)
+    ? cards.filter((c) => String(c.number).startsWith(q)).sort((a, b) => a.number - b.number)
+    : q
+      ? cards
+          .filter((c) => c.title.toLowerCase().includes(q))
+          .sort((a, b) => Number(!a.title.toLowerCase().startsWith(q)) - Number(!b.title.toLowerCase().startsWith(q)))
+      : [...cards];
+  const named = channelOptions(query, channels, limit - Math.min(found.length, CARD_ROOM));
+  return { channels: named, cards: found.slice(0, limit - named.length) };
 }
