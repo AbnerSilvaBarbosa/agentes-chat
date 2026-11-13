@@ -235,6 +235,7 @@ test("the tools' order: each person's own, per workspace, every tool once, besid
     "proposals",
     "threads",
     "issues",
+    "myTasks",
     "wiki",
     "routines",
     "calendar",
