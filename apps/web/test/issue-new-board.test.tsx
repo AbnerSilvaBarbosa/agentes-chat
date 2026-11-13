@@ -92,6 +92,21 @@ describe("Novo board knows its company", () => {
     expect(await optionsOf(dialog, "Colunas do board")).toEqual(["As do workspace", "Desenvolvimento", "Kanban"]);
   });
 
+  test("columns select puts a person's own sets in the name order with the seeded ones", async () => {
+    const s = await setup();
+    const columns = [{ name: "Entrada", stage: "todo" as const }];
+    await s.api.issues.createColumnTemplate(ORG_ID, { name: "Suporte", columns });
+    await s.api.issues.createColumnTemplate(ORG_ID, { name: "Aviação", columns });
+    const dialog = await fromCompany(s);
+    expect(await optionsOf(dialog, "Colunas do board")).toEqual([
+      "As do workspace",
+      "Aviação",
+      "Desenvolvimento",
+      "Kanban",
+      "Suporte",
+    ]);
+  });
+
   test("the board gets a copy of the chosen set", async () => {
     const s = await setup();
     const dialog = await fromCompany(s);
