@@ -5,7 +5,7 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 setupDom();
 
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
-import { declarations } from "./built-css";
+import { builtCss, declarations } from "./built-css";
 import { createFakeApi, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
@@ -31,6 +31,7 @@ describe("the Tarefas screens hold to the kit", () => {
     const { api, clinic, site } = await setup();
     // Each screen is a page whose root takes `--page-top` and `--page-x` from the kit's `.page` (Settings: its own
     // split, asserted with the page rhythm), and draws its first line right in it.
+    const css = await builtCss("src/styles.css", "src/pages/issues.css");
     for (const [path, root] of [
       ["/issues", ".page.issues"],
       [`/issues?space=${clinic.id}`, ".page.issues"],
@@ -38,7 +39,18 @@ describe("the Tarefas screens hold to the kit", () => {
       ["/settings/tasks", ".settings"],
     ] as const) {
       await visit(api, path);
-      expect([path, document.querySelector(root) !== null]).toEqual([path, true]);
+      const found = document.querySelector(root);
+      expect([path, found !== null]).toEqual([path, true]);
+      // The root's own class says which rule gives it its room: the kit's `.page` or Settings' `.settings`, and that
+      // rule's padding is `--page-top` above and `--page-x` at the sides.
+      const holder = [...(found?.classList ?? [])].find((c) => c === "page" || c === "settings") ?? "";
+      const padding = declarations(css, `.${holder}`).find(([prop]) => prop === "padding")?.[1] ?? "";
+      expect([path, holder !== "", /^var\(--page-top\) var\(--page-x\)/.test(padding)]).toEqual([path, true, true]);
+      // Nothing of the screens overrides that room on the root itself.
+      for (const cls of found?.classList ?? [])
+        for (const [prop, value] of declarations(css, `.${cls}`))
+          if (/^(padding|margin)-(top|left|right|inline|block-start)/.test(prop))
+            expect([path, cls, prop, value]).toEqual([path, cls, prop, "0"]);
       cleanup();
     }
     await visit(api, `/issues?space=${clinic.id}`);
