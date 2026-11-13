@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { schema } from "@agenteschat/db";
+import { eq, schema } from "@agenteschat/db";
 import {
   actionsFor,
   createWikiPage,
@@ -8,12 +8,15 @@ import {
   linkRunActions,
   redoAgentAction,
   replyThreadOf,
+  setWikiFolderAudience,
+  setWikiPageAudience,
+  setWikiPageLock,
   type ToolContext,
   undoAgentAction,
   updateWikiPage,
   type WikiActor,
 } from "../src";
-import { type Fixture, setup } from "./fixtures";
+import { addMember, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
 afterEach(async () => {
@@ -118,6 +121,41 @@ describe("an agent's wiki move can be undone", () => {
     await expect(undoAgentAction(deps(), f.owner.id, f.org.id, action?.id ?? "")).rejects.toMatchObject({
       code: "action.changed_since",
     });
+    expect((await read("um")).folder).toBe("Arquivo");
+  });
+
+  test("undo restores the audience the page had", async () => {
+    f = await setup({ wikiTools: true });
+    const ana = await addMember(f.db, f.org.id, "member", "ana");
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await make("Aberta");
+    await setWikiFolderAudience(wikiDeps(), f.owner.id, f.org.id, "Fechada", { roleIds: [], userIds: [ana.id] }, null);
+    const [open] = await agentMoves(["Aberta"], "Fechada");
+    const rowOf = async () => (await f.db.select().from(schema.wikiPages)).find((r) => r.slug === "aberta");
+    expect(await rowOf()).toMatchObject({ restricted: true, audienceUserIds: [ana.id] });
+    await undoAgentAction(deps(), f.owner.id, f.org.id, open?.id ?? "");
+    expect(await rowOf()).toMatchObject({ folder: "", restricted: false, audienceUserIds: [], audienceFolder: null });
+    await redoAgentAction(deps(), f.owner.id, f.org.id, open?.id ?? "");
+    expect(await rowOf()).toMatchObject({ folder: "Fechada", restricted: true, audienceUserIds: [ana.id] });
+
+    // A page limited to two people, narrowed by the folder, gets both back.
+    await make("Dupla");
+    await f.db.update(schema.channels).set({ visibility: "private" }).where(eq(schema.channels.id, f.general.id));
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "dupla", { roleIds: [], userIds: [ana.id, bia.id] });
+    const [dupla] = await agentMoves(["Dupla"], "Fechada");
+    const two = async () => (await f.db.select().from(schema.wikiPages)).find((r) => r.slug === "dupla");
+    expect((await two())?.audienceUserIds).toEqual([ana.id]);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, dupla?.id ?? "");
+    expect((await two())?.audienceUserIds.sort()).toEqual([ana.id, bia.id].sort());
+  });
+
+  test("undo by a person who may not write the page is refused", async () => {
+    f = await setup({ wikiTools: true });
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await make("Um", "Velha");
+    const [action] = await agentMoves(["Um"], "Arquivo");
+    await setWikiPageLock(wikiDeps(), f.owner.id, f.org.id, "um", true);
+    await expect(undoAgentAction(deps(), bia.id, f.org.id, action?.id ?? "")).rejects.toThrow();
     expect((await read("um")).folder).toBe("Arquivo");
   });
 });

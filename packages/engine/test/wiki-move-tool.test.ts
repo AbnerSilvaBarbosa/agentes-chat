@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { schema } from "@agenteschat/db";
+import { and, eq, schema } from "@agenteschat/db";
 import {
   createAgent,
   createWikiPage,
   DEFAULT_AGENT_SCOPES,
   deleteWikiPage,
+  drainOutbox,
   getWikiPage,
   insertMessage,
+  runRoutineNow,
   setAgentScopes,
   setWikiFolderAudience,
   setWikiPageAudience,
@@ -16,6 +18,7 @@ import {
   type WikiActor,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
+import { channelRoutine, routineDeps } from "./routine-fixtures";
 
 let f: Fixture;
 afterEach(async () => {
@@ -145,16 +148,21 @@ describe("move_wiki_page", () => {
     expect(await folderOf("repetida")).toBe("X");
   });
 
-  test("a title always names one page, so a move never has to pick between two", async () => {
+  test("a ref naming no live page is no such page while the others still move", async () => {
     f = await setup({ wikiTools: true });
-    await page("Plano", "A");
-    await page("Plano B", "A");
-    // A second page cannot take the same address, so no title can match two pages.
-    await expect(page("Plano", "B")).rejects.toMatchObject({ code: "slug_taken" });
-    const out = await move(await askedBy(f.owner.id), { pages: ["Plano"], folder: "C" });
-    expect(out.content).not.toContain("Refused");
-    expect(await folderOf("plano")).toBe("C");
-    expect(await folderOf("plano-b")).toBe("A");
+    await page("Um");
+    await page("Dois");
+    await page("Apagada");
+    await deleteWikiPage(wikiDeps(), person(f.owner.id), f.org.id, "apagada");
+    const out = await move(await askedBy(f.owner.id), {
+      pages: ["Um", "Fantasma", "Apagada", "Dois"],
+      folder: "Pasta",
+    });
+    expect(out.isError).toBeFalsy();
+    expect(await folderOf("um")).toBe("Pasta");
+    expect(await folderOf("dois")).toBe("Pasta");
+    expect(out.content).toMatch(/- Fantasma: Page not found/);
+    expect(out.content).toMatch(/- Apagada: Page not found/);
   });
 
   test("a deleted page is no such page", async () => {
@@ -281,5 +289,113 @@ describe("move_wiki_page", () => {
     const listed = (await f.tools?.list(ctx))?.map((t) => t.name) ?? [];
     expect(listed).toContain("read_wiki_page");
     expect(listed).not.toContain("move_wiki_page");
+  });
+
+  test("empty levels and extra spaces do not count toward the folder limit", async () => {
+    f = await setup({ wikiTools: true });
+    await page("Curta");
+    const out = await move(await askedBy(f.owner.id), {
+      pages: ["Curta"],
+      folder: `${"/".repeat(250)}z`,
+    });
+    expect(out.isError).toBeFalsy();
+    expect(await folderOf("curta")).toBe("z");
+  });
+
+  test("a folder level over 80 characters is refused, never cut", async () => {
+    f = await setup({ wikiTools: true });
+    await page("Curta");
+    const out = await move(await askedBy(f.owner.id), { pages: ["Curta"], folder: `Ok/${"y".repeat(150)}` });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain("80");
+    expect(await folderOf("curta")).toBe("");
+  });
+
+  test("a page limited to other people is no such page for who asked", async () => {
+    f = await setup({ wikiTools: true });
+    const ana = await addMember(f.db, f.org.id, "member", "ana");
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await page("Reservada");
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "reservada", { roleIds: [], userIds: [ana.id] });
+    const out = await move(await askedBy(bia.id), { pages: ["Reservada"], folder: "X" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toMatch(/Reservada: Page not found/);
+    expect(await folderOf("reservada")).toBe("");
+  });
+
+  test("an agent outside the page's editors is refused", async () => {
+    f = await setup({ wikiTools: true });
+    const other = await createAgent(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { name: "Infra", handle: "infra", role: "Infra", credentialId: f.credential.id },
+      { model: "claude-sonnet-5-5" },
+    );
+    await page("Cuidada");
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "cuidada", null, undefined, {
+      editors: null,
+      agentEditorIds: [other.id],
+    });
+    const out = await move(await askedBy(f.owner.id), { pages: ["Cuidada"], folder: "X" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toMatch(/Cuidada: Only the people chosen edit this page/);
+    expect(await folderOf("cuidada")).toBe("");
+  });
+
+  test("a routine's run moves for its creator", async () => {
+    f = await setup({ wikiTools: true });
+    await page("Da rotina");
+    const routine = await channelRoutine(f, { access: "act", prompt: "Guarda as páginas na pasta Rotina." });
+    await runRoutineNow(routineDeps(f), f.owner.id, f.org.id, routine.id);
+    await drainOutbox(f.db, f.handlers);
+    const run = (await f.db.select().from(schema.agentRuns)).find((r) => r.background);
+    if (!run) throw new Error("the routine did not fire");
+    const ctx: ToolContext = {
+      db: f.db,
+      orgId: f.org.id,
+      agentId: run.agentId,
+      runId: run.id,
+      channelId: run.channelId,
+      threadRootId: run.threadRootId,
+      triggerMessageId: run.triggerMessageId ?? run.threadRootId,
+    };
+    const out = await move(ctx, { pages: ["Da rotina"], folder: "Rotina" });
+    expect(out.isError).toBeFalsy();
+    expect(await folderOf("da-rotina")).toBe("Rotina");
+  });
+
+  test("the right hand does not move a page for someone who may not edit the wiki", async () => {
+    f = await setup({ wikiTools: true });
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await page("Dele");
+    await f.db.update(schema.agents).set({ builtin: "right_hand" }).where(eq(schema.agents.id, f.agent.id));
+    const [everyone] = await f.db
+      .select()
+      .from(schema.orgRoles)
+      .where(and(eq(schema.orgRoles.orgId, f.org.id), eq(schema.orgRoles.kind, "everyone")));
+    await f.db
+      .update(schema.orgRoles)
+      .set({ permissions: (everyone?.permissions ?? []).filter((k) => k !== "edit_wiki") })
+      .where(eq(schema.orgRoles.id, everyone?.id ?? ""));
+    const out = await move(await askedBy(bia.id), { pages: ["Dele"], folder: "X" });
+    expect(out).toEqual({ content: WIKI_WRITE_REFUSAL, isError: true });
+    expect(await folderOf("dele")).toBe("");
+  });
+
+  test("a limited page entering a narrower folder is narrowed and the answer says so", async () => {
+    f = await setup({ wikiTools: true });
+    const ana = await addMember(f.db, f.org.id, "member", "ana");
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    // Restricted pages reach a run only through its conversation's members: a private channel of these three.
+    await f.db.update(schema.channels).set({ visibility: "private" }).where(eq(schema.channels.id, f.general.id));
+    await page("Dupla");
+    await setWikiPageAudience(wikiDeps(), f.owner.id, f.org.id, "dupla", { roleIds: [], userIds: [ana.id, bia.id] });
+    await setWikiFolderAudience(wikiDeps(), f.owner.id, f.org.id, "Fechada", { roleIds: [], userIds: [ana.id] }, null);
+    const out = await move(await askedBy(f.owner.id), { pages: ["Dupla"], folder: "Fechada" });
+    expect(out.isError).toBeFalsy();
+    expect(out.content).toContain('now limited to the audience of "Fechada"');
+    const [row] = (await f.db.select().from(schema.wikiPages)).filter((r) => r.slug === "dupla");
+    expect(row?.audienceUserIds).toEqual([ana.id]);
   });
 });

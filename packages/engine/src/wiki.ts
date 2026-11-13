@@ -1625,6 +1625,42 @@ export async function moveWikiPage(deps: WikiDeps, actor: WikiActor, orgId: stri
   return view;
 }
 
+/** Who sees and who edits a page, as kept in its row: what a receipt of a move holds to put it back. */
+export type WikiPlacement = AudienceCols & { audienceFolder: string | null };
+
+/** A page's audience columns as they are now. */
+export async function wikiPlacementOf(db: Executor, pageId: string): Promise<WikiPlacement> {
+  const [row] = await db.select().from(wikiPages).where(eq(wikiPages.id, pageId));
+  if (!row) throw new NotFoundError("Page not found", "wiki.page_not_found");
+  return { ...colsOf(row), audienceFolder: row.audienceFolder };
+}
+
+/** Whether two placements let the same people and agents see and edit. */
+export const samePlacement = (a: AudienceCols, b: AudienceCols) => sameAudience(a, b);
+
+/**
+ * Undo or redo of a move: the page goes to `folder` and takes `saved` back, kept inside the folder's rule as it is
+ * now (a folder narrowed since never lets the page out wider).
+ */
+export async function putWikiPageAt(
+  deps: WikiDeps,
+  actor: WikiActor,
+  orgId: string,
+  ref: string,
+  folder: string,
+  saved: WikiPlacement,
+) {
+  return deps.db.transaction(async (tx) => {
+    const inner = { ...deps, db: tx as unknown as Database };
+    const moved = await moveWikiPage(inner, actor, orgId, ref, folder);
+    await tx
+      .update(wikiPages)
+      .set(await placement(tx, orgId, moved.folder, saved))
+      .where(eq(wikiPages.id, moved.id));
+    return moved;
+  });
+}
+
 /**
  * Soft delete: links to it show as missing; restore brings it back. It leaves the agents' context for good, so a
  * restore never pushes the workspace past `WIKI_CONTEXT_MAX`.

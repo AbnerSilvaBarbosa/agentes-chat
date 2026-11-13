@@ -14,12 +14,14 @@ import {
   getWikiPage,
   moveWikiPage,
   recordWikiReads,
+  samePlacement,
   searchWikiForRun,
   updateWikiPage,
   WIKI_LIMITS,
   type WikiActor,
   type WikiDeps,
   wikiPageHeld,
+  wikiPlacementOf,
 } from "./wiki";
 import { RESTRICTED_HERE, sendHeldToDm } from "./wiki-dm";
 import { inWorkspaceWords } from "./workspace-mode";
@@ -307,14 +309,21 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
           const refs = Array.isArray(input.pages) ? input.pages.map(str).filter((r) => r.trim()) : [];
           if (refs.length === 0) return { content: "Name at least one page to move.", isError: true };
           if (refs.length > 20) return { content: "Move at most 20 pages at a time.", isError: true };
-          const wanted = str(input.folder);
-          if (wanted.length > WIKI_LIMITS.folder) {
+          // The folder as the wiki keeps it: empty levels and extra spaces go before the limits are read.
+          const levels = str(input.folder)
+            .split("/")
+            .map((p) => p.replace(/\s+/g, " ").trim())
+            .filter(Boolean);
+          if (levels.join("/").length > WIKI_LIMITS.folder) {
             return {
               content: `The folder name is longer than the wiki allows (${WIKI_LIMITS.folder}).`,
               isError: true,
             };
           }
-          const folder = cleanFolder(wanted);
+          if (levels.some((l) => l.length > 80)) {
+            return { content: "A folder level can't be longer than 80 characters.", isError: true };
+          }
+          const folder = cleanFolder(str(input.folder));
           const where = folder ? `"${folder}"` : "the top level";
           const moved: string[] = [];
           const there: string[] = [];
@@ -329,23 +338,31 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
                 there.push(`[[${page.title}]] was in ${where} already`);
                 continue;
               }
-              const saved = await actWithUndo(
+              const done = await actWithUndo(
                 ctx,
-                (db) => moveWikiPage({ ...wiki(ctx), db }, actor, ctx.orgId, page.id, folder),
-                (done): ActionRecord => ({
+                async (db) => {
+                  const was = await wikiPlacementOf(db, page.id);
+                  const saved = await moveWikiPage({ ...wiki(ctx), db }, actor, ctx.orgId, page.id, folder);
+                  return { saved, was, now: await wikiPlacementOf(db, page.id) };
+                },
+                ({ saved, was, now }): ActionRecord => ({
                   kind: "wiki.page_moved",
-                  target: done.audience
-                    ? { type: "wiki_page" as const, id: done.id }
-                    : { type: "wiki_page" as const, id: done.id, title: done.title, slug: done.slug },
-                  params: done.audience
+                  target: saved.audience
+                    ? { type: "wiki_page" as const, id: saved.id }
+                    : { type: "wiki_page" as const, id: saved.id, title: saved.title, slug: saved.slug },
+                  params: saved.audience
                     ? { restricted: true }
-                    : { title: done.title, slug: done.slug, from: page.folder, to: done.folder },
-                  before: { folder: page.folder, version: page.version },
-                  after: { folder: done.folder, version: done.version },
+                    : { title: saved.title, slug: saved.slug, from: page.folder, to: saved.folder },
+                  before: { folder: page.folder, version: page.version, audience: was },
+                  after: { folder: saved.folder, version: saved.version, audience: now },
                 }),
               );
+              const { saved } = done;
+              const narrowed = samePlacement(done.was, done.now)
+                ? ""
+                : `; now limited to the audience of ${folder ? `"${done.now.audienceFolder ?? folder}"` : "the top level"}`;
               moved.push(
-                `[[${saved.title}]] (slug ${saved.slug}) from ${page.folder ? `"${page.folder}"` : "the top level"}`,
+                `[[${saved.title}]] (slug ${saved.slug}) from ${page.folder ? `"${page.folder}"` : "the top level"}${narrowed}`,
               );
             } catch (error) {
               refused.push(`${ref}: ${error instanceof Error ? error.message : String(error)}`);
