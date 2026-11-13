@@ -424,7 +424,11 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                 ]}
               >
                 <TabPanel value="painel">
-                  <CompanyDashboard orgId={org.id} spaceId={space.id} />
+                  <CompanyDashboard
+                    orgId={org.id}
+                    spaceId={space.id}
+                    onNewBoard={addsBoard ? () => setProjectDialog("new") : undefined}
+                  />
                 </TabPanel>
               </Tabs>
             )}

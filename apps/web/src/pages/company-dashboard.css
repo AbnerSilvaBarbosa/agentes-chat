@@ -1,0 +1,32 @@
+/*
+ * A company's Painel (ADR 0182): the Painéis' own grid and cards (widgets.css) under a period choice. Only what the
+ * kit's list leaves out is here: the assignees' two number columns.
+ */
+.cdash {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.cdash__grid {
+  align-self: stretch;
+}
+.cdash__rows {
+  margin-top: var(--space-3);
+}
+/* The Open and Done columns end on one right edge, whatever the numbers' width. */
+.cdash__n {
+  flex: none;
+  min-width: 72px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+.cdash__headrow {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cdash__headrow .cdash__n {
+  font-size: 12.5px;
+}

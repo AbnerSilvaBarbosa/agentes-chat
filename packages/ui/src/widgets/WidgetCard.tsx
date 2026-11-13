@@ -48,6 +48,8 @@ export type WidgetCardProps = {
   /** Before the title: the face of the agent who looks after it (the footer then only says when). */
   face?: ReactNode;
   buildingText?: string;
+  /** Bars a wide card keeps (`WidgetBody`'s `maxBars`). */
+  maxBars?: number;
   /** The head's own buttons (Update now, its menu), shown on hover and focus. */
   actions?: ReactNode;
   /** The title opens the widget (its panel). */
@@ -85,6 +87,7 @@ export function WidgetCard({
   footer,
   face,
   buildingText,
+  maxBars,
   actions,
   onOpen,
   organize,
@@ -181,6 +184,7 @@ export function WidgetCard({
           size={size}
           locale={locale}
           buildingText={buildingText}
+          maxBars={maxBars}
           sparkApart
         />
         {board && cut.cut && onOpen && (

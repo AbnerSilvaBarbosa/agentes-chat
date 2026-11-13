@@ -27,6 +27,8 @@ export interface WidgetBodyProps {
   locale: string;
   /** While it is built: "Theo is building the widget and the routine that will update it…". */
   buildingText?: string;
+  /** Bars kept in a wide widget: 12 unless a caller (a dashboard of 14 weeks) needs more. */
+  maxBars?: number;
   /** A number's trend line is drawn by the card, edge to edge at its bottom (`WidgetBleed`), not in the body. */
   sparkApart?: boolean;
 }
@@ -37,7 +39,16 @@ export interface WidgetBodyProps {
  * tones); numbers in the app's font, bold, tabular. Being built, the agent's dither moves under the words. A note
  * keeps to two lines and ends in an ellipsis past them (`wk-clamp`), never cut inside a word.
  */
-export function WidgetBody({ spec, status, color, size, locale, buildingText, sparkApart = false }: WidgetBodyProps) {
+export function WidgetBody({
+  spec,
+  status,
+  color,
+  size,
+  locale,
+  buildingText,
+  maxBars,
+  sparkApart = false,
+}: WidgetBodyProps) {
   if (status === "building" || !spec) {
     return (
       <div className="wk-build">
@@ -52,7 +63,7 @@ export function WidgetBody({ spec, status, color, size, locale, buildingText, sp
     case "goal":
       return <GoalBody spec={spec} locale={locale} />;
     case "bars":
-      return <BarsBody spec={spec} size={size} locale={locale} />;
+      return <BarsBody spec={spec} size={size} locale={locale} maxBars={maxBars} />;
     case "line":
       return <LineBody spec={spec} color={color} size={size} locale={locale} />;
     case "list":
@@ -115,10 +126,20 @@ function GoalBody({ spec, locale }: { spec: GoalWidgetSpec; locale: string }) {
   );
 }
 
-function BarsBody({ spec, size, locale }: { spec: BarsWidgetSpec; size: { w: 1 | 2; h: 1 | 2 }; locale: string }) {
+function BarsBody({
+  spec,
+  size,
+  locale,
+  maxBars,
+}: {
+  spec: BarsWidgetSpec;
+  size: { w: 1 | 2; h: 1 | 2 };
+  locale: string;
+  maxBars?: number;
+}) {
   const max = Math.max(0, ...spec.values) || 1;
   // A narrow widget keeps its bars readable: the first ones that fit.
-  const room = size.w === 1 ? 5 : 12;
+  const room = size.w === 1 ? 5 : (maxBars ?? 12);
   const labels = spec.labels.slice(0, room);
   return (
     <>
