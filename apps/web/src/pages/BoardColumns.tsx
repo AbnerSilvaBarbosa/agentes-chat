@@ -1,6 +1,15 @@
-import type { IssueColumn, IssueColumnTemplate, IssueStatus } from "@agenteschat/client";
-import { useIssueColumnAction, useIssueColumnTemplateAction, useIssueColumnTemplates } from "@agenteschat/client";
-import { Button, Dialog, DialogBody, DialogFooter, Input, Menu, MenuItem, Select } from "@agenteschat/ui";
+import type { BoardAlert, IssueColumn, IssueColumnTemplate, IssueStatus } from "@agenteschat/client";
+import {
+  useAgents,
+  useBoardAlertAction,
+  useBoardAlerts,
+  useIssueColumnAction,
+  useIssueColumnTemplateAction,
+  useIssueColumnTemplates,
+} from "@agenteschat/client";
+import { mayAsk } from "@agenteschat/client/lib/audience";
+import { errorText } from "@agenteschat/client/lib/errors";
+import { Button, Dialog, DialogBody, DialogFooter, Field, Input, Menu, MenuItem, Select } from "@agenteschat/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrg } from "@/components/org-context";
@@ -159,6 +168,131 @@ export function ColumnEditor({
   );
 }
 
+/** The "from" choice that names no column: a rule on any move into its destination. */
+const ANY_STATUS = "any";
+
+/**
+ * "Avisos" (ADR 0175 addendum): the board's rules, each "from a status to a status, alert this agent", and the form
+ * that adds one. A rule is a routine on `issue.moved`, so the list shows the ones people and agents made elsewhere too.
+ */
+function BoardAlerts({ projectId, columns }: { projectId: string; columns: IssueColumn[] }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const toast = useToast();
+  const alerts = useBoardAlerts(org.id, projectId).data ?? [];
+  const action = useBoardAlertAction(org.id, projectId);
+  const agents = (useAgents(org.id).data ?? []).filter((a) => mayAsk(org, a));
+  const [adding, setAdding] = useState(false);
+  const [to, setTo] = useState("");
+  const [from, setFrom] = useState(ANY_STATUS);
+  const [agentId, setAgentId] = useState("");
+  const nameOf = (id: string | null) => {
+    const c = columns.find((col) => col.id === id);
+    return c ? (c.name ?? t(`issues.status.${c.stage}`)) : t("issues.alerts.unknownStatus");
+  };
+  const failed = (e: unknown) => toast.show(errorText(t, e), "error");
+  const toId = to || columns[0]?.id || "";
+  const agent = agentId || agents[0]?.id || "";
+  const reason = (a: BoardAlert) =>
+    a.pausedReason === "agent_archived" ? t("issues.alerts.agentArchived") : t("issues.alerts.pausedOther");
+  return (
+    <section className="board-columns__stage board-alerts" aria-label={t("issues.alerts.title")}>
+      <h3>{t("issues.alerts.title")}</h3>
+      {alerts.length === 0 && !adding && <p className="board-columns__note">{t("issues.alerts.empty")}</p>}
+      {alerts.map((a) => (
+        <div key={a.id} className="board-columns__row board-alerts__row">
+          <p className="board-alerts__text">
+            <span>
+              {t("issues.alerts.row", {
+                from: a.fromColumnId ? nameOf(a.fromColumnId) : t("issues.alerts.any"),
+                to: nameOf(a.columnId),
+              })}
+            </span>
+            {" → "}
+            <strong>{a.agentName}</strong>
+            {a.paused && (
+              <span className="board-alerts__paused">{t("issues.alerts.paused", { reason: reason(a) })}</span>
+            )}
+          </p>
+          <Button
+            size="sm"
+            iconOnly
+            icon="trash"
+            aria-label={t("issues.alerts.remove")}
+            disabled={action.isPending}
+            onClick={() => action.mutate({ type: "remove", alertId: a.id }, { onError: failed })}
+          />
+        </div>
+      ))}
+      {adding ? (
+        <form
+          className="board-alerts__form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!toId || !agent) return;
+            action.mutate(
+              { type: "add", agentId: agent, columnId: toId, fromColumnId: from === ANY_STATUS ? null : from },
+              {
+                onSuccess: () => {
+                  setAdding(false);
+                  setTo("");
+                  setFrom(ANY_STATUS);
+                  setAgentId("");
+                },
+                onError: failed,
+              },
+            );
+          }}
+        >
+          <Field label={t("issues.alerts.to")} id="board-alert-to">
+            <Select
+              id="board-alert-to"
+              aria-label={t("issues.alerts.to")}
+              value={toId}
+              onValueChange={setTo}
+              options={columns.map((c) => ({ value: c.id, label: nameOf(c.id) }))}
+            />
+          </Field>
+          <Field label={t("issues.alerts.from")} id="board-alert-from">
+            <Select
+              id="board-alert-from"
+              aria-label={t("issues.alerts.from")}
+              value={from}
+              onValueChange={setFrom}
+              options={[
+                { value: ANY_STATUS, label: t("issues.alerts.any") },
+                ...columns.filter((c) => c.id !== toId).map((c) => ({ value: c.id, label: nameOf(c.id) })),
+              ]}
+            />
+          </Field>
+          <Field label={t("issues.alerts.agent")} id="board-alert-agent">
+            <Select
+              id="board-alert-agent"
+              aria-label={t("issues.alerts.agent")}
+              value={agent}
+              onValueChange={setAgentId}
+              placeholder={t("issues.alerts.agentPlaceholder")}
+              options={agents.map((a) => ({ value: a.id, label: a.name }))}
+            />
+          </Field>
+          <div className="board-alerts__actions">
+            <Button type="button" onClick={() => setAdding(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" variant="primary" disabled={!toId || !agent || action.isPending}>
+              {t("common.save")}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <Button size="sm" icon="plus" onClick={() => setAdding(true)} disabled={columns.length === 0}>
+          {t("issues.alerts.add")}
+        </Button>
+      )}
+    </section>
+  );
+}
+
 /**
  * "Colunas do board" (ADR 0179): every column of a board, in its stage, where a column is renamed, moved up or down
  * inside its stage, moved to another stage (its tasks follow), added and deleted — and where a template is applied to
@@ -208,6 +342,7 @@ export function BoardColumnsDialog({
           }}
         />
         {!projectId && <p className="board-columns__note">{t("issues.columns.workspaceNote")}</p>}
+        {projectId && <BoardAlerts projectId={projectId} columns={columns} />}
       </DialogBody>
       <DialogFooter>
         {projectId && (
