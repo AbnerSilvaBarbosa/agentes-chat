@@ -103,19 +103,25 @@ const AVATAR_PATH = /^\/api\/app\/avatars\/([^/]+)\/([0-9a-f]{16}\.(jpg|png|webp
 export const PORTRAIT_CODE = /^1(\.[A-Za-z0-9]{1,24}){1,48}$/;
 
 /**
- * An uploaded image (base64): JPEG, PNG or WebP up to 2 MB, checked by its
- * bytes, without metadata; named by a hash of its content.
+ * An uploaded image (base64): JPEG, PNG or WebP up to `maxBytes` (a photo's 2 MB unless the caller's mark needs
+ * less), checked by its bytes, without metadata; named by a hash of its content.
  */
-function readImage(input: { imageBase64: string; contentType: string }, code: "avatar" | "logo") {
+export function readImage(
+  input: { imageBase64: string; contentType: string },
+  code: "avatar" | "logo" | "space_image",
+  maxBytes: number = AVATAR_LIMITS.maxBytes,
+) {
   const clean = input.imageBase64.replace(/^data:[^;]+;base64,/, "").replace(/\s+/g, "");
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(clean)) throw new ValidationError("The image isn't base64", `${code}.not_base64`);
   const bytes = new Uint8Array(Buffer.from(clean, "base64"));
   if (bytes.length === 0) throw new ValidationError("The image is empty", `${code}.empty`);
-  if (bytes.length > AVATAR_LIMITS.maxBytes)
-    throw new ValidationError("The image can be up to 2 MB", `${code}.too_large`, { maxMb: 2 });
+  if (bytes.length > maxBytes) {
+    const maxMb = maxBytes / (1024 * 1024);
+    throw new ValidationError(`The image can be up to ${maxMb} MB`, `${code}.too_large`, { maxMb });
+  }
   const type = sniffImage(bytes);
   if (!type || !TYPES[input.contentType] || type !== input.contentType) {
-    throw new ValidationError("Use a JPEG, PNG or WebP image", `${code}.type`);
+    throw new ValidationError("Use a JPEG, PNG or WebP image", `${code}.type`, { maxMb: maxBytes / (1024 * 1024) });
   }
   const body = stripImageMetadata(bytes, type);
   const file = `${createHash("sha256").update(body).digest("hex").slice(0, 16)}.${TYPES[type]}`;

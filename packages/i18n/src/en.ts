@@ -13182,6 +13182,9 @@ export const en = {
     issue: {
       assigneeOutside: "This person can't see this task. Add them to who sees it first.",
       projectNameTaken: "This company already has a board with that name.",
+      spaceImageType: "Use a PNG, JPEG or WebP image, up to {{maxMb}} MB.",
+      spaceImageTooLarge: "The image is over {{maxMb}} MB. Use a PNG, JPEG or WebP image up to {{maxMb}} MB.",
+      spaceImageUnreadable: "We couldn't read that image. Use a PNG, JPEG or WebP image, up to 1 MB.",
       templateNameTaken: "There is already a set with that name.",
       templateNameInvalid: "A set's name is 1 to {{max}} characters.",
       templateEmpty: "A set needs at least one column.",

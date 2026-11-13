@@ -13215,6 +13215,9 @@ export const ptBR = {
     issue: {
       assigneeOutside: "Essa pessoa não vê esta tarefa. Inclua ela em Quem vê primeiro.",
       projectNameTaken: "Esta empresa já tem um board com esse nome.",
+      spaceImageType: "Use uma imagem PNG, JPEG ou WebP de até {{maxMb}} MB.",
+      spaceImageTooLarge: "A imagem passa de {{maxMb}} MB. Use uma imagem PNG, JPEG ou WebP de até {{maxMb}} MB.",
+      spaceImageUnreadable: "Não deu para ler essa imagem. Use uma imagem PNG, JPEG ou WebP de até 1 MB.",
       templateNameTaken: "Já existe um conjunto com esse nome.",
       templateNameInvalid: "O nome do conjunto tem de 1 a {{max}} caracteres.",
       templateEmpty: "Um conjunto precisa de pelo menos uma coluna.",

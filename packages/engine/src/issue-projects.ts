@@ -1,8 +1,10 @@
-import type { PubSub } from "@agenteschat/adapters";
+import type { BlobStore, PubSub } from "@agenteschat/adapters";
 import { and, asc, type Database, eq, inArray, isNull, schema, sql } from "@agenteschat/db";
+import { readImage } from "./avatars";
 import { ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "./errors";
 import { publishOrgEvent } from "./events";
-import { can, requireActiveMembership } from "./organizations";
+import { assertStorageRoom } from "./limits";
+import { can, getMembership, requireActiveMembership } from "./organizations";
 import { ROLE_COLORS } from "./permissions";
 import { taskSeenSql } from "./task-access";
 
@@ -17,11 +19,16 @@ export const SPACE_NAME_MAX = 80;
 /** How many companies one workspace groups its boards into. */
 export const SPACES_MAX = 100;
 
+/** A company's image holds at most this (1 MiB): a mark, smaller than a photo (ADR 0180). */
+export const SPACE_IMAGE_LIMITS = { maxBytes: 1024 * 1024 };
+
 /** A space (a company, a client) as the boards menu shows it. */
 export interface IssueSpaceRef {
   id: string;
   name: string;
   color: string;
+  /** The image's address (served to the workspace's members); null: the color shows. */
+  image: string | null;
   archived: boolean;
 }
 
@@ -56,10 +63,15 @@ export const projectRef = (p: ProjectRow): IssueProjectRef => ({
   spaceId: p.spaceId,
 });
 
+/** Where a company's image is served: `GET /api/app/organizations/{orgId}/issue-space-images/{file}`. */
+const spaceImageUrl = (orgId: string, file: string) =>
+  `/api/app/organizations/${encodeURIComponent(orgId)}/issue-space-images/${file}`;
+
 export const spaceRef = (s: SpaceRow): IssueSpaceRef => ({
   id: s.id,
   name: s.name,
   color: s.color,
+  image: s.image ? spaceImageUrl(s.orgId, s.image) : null,
   archived: s.archivedAt !== null,
 });
 
@@ -375,6 +387,106 @@ export async function deleteIssueSpace(deps: ProjectDeps, userId: string, orgId:
     .returning({ id: issueSpaces.id });
   if (gone.length === 0) throw new NotFoundError("Space not found");
   await announce(deps, orgId);
+}
+
+/**
+ * Sets a company's image (`PUT …/issue-spaces/{spaceId}/image`): JPEG, PNG or WebP up to 1 MiB, checked by its bytes
+ * and stripped of metadata as a photo is, so an unreadable file is refused before anything is stored and the old image
+ * stays. It goes to the platform bucket under the workspace's storage limits (ADR 0079), served to the workspace's
+ * members by `spaceImageFile`. The app crops it square (512×512) before sending.
+ */
+export async function setSpaceImage(
+  deps: ProjectDeps & { blobs: BlobStore },
+  userId: string,
+  orgId: string,
+  spaceId: string,
+  input: { imageBase64: string; contentType: string },
+): Promise<IssueSpaceRef> {
+  await requirePoster(deps.db, userId, orgId);
+  const [current] = await deps.db
+    .select()
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
+  if (!current) throw new NotFoundError("Space not found");
+  const { body, type, file } = readImage(input, "space_image", SPACE_IMAGE_LIMITS.maxBytes);
+  if (file !== current.image) {
+    await assertStorageRoom(deps.db, orgId, body.byteLength);
+    await deps.blobs.put(spaceImageKey(orgId, file), body, { contentType: type });
+  }
+  const [row] = await deps.db
+    .update(issueSpaces)
+    .set({ image: file })
+    .where(eq(issueSpaces.id, current.id))
+    .returning();
+  await removeStoredSpaceImage(deps, orgId, current.image, file);
+  await announce(deps, orgId);
+  return spaceRef(row ?? current);
+}
+
+/** Removes a company's image (`DELETE …/issue-spaces/{spaceId}/image`): the color shows again. */
+export async function clearSpaceImage(
+  deps: ProjectDeps & { blobs: BlobStore },
+  userId: string,
+  orgId: string,
+  spaceId: string,
+): Promise<IssueSpaceRef> {
+  await requirePoster(deps.db, userId, orgId);
+  const [current] = await deps.db
+    .select()
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
+  if (!current) throw new NotFoundError("Space not found");
+  if (current.image === null) return spaceRef(current);
+  const [row] = await deps.db
+    .update(issueSpaces)
+    .set({ image: null })
+    .where(eq(issueSpaces.id, current.id))
+    .returning();
+  await removeStoredSpaceImage(deps, orgId, current.image, null);
+  await announce(deps, orgId);
+  return spaceRef(row ?? current);
+}
+
+/**
+ * A company's stored image for `GET …/issue-space-images/{file}`: only for the workspace's members (a person of
+ * another workspace, or none, is told it isn't there).
+ */
+export async function spaceImageFile(
+  deps: { db: Database; blobs: BlobStore },
+  viewerId: string,
+  orgId: string,
+  file: string,
+) {
+  if (!/^[0-9a-f]{16}\.(jpg|png|webp)$/.test(file)) throw new NotFoundError("Not found");
+  if (!(await getMembership(deps.db, viewerId, orgId))) throw new NotFoundError("Not found");
+  const [using] = await deps.db
+    .select({ id: issueSpaces.id })
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.orgId, orgId), eq(issueSpaces.image, file)))
+    .limit(1);
+  if (!using) throw new NotFoundError("Not found");
+  const object = await deps.blobs.get(spaceImageKey(orgId, file));
+  if (!object) throw new NotFoundError("Not found");
+  return object;
+}
+
+const spaceImageKey = (orgId: string, file: string) => `issue-space-images/${orgId}/${file}`;
+
+/** The replaced image's file goes, unless another company of the workspace holds the same picture. */
+async function removeStoredSpaceImage(
+  deps: { db: Database; blobs: BlobStore },
+  orgId: string,
+  old: string | null,
+  keep: string | null,
+) {
+  if (!old || old === keep) return;
+  const [shared] = await deps.db
+    .select({ id: issueSpaces.id })
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.orgId, orgId), eq(issueSpaces.image, old)))
+    .limit(1);
+  if (shared) return;
+  await deps.blobs.delete(spaceImageKey(orgId, old)).catch(() => undefined);
 }
 
 /** A project of the org a task may take: an archived one takes no new tasks. */
