@@ -107,6 +107,54 @@ describe("an archived company", () => {
   });
 });
 
+describe("the header and the N shortcut by who may post", () => {
+  const pressN = async () => {
+    await act(async () => fireEvent.keyDown(window, { key: "n" }));
+    await settle(3);
+  };
+  /** The same workspace, seen by a member who may read but not create tasks. */
+  const readOnly = async () => {
+    const state = seedState();
+    const org = state.me?.organizations[0];
+    if (org) {
+      org.role = "member";
+      org.permissions = ["read"];
+    }
+    const api = createFakeApi(state);
+    const clinic = await api.issues.createSpace(ORG_ID, { name: "Clínica Teo", color: "teal" });
+    const site = await api.issues.createProject(ORG_ID, { name: "Site novo", color: "amber", spaceId: clinic.id });
+    await api.issues.create(ORG_ID, { title: "Revisar a home", projectId: site.id });
+    return { api, clinic, site };
+  };
+
+  test("the N shortcut makes a task in a board and in all tasks", async () => {
+    const { api, site } = await setup();
+    await visit(api, `?project=${site.id}`);
+    await pressN();
+    expect(screen().getByRole("dialog", { name: "Nova tarefa" })).toBeTruthy();
+    cleanup();
+    await visit(api, "?all=1");
+    await pressN();
+    expect(screen().getByRole("dialog", { name: "Nova tarefa" })).toBeTruthy();
+  });
+
+  test("a member without permission to create tasks is offered no Nova empresa, Novo board or N", async () => {
+    const { api, clinic, site } = await readOnly();
+    await visit(api, "");
+    expect(headerActions()).toEqual([]);
+    expect(anywhere("Nova empresa")).toHaveLength(0);
+    cleanup();
+    await visit(api, `?space=${clinic.id}`);
+    expect(headerActions()).toEqual([]);
+    expect(anywhere("Novo board")).toHaveLength(0);
+    cleanup();
+    await visit(api, `?project=${site.id}`);
+    expect(anywhere("Nova tarefa")).toHaveLength(0);
+    await pressN();
+    expect(screen().queryByRole("dialog", { name: "Nova tarefa" })).toBeNull();
+  });
+});
+
 /** The toolbar's select triggers, by their words. */
 const triggers = () =>
   [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger")].map((t) => t.textContent ?? "");
