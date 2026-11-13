@@ -2,6 +2,7 @@ import {
   applyColumnTemplate,
   askAgentToImplement,
   commentIssue,
+  createColumnTemplate,
   createIssue,
   createIssueColumn,
   createIssueProject,
@@ -26,6 +27,7 @@ import {
   saveColumnTemplate,
   setCriterion,
   setIssueAudience,
+  updateColumnTemplate,
   updateIssue,
   updateIssueColumn,
   updateIssueProject,
@@ -219,6 +221,7 @@ const ColumnTemplate = z
     seeded: z.boolean().openapi({ description: "One of the two the workspace started with, which it may not delete." }),
   })
   .openapi("IssueColumnTemplate");
+const TemplateColumn = z.object({ name: z.string().max(200), stage: Status });
 const ColumnParams = OrgParams.extend({ columnId: z.uuid() });
 
 /** Native issues: numbers per org, acceptance criteria, activity, "ask an agent to implement". */
@@ -531,13 +534,17 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-column-templates",
       tags,
       security,
-      summary: "Save a board's columns (or the workspace's) as a template",
-      description: "`issue_template.name_taken`: another template has that name.",
+      summary: "Make a status set from its columns, or save a board's columns (or the workspace's) as one",
+      description:
+        "With `columns`: a new set with those. Without: a copy of `projectId`'s columns. `issue_template.name_taken`: another set has that name. `issue_template.name_invalid`: the name is 1 to 40 characters. `issue_template.empty`: a set needs a column.",
       request: {
         params: OrgParams,
         body: body(
           z.object({
             name: z.string().min(1).max(60),
+            columns: z.array(TemplateColumn).max(50).optional().openapi({
+              description: "The set's columns, in order. Left out: the board's are copied.",
+            }),
             projectId: z
               .uuid()
               .nullable()
@@ -550,7 +557,37 @@ export function issueRoutes(deps: AppDeps) {
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      return c.json(await saveColumnTemplate(issues, c.get("user").id, orgId, c.req.valid("json")), 201);
+      const { name, columns, projectId } = c.req.valid("json");
+      const userId = c.get("user").id;
+      const made = columns
+        ? await createColumnTemplate(issues, userId, orgId, { name, columns })
+        : await saveColumnTemplate(issues, userId, orgId, { name, projectId });
+      return c.json(made, 201);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "put",
+      path: "/organizations/{orgId}/issue-column-templates/{templateId}",
+      tags,
+      security,
+      summary: "Rename a status set and/or replace its columns; boards made from it keep their own",
+      description:
+        "`issue_template.name_taken`, `issue_template.name_invalid` (1 to 40 characters), `issue_template.empty` (a set needs a column).",
+      request: {
+        params: OrgParams.extend({ templateId: z.uuid() }),
+        body: body(
+          z.object({ name: z.string().max(200).optional(), columns: z.array(TemplateColumn).max(50).optional() }),
+        ),
+      },
+      responses: { 200: json(z.object({ templates: z.array(ColumnTemplate) })), ...errors },
+    }),
+    async (c) => {
+      const { orgId, templateId } = c.req.valid("param");
+      const userId = c.get("user").id;
+      await updateColumnTemplate(issues, userId, orgId, templateId, c.req.valid("json"));
+      return c.json({ templates: await listColumnTemplates(db, userId, orgId) }, 200);
     },
   );
 
