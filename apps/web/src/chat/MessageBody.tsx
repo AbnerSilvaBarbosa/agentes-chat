@@ -1,6 +1,7 @@
 import { isEveryoneWord } from "@agenteschat/client/lib/everyone";
 import { type AgentColor, Mention } from "@agenteschat/ui";
 import { type ReactNode, useCallback } from "react";
+import { renderCardRef } from "@/chat/CardRef";
 import { ChannelRef } from "@/chat/ChannelRef";
 import { renderIdRef } from "@/chat/IdRef";
 import { ChartAccent, ChartMessage } from "@/components/ChartBlock";
@@ -9,7 +10,7 @@ import { type ChannelRenderer, Markdown, type WikiLinkRenderer } from "@/lib/mar
 /**
  * Renders a message body as safe Markdown (bold, italic, `code`, ```blocks```,
  * lists, links, line breaks) with @mentions of the workspace's people (neutral) and agents (in their tone), #channel
- * links and an internal id as the pill of what it names (`IdRef`).
+ * links, `#128` as the card it names (`CardRef`) and an internal id as the pill of what it names (`IdRef`).
  * React elements only: HTML in a message is shown as text.
  */
 export function MessageBody({
@@ -68,6 +69,7 @@ export function MessageBody({
           channel={channel}
           wikiLink={wikiLink}
           idRef={renderIdRef}
+          card={renderCardRef}
           className={className}
         />
       </ChartMessage.Provider>

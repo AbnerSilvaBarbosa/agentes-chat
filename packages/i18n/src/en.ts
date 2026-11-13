@@ -3876,6 +3876,10 @@ export const en = {
     added: "{{name}} joined the channel.",
     askAdmin: "Ask an admin to add them.",
   },
+  /** `#128` in a message: a card's chip and its place in the "#" list (ADR 0183). */
+  cardRefs: {
+    label: "Task #{{number}}: {{title}} ({{status}})",
+  },
   channelRefs: {
     list: "Channels",
     label: "Channel #{{name}}",

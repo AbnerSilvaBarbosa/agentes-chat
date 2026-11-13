@@ -1,3 +1,4 @@
+import { splitCardRefs } from "@agenteschat/client/lib/card-refs";
 import { splitChannelRefs } from "@agenteschat/client/lib/channel-refs";
 import { loneIdRef, splitIdRefs } from "@agenteschat/client/lib/id-refs";
 import { linkPill } from "@agenteschat/client/lib/link-pills";
@@ -32,6 +33,8 @@ export * from "@agenteschat/client/lib/markdown";
 export type MentionRenderer = (handle: string, key: string) => ReactNode;
 /** `#name` (lower case): a channel link, or the text as written (`#Name`) when it means no channel. */
 export type ChannelRenderer = (name: string, text: string, key: string) => ReactNode;
+/** `#128`: the card of that number as a chip, or the text as written (`#128`) when it names no card the reader sees. */
+export type CardRenderer = (number: number, text: string, key: string) => ReactNode;
 /** `[[Título]]` or `[[Título|texto]]`: how a wiki link shows (a chip, a dashed missing link…). */
 export type WikiLinkRenderer = (title: string, label: string, key: string) => ReactNode;
 /** `![[foto.png]]`: how an embed shows (`block` alone on its line, else inside a sentence). */
@@ -42,27 +45,37 @@ export type EmbedRenderer = (target: string, key: string, block: boolean) => Rea
  */
 export type IdRenderer = (id: string, text: string, key: string, shown?: ReactNode) => ReactNode;
 
-/** Internal ids first (`idRef`), then `#channel` references, then @mentions. */
+/** Internal ids first (`idRef`), then `#channel` references, then `#128` cards (`card`), then @mentions. */
 function withRefs(
   text: string,
   key: string,
   mention?: MentionRenderer,
   channel?: ChannelRenderer,
   idRef?: IdRenderer,
+  card?: CardRenderer,
 ): ReactNode[] {
   const parts = idRef ? splitIdRefs(text) : [];
   if (idRef && parts.some((p) => p.id !== undefined)) {
     return parts.flatMap((part, i) =>
       part.id === undefined
-        ? withRefs(part.text, `${key}-x${i}`, mention, channel)
+        ? withRefs(part.text, `${key}-x${i}`, mention, channel, undefined, card)
         : [idRef(part.id, part.text, `${key}-id${i}`)],
     );
   }
-  if (!channel) return withMentions(text, key, mention);
+  if (!channel) return withCards(text, key, mention, card);
   return splitChannelRefs(text).flatMap((part, i) =>
     part.name === undefined
-      ? withMentions(part.text, `${key}-c${i}`, mention)
+      ? withCards(part.text, `${key}-c${i}`, mention, card)
       : [channel(part.name, part.text, `${key}-ch${i}`)],
+  );
+}
+
+function withCards(text: string, key: string, mention?: MentionRenderer, card?: CardRenderer): ReactNode[] {
+  if (!card) return withMentions(text, key, mention);
+  return splitCardRefs(text).flatMap((part, i) =>
+    part.number === undefined
+      ? withMentions(part.text, `${key}-n${i}`, mention)
+      : [card(part.number, part.text, `${key}-cd${i}`)],
   );
 }
 
@@ -110,15 +123,16 @@ export function renderInline(
   /** Bare addresses as pills. Off in a link's words. */
   pills = true,
   idRef?: IdRenderer,
+  card?: CardRenderer,
 ): ReactNode[] {
   const out: ReactNode[] = [];
   let rest = text;
   let n = 0;
-  const inner = (t: string, k: string) => renderInline(t, k, mention, wiki, embed, channel, pills, idRef);
+  const inner = (t: string, k: string) => renderInline(t, k, mention, wiki, embed, channel, pills, idRef, card);
   while (rest) {
     const m = rest.match(INLINE);
     if (!m || m.index === undefined) {
-      out.push(...withRefs(rest, `${key}-t${n}`, mention, channel, idRef));
+      out.push(...withRefs(rest, `${key}-t${n}`, mention, channel, idRef, card));
       break;
     }
     const tok = m[0];
@@ -129,7 +143,7 @@ export function renderInline(
     // `![[…]]` inside a sentence: the "!" belongs to the embed.
     const isEmbed = Boolean(m[6] && embed && m.index > 0 && rest[m.index - 1] === "!");
     const before = rest.slice(0, isEmbed ? m.index - 1 : m.index);
-    if (before) out.push(...withRefs(before, textKey, mention, channel, idRef));
+    if (before) out.push(...withRefs(before, textKey, mention, channel, idRef, card));
     if (isEmbed && embed) {
       out.push(embed(parseWikiToken(tok).title, k, false));
       rest = rest.slice(m.index + tok.length);
@@ -209,6 +223,8 @@ export interface MarkdownProps {
   embed?: EmbedRenderer;
   /** Internal ids in the words (what agents write: chat, tasks, the wiki); without it they stay text. */
   idRef?: IdRenderer;
+  /** `#128` in the words (chat): the card as a chip; without it they stay text. */
+  card?: CardRenderer;
   /** Skip a leading `# Title` equal to this (the page shows the title itself). */
   title?: string;
   /** The first lines of a page (a link's hover card): its ```mermaid blocks stay code, the cut may have split one. */
@@ -237,6 +253,7 @@ export function Markdown({
   wikiLink,
   embed,
   idRef,
+  card,
   title,
   excerpt,
   className,
@@ -244,7 +261,7 @@ export function Markdown({
 }: MarkdownProps) {
   const message = variant === "message";
   const inline = (text: string, k: string) =>
-    renderInline(text, k, mention, wikiLink, embed, channel, undefined, idRef);
+    renderInline(text, k, mention, wikiLink, embed, channel, undefined, idRef, card);
   // Parsed once per source (a streaming row re-renders every reveal frame); never mutated.
   const all = useMemo(() => parseMarkdown(source, { breaks: message, details: true }), [source, message]);
   const [first] = all;
@@ -332,6 +349,7 @@ export function Markdown({
               wikiLink={wikiLink}
               embed={embed}
               idRef={idRef}
+              card={card}
               excerpt={excerpt}
               bare
             />

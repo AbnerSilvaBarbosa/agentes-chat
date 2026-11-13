@@ -3791,6 +3791,9 @@ export const ptBR = {
     added: "{{name}} entrou no canal.",
     askAdmin: "Peça a um admin para adicionar.",
   },
+  cardRefs: {
+    label: "Tarefa #{{number}}: {{title}} ({{status}})",
+  },
   channelRefs: {
     list: "Canais",
     label: "Canal #{{name}}",
