@@ -28,6 +28,7 @@ the tasks of the company's boards (archived boards included), behind
 `GET /organizations/{orgId}/issue-spaces/{spaceId}/dashboard?days=` (a `days` other than 7, 30 or 90 is 30; a space of
 another workspace is 404). It returns the stage counts, the assignees, lead and work time, deliveries per week, late and
 unassigned, the cost and `total` (every task of the company the viewer sees, canceled left out: 0 is the empty company).
+A company whose tasks are all canceled, or all hidden from the viewer, has a `total` of 0 and shows the empty state.
 Every number counts only the tasks the viewer may see (`taskSeenSql`, ADR 0151), so a count never leaks a task they
 cannot open. Canceled tasks are in no count.
 
@@ -46,7 +47,11 @@ cannot open. Canceled tasks are in no count.
   a week with no delivery kept as zero.
 - **Late**: open and due before today in the workspace's time zone. **Unassigned**: open with no assignee. Neither depends
   on the period.
-- An assignee that no longer exists is `removed`, with its counts.
+- An assignee that no longer exists is `removed`, with its counts: an agent that is gone, or a person who is no longer a
+  member of the workspace (the task keeps the id, the name is not shown). An assignee with nothing open and nothing
+  concluded in the period has no row.
+- The period is `now` minus 7, 30 or 90 days to the millisecond: a conclusion or a run exactly that old counts, one
+  millisecond older does not. Archived boards and archived companies are counted like any other.
 
 ### 4. The cost is a permission, not a style
 
@@ -60,11 +65,14 @@ runs of a canceled task still count: the money was spent.
 The screen (`apps/web/src/pages/CompanyDashboard.tsx`) uses `WidgetCard` for the numbers and the weekly bars and the
 same card frame for the lists that hold a face or a time, so there is no new chart code. `WidgetBody` takes a `maxBars`
 (12 unless a caller says more) because 90 days touch up to 14 weeks and each keeps its bar. Times read "2d 4h", "5h"
-under a day and "—" for none (`formatSpan`, `packages/client/src/lib/span.ts`).
+under a day, "<1h" under an hour, "2d" with no hours left over, and "—" for none (`formatSpan`,
+`packages/client/src/lib/span.ts`). Each company's Painel is its own component instance (`key`), so another company's
+numbers never show while it loads.
 
 ## Consequences
 
 - No migration: the read uses rows and indexes that exist (`issue_activity (issue_id, created_at)`,
-  `agent_runs (issue_id, created_at)`). A test seeds 1,000 tasks and holds the read under one second.
+  `agent_runs (issue_id, created_at)`). A test seeds 1,000 tasks and holds the read under one second; that bound is wall clock on in-memory PGlite, which
+  proves the shape of the query, not the production time.
 - Not in this change: a Painel on each board, pinning a number to the Painéis, opening the tasks behind a number,
   export, and the phone and desktop shell.
