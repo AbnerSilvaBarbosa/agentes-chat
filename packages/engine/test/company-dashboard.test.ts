@@ -407,3 +407,174 @@ describe("companyDashboard weeks, late and unassigned", () => {
     }
   });
 });
+
+describe("companyDashboard cost", () => {
+  /** A run of `agentId` on `issueId`, started `daysAgo`, with usage rows costing `usd` each. */
+  async function run(issueId: string | null, agentId: string, daysAgo: number, ...usd: number[]) {
+    const gone = crypto.randomUUID();
+    const [r] = await f.db
+      .insert(schema.agentRuns)
+      .values({
+        orgId: f.org.id,
+        agentId,
+        channelId: f.general.id,
+        threadRootId: gone,
+        triggerMessageId: gone,
+        trigger: "mention",
+        hop: 1,
+        issueId,
+        createdAt: ago(daysAgo),
+      })
+      .returning();
+    for (const n of usd) {
+      await f.db.insert(schema.usageRecords).values({
+        orgId: f.org.id,
+        agentId,
+        runId: r?.id,
+        provider: "anthropic",
+        model: "claude-sonnet-5-5",
+        requestedModel: "claude-sonnet-5-5",
+        inputTokens: 1,
+        outputTokens: 1,
+        costNanoUsd: n * 1e9,
+        createdAt: ago(daysAgo),
+      });
+    }
+  }
+
+  test("sums the cost of the runs tied to the company's tasks", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const other = await f.db
+      .insert(schema.agents)
+      .values({ orgId: f.org.id, name: "Bruno", handle: "bruno", instructions: "x", model: "claude-sonnet-5-5" })
+      .returning();
+    const a = await task({ status: "in_progress" });
+    const b = await task({ status: "todo" });
+    await run(a.id, f.agent.id, 2, 1.5, 0.5);
+    await run(b.id, f.agent.id, 3, 1);
+    await run(a.id, other[0]?.id as string, 1, 5);
+    // Not tied to a task of the company, or to no task.
+    await run(null, f.agent.id, 1, 100);
+    const d = await read();
+    expect(d.cost?.totalUsd).toBeCloseTo(8, 6);
+    expect(d.cost?.byAgent.map((x) => [x.name, x.usd])).toEqual([
+      ["Bruno", 5],
+      [f.agent.name, 3],
+    ]);
+  });
+
+  test("counts a run in the period it started in", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const a = await task({ status: "in_progress" });
+    await run(a.id, f.agent.id, 3, 2);
+    await run(a.id, f.agent.id, 20, 7);
+    expect((await read(7)).cost?.totalUsd).toBe(2);
+    expect((await read(30)).cost?.totalUsd).toBe(9);
+  });
+
+  test("gives zero with no run", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({ status: "todo" });
+    expect((await read()).cost).toEqual({ totalUsd: 0, byAgent: [] });
+  });
+
+  test("gives no cost to a member who may not view usage", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    const a = await task({ status: "in_progress" });
+    await run(a.id, f.agent.id, 1, 4);
+    expect((await read(30, member.id)).cost).toBeNull();
+    expect((await read(30, f.owner.id)).cost?.totalUsd).toBe(4);
+  });
+});
+
+describe("companyDashboard size", () => {
+  test("computes 1000 tasks in under a second", async () => {
+    f = await setup();
+    const { board, spaceId } = await scene();
+    const statuses = ["todo", "in_progress", "in_review", "done", "done"] as const;
+    const tasks = Array.from({ length: 1000 }, (_, i) => ({
+      id: crypto.randomUUID(),
+      orgId: f.org.id,
+      number: 100_000 + i,
+      title: `Bulk ${i}`,
+      status: statuses[i % statuses.length] as (typeof statuses)[number],
+      projectId: board?.id,
+      assigneeType: i % 3 === 0 ? null : "agent",
+      assigneeId: i % 3 === 0 ? null : f.agent.id,
+      dueDate: i % 7 === 0 ? "2026-10-01" : null,
+      createdByType: "person",
+      createdById: f.owner.id,
+      createdAt: ago(60 + (i % 20)),
+    }));
+    await f.db.insert(schema.issues).values(tasks);
+    const events = tasks.flatMap((t, i) => [
+      {
+        orgId: f.org.id,
+        issueId: t.id,
+        kind: "event",
+        authorType: "person",
+        authorId: f.owner.id,
+        text: "start",
+        event: "status_changed",
+        data: { to: "in_progress" },
+        createdAt: ago(40 - (i % 20)),
+      },
+      ...(t.status === "done"
+        ? [
+            {
+              orgId: f.org.id,
+              issueId: t.id,
+              kind: "event",
+              authorType: "person",
+              authorId: f.owner.id,
+              text: "done",
+              event: "status_changed",
+              data: { to: "done" },
+              createdAt: ago(i % 25),
+            },
+          ]
+        : []),
+    ]);
+    await f.db.insert(schema.issueActivity).values(events);
+    const runs = tasks.slice(0, 300).map((t) => ({
+      id: crypto.randomUUID(),
+      status: "done" as const,
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      channelId: f.general.id,
+      threadRootId: t.id,
+      triggerMessageId: t.id,
+      trigger: "mention" as const,
+      hop: 1,
+      issueId: t.id,
+      createdAt: ago(5),
+    }));
+    await f.db.insert(schema.agentRuns).values(runs);
+    await f.db.insert(schema.usageRecords).values(
+      runs.map((r) => ({
+        orgId: f.org.id,
+        agentId: f.agent.id,
+        runId: r.id,
+        provider: "anthropic",
+        model: "claude-sonnet-5-5",
+        requestedModel: "claude-sonnet-5-5",
+        inputTokens: 1,
+        outputTokens: 1,
+        costNanoUsd: 1_000_000,
+        createdAt: ago(5),
+      })),
+    );
+    await companyDashboard(f.db, f.owner.id, f.org.id, spaceId, 30, NOW); // warm the plan
+    const started = performance.now();
+    const d = await companyDashboard(f.db, f.owner.id, f.org.id, spaceId, 90, NOW);
+    const took = performance.now() - started;
+    expect(d.stages.todo + d.stages.in_progress + d.stages.in_review).toBe(600);
+    expect(d.cost?.byAgent).toHaveLength(1);
+    expect(took).toBeLessThan(1000);
+  });
+});

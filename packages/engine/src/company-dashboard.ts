@@ -1,7 +1,9 @@
 import { type Database, eq, rowsOf, type SQL, schema, sql } from "@agenteschat/db";
+import { nanoUsdToUsd } from "@agenteschat/providers";
 import { NotFoundError } from "./errors";
 import { requireActiveMembership } from "./organizations";
 import { taskSeenSql } from "./task-access";
+import { canViewCost } from "./usage";
 
 /**
  * A company's Painel (ADR 0182): the numbers of the tasks on its boards, for one viewer and one period. Read when the
@@ -33,6 +35,11 @@ export interface CompanyDashboard {
   weekly: { weekStart: string; count: number }[];
   /** Open tasks due before today (the workspace's time zone), whatever the period. */
   late: number;
+  /**
+   * What the agents' runs tied to the company's tasks cost, those started in the period. Null for a member who may not
+   * view usage: it is never computed for them, so it is absent from what they are sent.
+   */
+  cost: { totalUsd: number; byAgent: { agentId: string; name: string; usd: number }[] } | null;
 }
 
 /** How long tasks took: how many were measured, the median and the average in milliseconds (null: none). */
@@ -105,6 +112,7 @@ export async function companyDashboard(
   now: Date = new Date(),
 ): Promise<CompanyDashboard> {
   await requireActiveMembership(db, userId, orgId);
+  const mayViewCost = await canViewCost(db, userId, orgId);
   const period = normalizeDays(days);
   const [space] = rowsOf<{ id: string }>(
     await db.execute(sql`select id from ${schema.issueSpaces} where id = ${spaceId}::uuid and org_id = ${orgId}::uuid`),
@@ -119,7 +127,7 @@ export async function companyDashboard(
     rowsOf<T>(await db.execute(sql`with ${visibleTasks(userId, orgId, spaceId)}, ${CONCLUDED} ${select}`));
   const doneInPeriod = sql`done_at >= ${since}::timestamptz`;
 
-  const [[stages], people, [times], weeks, [bounds]] = await Promise.all([
+  const [[stages], people, [times], weeks, [bounds], runs] = await Promise.all([
     over<{
       todo: number;
       in_progress: number;
@@ -174,6 +182,20 @@ export async function companyDashboard(
       await db.execute(sql`select (${since}::timestamptz at time zone ${tz})::date::text as first,
         (${nowAt}::timestamptz at time zone ${tz})::date::text as today`),
     ),
+    // Only for who may view usage: the rows are not even read for anyone else.
+    mayViewCost
+      ? db
+          .execute(
+            sql`with ${visibleTasks(userId, orgId, spaceId)}
+        select ar.agent_id::text as agent_id, ag.name, coalesce(sum(ur.cost_nano_usd), 0)::float8 as nano
+        from ${schema.agentRuns} ar join vis on vis.id = ar.issue_id
+        left join ${schema.agents} ag on ag.id = ar.agent_id and ag.org_id = ar.org_id
+        left join ${schema.usageRecords} ur on ur.run_id = ar.id
+        where ar.org_id = ${orgId}::uuid and ar.created_at >= ${since}::timestamptz
+        group by ar.agent_id, ag.name`,
+          )
+          .then((r) => rowsOf<{ agent_id: string; name: string | null; nano: number }>(r))
+      : Promise.resolve(null),
   ]);
   const { unassigned = 0, late = 0, ...counts } = stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 };
   const assignees = people
@@ -207,5 +229,13 @@ export async function companyDashboard(
     workTime: span(times?.work_count, times?.work_median, times?.work_average),
     weekly,
     late,
+    cost: runs
+      ? {
+          totalUsd: nanoUsdToUsd(runs.reduce((n, r) => n + r.nano, 0)),
+          byAgent: runs
+            .map((r) => ({ agentId: r.agent_id, name: r.name ?? "", usd: nanoUsdToUsd(r.nano) }))
+            .sort((a, b) => b.usd - a.usd || a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+        }
+      : null,
   };
 }
