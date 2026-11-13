@@ -231,4 +231,14 @@ describe("Minhas tarefas: the controls", () => {
     expect(screen().queryByRole("button", { name: "Nova tarefa" })).toBeNull();
     expect(headerActions()).toEqual([]);
   });
+
+  test("a search with no hit says so instead of drawing nothing", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await visit(s);
+    await type(screen().getByRole("searchbox", { name: "Buscar tarefas" }), "zzzz");
+    await settle(8);
+    expect(titles()).toEqual([]);
+    expect(document.querySelector(".ac-empty")?.textContent).toBe("Nenhuma tarefa com esses filtros.");
+  });
 });

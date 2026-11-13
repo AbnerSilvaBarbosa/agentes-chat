@@ -50,3 +50,5 @@ to create tasks, as everywhere in Tarefas.
 - Tasks assigned to the member's agents, or created by them, are not here: only "assigned to me" was asked.
 - Not in this change: a count on the sidebar row (what waits on the person already has one in "Esperando você"), a
   block on Início, the phone and the desktop shell.
+
+- The member's list leaves canceled tasks out on the server, before the list's cap of 200, so done and canceled ones cannot spend it.

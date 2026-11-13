@@ -256,7 +256,7 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const noIssues = !mine && issues.isSuccess && all.length === 0 && !search && !projectParam;
   const emptyProject = !mine && issues.isSuccess && all.length === 0 && !search && Boolean(projectParam);
   // Nothing is with the member: the empty page, or a filter (a company, a board) that leaves none.
-  const nothingMine = mine && issues.isSuccess && all.length === 0 && !search;
+  const nothingMine = mine && issues.isSuccess && all.length === 0;
   const mineFiltered = Boolean(projectParam || spaceParam);
   const meAsActor: Actor = { type: "person", id: me.user.id };
   // A new task on a project's board starts in it. An archived project takes none, so its board offers none.
@@ -571,7 +571,7 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                 {t(posts ? "issues.empty" : "issues.emptyViewer")}
               </EmptyState>
             )}
-            {readsTasks && nothingMine && !mineFiltered && (
+            {readsTasks && nothingMine && !mineFiltered && !search && (
               <EmptyState
                 size="page"
                 agent={look}
@@ -591,7 +591,9 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                 {t("issues.mine.empty")}
               </EmptyState>
             )}
-            {readsTasks && nothingMine && mineFiltered && <EmptyState size="panel">{t("issues.noResults")}</EmptyState>}
+            {readsTasks && nothingMine && (mineFiltered || Boolean(search)) && (
+              <EmptyState size="panel">{t("issues.noResults")}</EmptyState>
+            )}
             {readsTasks && emptyProject && (
               <EmptyState
                 size="panel"
