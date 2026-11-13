@@ -93,7 +93,7 @@ describe("the path above a company's page and a board", () => {
   });
 
   test("a company's image shows on the card, the path and the picker", async () => {
-    const { api, clinic } = await setup();
+    const { api, clinic, site } = await setup();
     const withImage = await api.issues.setSpaceImage(ORG_ID, clinic.id, { imageBase64: PNG, contentType: "image/png" });
     const src = withImage.image as string;
     expect(src).toContain(`/organizations/${ORG_ID}/issue-space-images/`);
@@ -108,6 +108,10 @@ describe("the path above a company's page and a board", () => {
 
     // The path on the company's page and inside its board.
     await visit(api, `?space=${clinic.id}`);
+    expect(path().querySelector(`.space-mark > img[src="${src}"]`)).toBeTruthy();
+    cleanup();
+    await visit(api, `?project=${site.id}`);
+    expect(segments()).toEqual(["Tarefas", "Clínica Teo", "Site novo"]);
     expect(path().querySelector(`.space-mark > img[src="${src}"]`)).toBeTruthy();
     cleanup();
     await visit(api, `?all=1`);
