@@ -1897,32 +1897,33 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
   color: var(--muted);
 }
 
-/* Uma empresa e os boards dela (ADR 0179): cartões numa grade, cada um com o seu próprio menu. */
+/* Uma empresa e os boards dela (ADR 0179): cartões numa grade, cada um com o seu próprio menu. A página já dá o topo e
+   o lado (`--page-top`, `--page-x`): a grade começa onde o título começa, sem sala própria. */
 .space-boards {
-  padding: 18px 20px 32px;
-  overflow: auto;
+  padding: 0 0 var(--space-8);
 }
 .space-boards__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
-  gap: 12px;
-  max-width: 1180px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 228px), 1fr));
+  gap: var(--space-3);
 }
 .space-boards__empty {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-3);
   max-width: 460px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 .space-board-wrap {
   position: relative;
+  min-width: 0;
 }
 .space-board-wrap > .ac-button {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: var(--action-clear);
+  right: var(--action-clear);
   opacity: 0;
 }
 .space-board-wrap:hover > .ac-button,
@@ -1933,11 +1934,12 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 14px 14px 12px;
+  min-width: 0;
+  padding: var(--space-4);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--raised);
   color: var(--ink);
   text-align: left;
@@ -1949,17 +1951,19 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
 .space-board--new {
   align-items: center;
   justify-content: center;
-  min-height: 92px;
+  min-height: calc(var(--control-h-lg) * 2);
   color: var(--muted);
   border-style: dashed;
 }
 .space-board__name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-weight: 600;
   font-size: 15px;
-  padding-right: 24px;
+  padding-right: var(--space-6);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 /* A company's image (ADR 0180) takes the dot's box; on a card the mark is a face's size, in a row the icon's. */
 .space-board__name .space-mark {
@@ -2020,7 +2024,7 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
 }
 .board-columns__moves {
   display: flex;
-  gap: 2px;
+  gap: var(--space-2);
   flex: none;
 }
 .board-columns__note {
