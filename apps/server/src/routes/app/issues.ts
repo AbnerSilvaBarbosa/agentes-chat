@@ -550,7 +550,7 @@ export function issueRoutes(deps: AppDeps) {
         params: OrgParams,
         body: body(
           z.object({
-            name: z.string().min(1).max(60),
+            name: z.string().min(1).max(200),
             columns: z.array(TemplateColumn).max(50).optional().openapi({
               description: "The set's columns, in order. Left out: the board's are copied.",
             }),

@@ -107,3 +107,25 @@ test("status sets API: a member who may not create tasks is forbidden", async ()
   // Reading stays open to them.
   expect((await member(base)).status).toBe(200);
 });
+
+test("status sets API: a name over 40 characters answers the engine's code at any length the body allows", async () => {
+  const owner = browser(t);
+  await signUp(owner, "owner@example.com");
+  const { orgId } = await seedOrg(owner);
+  const base = `/api/app/organizations/${orgId}/issue-column-templates`;
+  const lead = [{ name: "Lead", stage: "todo" }];
+  const made = (await (await owner(base, { json: { name: "Vendas", columns: lead } })).json()) as Set;
+
+  for (const length of [41, 61, 200]) {
+    const name = "n".repeat(length);
+    const created = await owner(base, { json: { name, columns: lead } });
+    expect(created.status).toBe(400);
+    expect(await created.json()).toMatchObject({ error: { code: "issue_template.name_invalid" } });
+    const renamed = await owner(`${base}/${made.id}`, { method: "PUT", json: { name } });
+    expect(renamed.status).toBe(400);
+    expect(await renamed.json()).toMatchObject({ error: { code: "issue_template.name_invalid" } });
+  }
+  // Past the body's own cap it is a validation error, never a stored set.
+  const huge = await owner(base, { json: { name: "n".repeat(201), columns: lead } });
+  expect(huge.status).toBe(400);
+});
