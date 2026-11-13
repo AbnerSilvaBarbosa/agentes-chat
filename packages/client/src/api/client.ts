@@ -1364,6 +1364,14 @@ export interface ApiClient {
     ): Promise<IssueSpaceRef>;
     /** Its boards stay, with no space. */
     deleteSpace(orgId: string, spaceId: string): Promise<void>;
+    /** A company's image (PNG, JPEG or WebP up to 1 MiB, already cropped square by the app); the answer carries its address. */
+    setSpaceImage(
+      orgId: string,
+      spaceId: string,
+      input: { imageBase64: string; contentType: string },
+    ): Promise<IssueSpaceRef>;
+    /** Takes the image away: the color shows again. */
+    clearSpaceImage(orgId: string, spaceId: string): Promise<IssueSpaceRef>;
   };
   /** Threads (ADR 0029): the Threads page, a thread from a range, moving it, closing and archiving. */
   threads: {

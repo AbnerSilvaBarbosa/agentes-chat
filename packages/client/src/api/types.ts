@@ -3691,6 +3691,8 @@ export interface IssueSpaceRef {
   id: string;
   name: string;
   color: string;
+  /** The company's image (served to the workspace's members); null: its color shows (ADR 0180). */
+  image: string | null;
   archived: boolean;
 }
 

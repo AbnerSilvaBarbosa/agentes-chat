@@ -4408,6 +4408,8 @@ export function useIssueSpaceAction(orgId: string) {
       action:
         | { type: "create"; name: string; color: string }
         | { type: "update"; spaceId: string; name?: string; color?: string; archived?: boolean }
+        | { type: "image"; spaceId: string; imageBase64: string; contentType: string }
+        | { type: "clear-image"; spaceId: string }
         | { type: "delete"; spaceId: string },
     ): Promise<IssueSpaceRef | undefined> => {
       switch (action.type) {
@@ -4417,6 +4419,13 @@ export function useIssueSpaceAction(orgId: string) {
           const { type: _type, spaceId, ...patch } = action;
           return api.issues.updateSpace(orgId, spaceId, patch);
         }
+        case "image":
+          return api.issues.setSpaceImage(orgId, action.spaceId, {
+            imageBase64: action.imageBase64,
+            contentType: action.contentType,
+          });
+        case "clear-image":
+          return api.issues.clearSpaceImage(orgId, action.spaceId);
         case "delete":
           return api.issues.deleteSpace(orgId, action.spaceId).then(() => undefined);
       }

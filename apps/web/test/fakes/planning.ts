@@ -841,6 +841,7 @@ export function createMockPlanning(
           id: crypto.randomUUID(),
           name: input.name.trim(),
           color: input.color ?? "graphite",
+          image: null,
           archived: false,
         };
         s.spaces.push(space);
@@ -852,6 +853,22 @@ export function createMockPlanning(
         const space = s.spaces.find((sp) => sp.id === spaceId);
         if (!space) throw new MockNotFoundError("Empresa não encontrada.");
         Object.assign(space, patch);
+        return clone(space);
+      },
+      setSpaceImage: async (orgId, spaceId, input) => {
+        record("issues.setSpaceImage", spaceId, input);
+        const s = await store(orgId);
+        const space = s.spaces.find((sp) => sp.id === spaceId);
+        if (!space) throw new MockNotFoundError("Empresa não encontrada.");
+        space.image = `/api/app/organizations/${orgId}/issue-space-images/${input.imageBase64.length.toString(16).padStart(16, "0")}.png`;
+        return clone(space);
+      },
+      clearSpaceImage: async (orgId, spaceId) => {
+        record("issues.clearSpaceImage", spaceId);
+        const s = await store(orgId);
+        const space = s.spaces.find((sp) => sp.id === spaceId);
+        if (!space) throw new MockNotFoundError("Empresa não encontrada.");
+        space.image = null;
         return clone(space);
       },
       columnTemplates: async () => clone(templates),

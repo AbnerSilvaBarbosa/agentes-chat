@@ -1550,6 +1550,10 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}`, { method: "PATCH", json: patch }),
       deleteSpace: (orgId, spaceId) =>
         request<void>(`${org(orgId)}/issue-spaces/${enc(spaceId)}`, { method: "DELETE" }),
+      setSpaceImage: (orgId, spaceId, input) =>
+        request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/image`, { method: "PUT", json: input }),
+      clearSpaceImage: (orgId, spaceId) =>
+        request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/image`, { method: "DELETE" }),
     },
     threads: {
       list: (orgId, filters = {}) => request<ThreadPage>(`${org(orgId)}/threads`, { query: threadQuery(filters) }),
