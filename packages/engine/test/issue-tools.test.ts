@@ -161,6 +161,50 @@ describe("what agents can do with cards", () => {
     expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).project).toBeNull();
   });
 
+  test("update_issue refuses a company alone and lists its boards", async () => {
+    f = await setup();
+    const { crm } = await pipeline(f);
+    const { run } = await agentTools(f);
+    const id = issueOf((await run("create_issue", { title: "Solta" })).data);
+
+    const refused = await run("update_issue", { issue: id, company: "Empresa A" });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("Empresa A");
+    expect(refused.content).toContain('"CRM"');
+    expect(refused.content).not.toContain('"Site"');
+    // Nothing moved.
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).project).toBeNull();
+    // A company that does not exist is refused with the ones that do.
+    const unknown = await run("update_issue", { issue: id, company: "Nenhuma" });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content).toContain('"Empresa A"');
+    // Other fields alongside a company-only call change nothing either.
+    expect((await run("update_issue", { issue: id, company: "Empresa A", priority: "high" })).isError).toBe(true);
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).priority).not.toBe("high");
+    expect(crm.name).toBe("CRM");
+  });
+
+  test("update_issue picks the board by its company when two companies share a board name", async () => {
+    f = await setup();
+    const { deps, company, crm } = await pipeline(f);
+    const second = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa B" });
+    const crmB = await createIssueProject(deps, f.owner.id, f.org.id, { name: "CRM", spaceId: second.id });
+    const { run } = await agentTools(f);
+    const id = issueOf((await run("create_issue", { title: "Lead" })).data);
+
+    // Without the company the name is ambiguous, and nothing moves.
+    const ambiguous = await run("update_issue", { issue: id, project: "CRM" });
+    expect(ambiguous.isError).toBe(true);
+    expect(ambiguous.content).toContain("Empresa B");
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).project).toBeNull();
+
+    expect((await run("update_issue", { issue: id, project: "CRM", company: "Empresa B" })).isError).toBe(false);
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).project?.id).toBe(crmB.id);
+    expect((await run("update_issue", { issue: id, project: "CRM", company: "Empresa A" })).isError).toBe(false);
+    const card = await getIssue(f.db, person(f.owner.id), f.org.id, { id });
+    expect(card.project).toMatchObject({ id: crm.id, spaceId: company.id });
+  });
+
   test("refuses a column the board lacks", async () => {
     f = await setup();
     const { deps, site } = await pipeline(f);

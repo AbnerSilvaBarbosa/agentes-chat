@@ -886,6 +886,24 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           const due = typeof input.due_date === "string" ? input.due_date.trim() : undefined;
           const columnName = str(input.column).trim();
           const projectId = await chosenProject(deps, ctx, input);
+          // A card belongs to a board, so a company alone can't place it: say which boards that company has.
+          if (projectId === undefined && str(input.company).trim()) {
+            const space = await spaceByName(deps, ctx, str(input.company));
+            const boards = await deps.db
+              .select({ name: schema.issueProjects.name })
+              .from(schema.issueProjects)
+              .where(
+                and(
+                  eq(schema.issueProjects.orgId, ctx.orgId),
+                  eq(schema.issueProjects.spaceId, space.id),
+                  isNull(schema.issueProjects.archivedAt),
+                ),
+              );
+            return {
+              content: `A task is placed in a board, not in a company: name the board in \`project\`. ${space.name}'s boards: ${boards.length ? boards.map((b) => `"${b.name}"`).join(", ") : "none yet"}.`,
+              isError: true,
+            };
+          }
           let before: Record<string, unknown> = {};
           const asked = givenFiles(input) ?? [];
           const files = asked.length
