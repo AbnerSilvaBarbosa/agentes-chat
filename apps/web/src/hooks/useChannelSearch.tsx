@@ -1,7 +1,7 @@
 import { useChannels, useIssues } from "@agenteschat/client";
 import { pickOptions } from "@agenteschat/client/lib/card-refs";
 import { type ComposerSuggestion, Icon } from "@agenteschat/ui";
-import { useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrg } from "@/components/org-context";
 
@@ -9,12 +9,24 @@ import { useOrg } from "@/components/org-context";
  * "#" suggestions (`pickOptions`): the channels I can see, each with its topic (the ones I'm not in say so), then the
  * cards (ADR 0183) from the issues list already loaded, which the server filters to the ones I may see.
  */
-export function useChannelSearch() {
+export function useChannelSearch(): {
+  search: (query: string) => ComposerSuggestion[];
+  onQuery: (q: string | null) => void;
+} {
   const { t } = useTranslation();
   const { org } = useOrg();
   const channels = useChannels(org.id).data;
-  const cards = useIssues(org.id).data;
-  return useCallback(
+  const cached = useIssues(org.id).data;
+  // The loaded list holds the 200 most recent cards: what is typed after "#" is also asked of the server (it matches a
+  // number or a title), so an older card is found too.
+  const [typed, setTyped] = useState<string | null>(null);
+  const asked = useIssues(org.id, typed?.trim() ?? "").data;
+  const cards = useMemo(() => {
+    if (!typed || !asked) return cached ?? [];
+    const seen = new Set((cached ?? []).map((c) => c.number));
+    return [...(cached ?? []), ...asked.filter((c) => !seen.has(c.number))];
+  }, [cached, asked, typed]);
+  const search = useCallback(
     (query: string): ComposerSuggestion[] => {
       const picked = pickOptions(query, channels ?? [], cards ?? []);
       return [
@@ -38,4 +50,5 @@ export function useChannelSearch() {
     },
     [channels, cards, t],
   );
+  return { search, onQuery: setTyped };
 }

@@ -2804,7 +2804,7 @@ function ChannelView({
                                     ? { listLabel: t("composer.commands"), list: commands }
                                     : undefined
                                 }
-                                channels={{ search: channelSearch, listLabel: t("channelRefs.list") }}
+                                channels={{ ...channelSearch, listLabel: t("channelRefs.list") }}
                                 mentions={{
                                   search: mentionSearch,
                                   listLabel: t("mentions.list"),

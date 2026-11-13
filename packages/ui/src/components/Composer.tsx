@@ -76,6 +76,8 @@ export interface ComposerMentions {
   search: (query: string) => ComposerSuggestion[];
   /** After an item was inserted (e.g. offer "Adicionar ao canal"). */
   onPick?: (item: ComposerSuggestion) => void;
+  /** The query being typed after the token's mark changed (a list that asks a server for more); null when the token ended. */
+  onQuery?: (query: string | null) => void;
   /** Accessible name of the list ("Pessoas e agentes"). */
   listLabel: string;
 }
@@ -638,6 +640,7 @@ export function Composer({
     const nextChannel = channels ? channelQuery(text, caret) : null;
     if (channels && (nextChannel?.start !== channelToken?.start || nextChannel?.query !== channelToken?.query)) {
       setChannelToken(nextChannel);
+      channels.onQuery?.(nextChannel?.query ?? null);
       setActive(0);
     }
     if (!mentions) {

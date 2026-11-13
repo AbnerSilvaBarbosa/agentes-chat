@@ -41,7 +41,9 @@ A card of an archived board still gets its chip.
 Typing `#` in the composer lists channels and cards in one list, channels first, at most eight rows (`pickOptions`: two
 rows are kept for cards when channels are many). Digits give the cards whose number starts with them, letters the
 channels whose name holds them and the cards whose title holds them. The cards come from the issues list the app has
-already loaded, which the server filters to what the member may see. Picking a card writes `#<number> `.
+already loaded (the 200 most recent) and, once something is typed after `#`, from the server too (`useIssues` with
+that query, which matches a number or a title, told by the composer's `onQuery`), merged without repeats, so an older
+card is found. Both lists are filtered by the server to what the member may see. Picking a card writes `#<number> `.
 
 ### 5. Agents
 
@@ -52,6 +54,6 @@ the card it works on, and not to write it after "PR" or "issue" for a GitHub num
 
 - No migration and no new server route.
 - A number that is no card (a step, a count written with `#`) asks the server once per workspace and stays text.
-- The picker reads the loaded list (the 200 most recent, open first): an older card is reached by its number.
+- Each key typed after `#` asks the server for the cards that match, and the loaded list answers meanwhile.
 - Mentions inside a card's own description and comments, notifying the assignee, and the phone and desktop shell are
   left for later decisions.

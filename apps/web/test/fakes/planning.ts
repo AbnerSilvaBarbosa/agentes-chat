@@ -570,7 +570,9 @@ export function createMockPlanning(
             .filter(
               (i) => inProject(i) && assignedToMe(i) && (!q || `${i.title} #${i.number}`.toLowerCase().includes(q)),
             )
-            .sort((a, b) => b.number - a.number),
+            .sort((a, b) => b.number - a.number)
+            // The server's own cap (`listIssues`): a list is the 200 most recent, a search too.
+            .slice(0, 200),
         );
       },
       get: async (orgId, number) => {

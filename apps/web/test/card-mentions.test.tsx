@@ -5,6 +5,7 @@ setupDom();
 
 import { type ApiClient, ApiError, type Message } from "@agenteschat/client";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
+import { builtCss, declarations } from "./built-css";
 import { ADA_ID, createFakeApi, ENG_ID, GENERAL_ID, NOW, ORG_ID, seedDm, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
@@ -37,6 +38,7 @@ const go = async (path: string, api: ApiClient) => {
   await settle(8);
   return r;
 };
+const keyDown = (el: Element, key: string) => act(async () => fireEvent.keyDown(el, { key }));
 const chips = () => [...document.querySelectorAll<HTMLAnchorElement>(".ac-msg__text a.id-ref")];
 const text = () => document.querySelector(`[data-message-id="m-card"] .ac-msg__text`)?.textContent ?? "";
 
@@ -57,11 +59,11 @@ describe("#128 in a message", () => {
     const r = await go(`c/${GENERAL_ID}`, createFakeApi(withMessage("veja #128")));
     await act(async () => fireEvent.click(screen().getByRole("link", { name: /^Tarefa #128/ }), { button: 0 }));
     await settle(8);
-    // In a conversation the card opens over it, else on its own page.
-    const opened =
-      r.router.state.location.pathname === `/org/${ORG_ID}/issues/128` ||
-      Boolean(document.body.textContent?.includes(CARD.title) && screen().queryByRole("dialog"));
-    expect(opened).toBe(true);
+    // Inside a conversation the card opens over it (its address stays the conversation's), as the card of the task pill.
+    const dialog = screen().getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: CARD.title, level: 1 })).toBeTruthy();
+    expect(dialog.querySelector(".issue-bartitle__number")?.textContent).toBe("#128");
+    expect(r.router.state.location.pathname).toBe(`/org/${ORG_ID}/c/${GENERAL_ID}`);
   });
 
   test("the chip follows a change of title and status", async () => {
@@ -105,6 +107,22 @@ describe("#128 in a message", () => {
     expect(chips()).toHaveLength(0);
     expect(text()).toContain("PR #128, pull request #128, issue #128 e ");
     expect(document.querySelector(`[data-message-id="m-card"] code`)?.textContent).toBe("#128");
+  });
+
+  test("a link label, a URL fragment and an entity stay text on screen", async () => {
+    await go(
+      `c/${GENERAL_ID}`,
+      createFakeApi(
+        withMessage(
+          "[ver #128](https://exemplo.com/a) e https://exemplo.com/p#128 e https://exemplo.com/?x=1&#128 e &#39; e #128é",
+        ),
+      ),
+    );
+    expect(chips()).toHaveLength(0);
+    const links = [...document.querySelectorAll(`[data-message-id="m-card"] .ac-msg__text a`)];
+    expect(links.some((a) => a.textContent === "ver #128")).toBe(true);
+    expect(links.some((a) => a.classList.contains("id-ref"))).toBe(false);
+    expect(text()).toContain("#128é");
   });
 
   test("draws it in an agent's message and in a thread", async () => {
@@ -168,6 +186,12 @@ describe("#128 in a message", () => {
     expect(chips()[0]?.className).toContain("id-ref");
     expect(chips()[0]?.closest("p")?.querySelectorAll("a")).toHaveLength(1);
     expect(chips()[0]?.textContent).toContain("fim");
+    // The rule that lets it: the chip breaks a long word inside itself instead of pushing past the bubble.
+    const css = await builtCss("src/styles.css");
+    const wraps = [...(chips()[0]?.classList ?? [])].some((cls) =>
+      declarations(css, `.${cls}`).some(([prop, value]) => prop === "overflow-wrap" && value === "break-word"),
+    );
+    expect(wraps).toBe(true);
   });
 
   test("a card of an archived board still gets its chip", async () => {
@@ -210,8 +234,11 @@ describe("the # list in the composer", () => {
     await typeIn(box, "veja #12");
     // 126 to 129 start with 12: the digits pick the cards whose number starts with them.
     expect(options().map((r) => r.textContent?.match(/#(\d+)/)?.[1])).toEqual(["126", "127", "128", "129"]);
-    await act(async () => fireEvent.mouseDown(options()[2] as HTMLElement));
-    await act(async () => fireEvent.click(options()[2] as HTMLElement));
+    // From the keyboard, as the channel list is picked in its own tests: a pointer press would leave the page in
+    // pointer mode for the test files that follow.
+    await keyDown(box, "ArrowDown");
+    await keyDown(box, "ArrowDown");
+    await keyDown(box, "Enter");
     expect(box.value).toBe("veja #128 ");
     expect(box.getAttribute("aria-expanded")).toBe("false");
   });
@@ -226,5 +253,44 @@ describe("the # list in the composer", () => {
     expect(options().map((r) => r.textContent?.match(/#(\d+)/)?.[1])).toEqual(["126", "127", "129"]);
     await typeIn(composer(), "#login");
     expect(screen().queryByRole("listbox", { name: "Canais e tarefas" })).toBeNull();
+  });
+});
+
+describe("the # list finds the cards past the loaded list", () => {
+  const typeIn = (el: HTMLTextAreaElement, value: string) =>
+    act(async () => {
+      fireEvent.change(el, { target: { value, selectionStart: value.length, selectionEnd: value.length } });
+    });
+  const composer = () => screen().getByRole("combobox", { name: /Mensagem para/ }) as HTMLTextAreaElement;
+  const options = () =>
+    within(screen().getByRole("listbox", { name: "Canais e tarefas" })).getAllByRole("option") as HTMLElement[];
+
+  /** The seed's seven cards plus 230 newer ones: the list is the 200 most recent, so the seeded ones are past it. */
+  const crowded = async () => {
+    const api = createFakeApi(seedState());
+    for (let i = 0; i < 230; i++) await api.issues.create(ORG_ID, { title: `Tarefa extra ${i}` });
+    return api;
+  };
+
+  test("a card beyond the first 200 appears when its digits are typed", async () => {
+    const api = await crowded();
+    expect((await api.issues.list(ORG_ID)).some((i) => i.number === 126)).toBe(false);
+    await go(`c/${GENERAL_ID}`, api);
+    await typeIn(composer(), "veja #126");
+    await settle(4);
+    expect(options().map((r) => r.textContent?.match(/#(\d+)/)?.[1])).toContain("126");
+  });
+
+  test("a card beyond the first 200 appears when a word of its title is typed", async () => {
+    const api = await crowded();
+    await go(`c/${GENERAL_ID}`, api);
+    await typeIn(composer(), "veja #roadmap");
+    await settle(4);
+    const row = options().find((r) => r.textContent?.includes("#126"));
+    expect(row?.textContent).toContain("Organizar o roadmap do trimestre");
+    // Picking it writes its number.
+    for (let i = 0; i < options().indexOf(row as HTMLElement); i++) await keyDown(composer(), "ArrowDown");
+    await keyDown(composer(), "Enter");
+    expect(composer().value).toBe("veja #126 ");
   });
 });
