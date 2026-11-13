@@ -553,9 +553,13 @@ export function createMockPlanning(
         const q = filters.q?.trim().toLowerCase();
         const inProject = (i: Issue) =>
           !filters.projectId || (filters.projectId === "none" ? !i.project : i.project?.id === filters.projectId);
+        const myId = filters.assignee === "me" ? (await me()).id : null;
+        const assignedToMe = (i: Issue) => !myId || (i.assignee?.type === "person" && i.assignee.id === myId);
         return clone(
           (await store(orgId)).issues
-            .filter((i) => inProject(i) && (!q || `${i.title} #${i.number}`.toLowerCase().includes(q)))
+            .filter(
+              (i) => inProject(i) && assignedToMe(i) && (!q || `${i.title} #${i.number}`.toLowerCase().includes(q)),
+            )
             .sort((a, b) => b.number - a.number),
         );
       },

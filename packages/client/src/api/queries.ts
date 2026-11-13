@@ -4091,16 +4091,20 @@ export const useArtifactBlob = (orgId: string, id: string, version: number, enab
 
 // ── Issues ───────────────────────────────────────────────────────────────────
 
-/** `project`: only a project's tasks (its id), or `none` for the ones with no project. The server filters. */
-export const useIssues = (orgId: string, q = "", project = "", space = "") => {
+/**
+ * `project`: only a project's tasks (its id), or `none` for the ones with no project. `assignee: "me"`: only the ones
+ * assigned to me as a person. The server filters.
+ */
+export const useIssues = (orgId: string, q = "", project = "", space = "", assignee: "me" | "" = "") => {
   const api = useApi();
   return useQuery({
-    queryKey: keys.issueList(orgId, q, project, space),
+    queryKey: keys.issueList(orgId, q, project, space, assignee),
     queryFn: () =>
       api.issues.list(orgId, {
         ...(q ? { q } : {}),
         ...(project ? { projectId: project } : {}),
         ...(space ? { spaceId: space } : {}),
+        ...(assignee ? { assignee } : {}),
       }),
     placeholderData: (prev) => prev,
     // While an agent works on an issue its steps change without an event: look again every 10 s.

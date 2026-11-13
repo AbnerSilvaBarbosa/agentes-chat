@@ -1470,7 +1470,12 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
       list: async (orgId, filters = {}) =>
         (
           await request<{ issues: Issue[] }>(`${org(orgId)}/issues`, {
-            query: { q: filters.q, projectId: filters.projectId, spaceId: filters.spaceId },
+            query: {
+              q: filters.q,
+              projectId: filters.projectId,
+              spaceId: filters.spaceId,
+              assignee: filters.assignee,
+            },
           })
         ).issues,
       get: (orgId, number) => request<Issue>(`${org(orgId)}/issues/by-number/${number}`),

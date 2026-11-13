@@ -7486,6 +7486,13 @@ export const ptBR = {
     /** The landmark of the path above a board or a company's page. */
     path: "Caminho",
     allTasks: "Todas as tarefas",
+    /** A página das tarefas da pessoa (ADR 0181): as que estão com ela, de todas as empresas e boards. */
+    mine: {
+      title: "Minhas tarefas",
+      summary: "{{open}} em aberto",
+      emptyTitle: "Nada com você agora",
+      empty: "As tarefas em que você é a pessoa responsável aparecem aqui, de todas as empresas e boards.",
+    },
     /** A empresa: a companhia, cliente ou linha de produto que agrupa boards. */
     spaces: {
       label: "Empresa",

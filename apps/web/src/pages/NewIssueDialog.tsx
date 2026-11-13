@@ -54,10 +54,13 @@ export function NewIssueDialog({
   open,
   columnId,
   projectId = null,
+  assignee: presetAssignee,
   columns,
   onClose,
 }: {
   open: boolean;
+  /** Who the task starts with (an actor key): the member's own page makes tasks that are theirs (ADR 0181). */
+  assignee?: string;
   /** The project whose board it was asked from: the task starts in it. */
   projectId?: string | null;
   /** The column of A fazer it was asked from (the "+" in its head); else the first. */
@@ -71,6 +74,7 @@ export function NewIssueDialog({
   const columnTitle = useColumnTitle();
   const todoColumns = columnsOf(columns, "todo");
   const [column, setColumn] = useState<string | null>(null);
+  const [assignee, setAssignee] = useState(NO_ACTOR);
   const [openedWith, setOpenedWith] = useState<string | null | undefined>(undefined);
   const [project, setProject] = useState<string | null>(null);
   const [newProject, setNewProject] = useState(false);
@@ -78,6 +82,7 @@ export function NewIssueDialog({
     setOpenedWith(columnId);
     setColumn(columnId);
     setProject(projectId);
+    setAssignee(presetAssignee ?? NO_ACTOR);
   }
   if (!open && openedWith !== undefined) setOpenedWith(undefined);
   const chosenColumn = todoColumns.find((c) => c.id === column) ?? todoColumns[0];
@@ -110,7 +115,6 @@ export function NewIssueDialog({
   const [description, setDescription] = useState("");
   const [criteria, setCriteria] = useState<string[]>([]);
   const [draftCriterion, setDraftCriterion] = useState("");
-  const [assignee, setAssignee] = useState(NO_ACTOR);
   const [priority, setPriority] = useState<IssuePriority>("normal");
   const [due, setDue] = useState<string | null>(null);
   const [another, setAnother] = useState(false);

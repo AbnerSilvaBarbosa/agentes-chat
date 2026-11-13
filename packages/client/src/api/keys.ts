@@ -168,8 +168,8 @@ export const keys = {
   agentAccess: (orgId: string, agentId: string) => ["org", orgId, "access", "agent", agentId] as const,
   issues: (orgId: string) => ["org", orgId, "issues"] as const,
   /** `project`: a project's id, `none`, or "" for every task. */
-  issueList: (orgId: string, q: string, project = "", space = "") =>
-    ["org", orgId, "issues", "list", q, project, space] as const,
+  issueList: (orgId: string, q: string, project = "", space = "", assignee = "") =>
+    ["org", orgId, "issues", "list", q, project, space, ...(assignee ? [assignee] : [])] as const,
   issue: (orgId: string, number: number) => ["org", orgId, "issues", "one", number] as const,
   issueActivity: (orgId: string, id: string) => ["org", orgId, "issues", "activity", id] as const,
   issueColumns: (orgId: string, projectId = "") => ["org", orgId, "issues", "columns", projectId] as const,

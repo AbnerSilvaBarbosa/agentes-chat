@@ -40,11 +40,14 @@ export function IssueFilters({
   view,
   issues,
   onChange,
+  assignee = true,
 }: {
   view: IssuesView;
   /** The tasks loaded: who has one is who the menu offers. */
   issues: Issue[];
   onChange: (change: IssuesViewChange) => void;
+  /** `false`: no assignee choice, on the page that is that filter (the member's own tasks, ADR 0181). */
+  assignee?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const { me } = useOrg();
@@ -71,20 +74,24 @@ export function IssueFilters({
   ];
   const items = (
     <>
-      <MenuHeading>{t("issues.assigneeFilter")}</MenuHeading>
-      {who.map((o) => (
-        <MenuCheckboxItem
-          key={o.key}
-          checked={view.assignees.includes(o.key)}
-          onCheckedChange={() => onChange({ assignees: toggled(view.assignees, o.key) })}
-          leading={
-            o.actor ? <ActorAvatar actor={o.actor} name={o.label} size="xs" /> : <Icon name="person" size={16} />
-          }
-        >
-          {o.label}
-        </MenuCheckboxItem>
-      ))}
-      <MenuSeparator />
+      {assignee && (
+        <>
+          <MenuHeading>{t("issues.assigneeFilter")}</MenuHeading>
+          {who.map((o) => (
+            <MenuCheckboxItem
+              key={o.key}
+              checked={view.assignees.includes(o.key)}
+              onCheckedChange={() => onChange({ assignees: toggled(view.assignees, o.key) })}
+              leading={
+                o.actor ? <ActorAvatar actor={o.actor} name={o.label} size="xs" /> : <Icon name="person" size={16} />
+              }
+            >
+              {o.label}
+            </MenuCheckboxItem>
+          ))}
+          <MenuSeparator />
+        </>
+      )}
       <MenuHeading>{t("issues.priorityFilter")}</MenuHeading>
       {PRIORITY_ORDER.map((p) => (
         <MenuCheckboxItem
@@ -99,7 +106,7 @@ export function IssueFilters({
     </>
   );
   const chips: { key: string; icon: IconName; filter: string; value: string; clear: () => void }[] = [
-    ...view.assignees.map((k) => ({
+    ...(assignee ? view.assignees : []).map((k) => ({
       key: k,
       icon: "person" as const,
       filter: t("issues.assigneeFilter"),

@@ -180,11 +180,13 @@ function useSpaceParam(): [string | undefined, (value: string | undefined) => vo
  * custom columns in fixed stages), by assignee or by priority, with a details dialog. How the person looks at them
  * (layout, grouping, order, what the cards show, filters) is theirs per workspace, on the server, so every device
  * opens it the same way; the search is not kept. A project's board is this same board with only its tasks, which the
- * server filters (the list is capped, so filtering here would leave a busy workspace's project half empty).
+ * server filters (the list is capped, so filtering here would leave a busy workspace's project half empty). `mine` is
+ * the member's own page (`/my-tasks`, ADR 0181): the same board with only the tasks assigned to them, the server
+ * filtering that too, canceled ones left out, a new task theirs, and no assignee choice in "Filtro".
  */
-export function IssuesPage() {
+export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const { t } = useTranslation();
-  const { org } = useOrg();
+  const { org, me } = useOrg();
   const viewQuery = useIssuesView(org.id);
   const view = viewQuery.data ?? ISSUES_VIEW_DEFAULT;
   const changeView = useSetIssuesView(org.id);
@@ -229,7 +231,7 @@ export function IssuesPage() {
   // A company's own page lists its boards: it asks for no tasks, and the board of one board is where tasks are read.
   const [allParam, setAllParam] = useAllParam();
   // Tarefas opens on the companies; inside one, on its boards; in a board, on its kanban (ADR 0179).
-  const level = levelOf({ project: projectParam, space: spaceParam, all: allParam });
+  const level = levelOf({ project: projectParam, space: spaceParam, all: allParam, mine });
   const chrome = chromeFor(level);
   const onRootPage = level === "root";
   const onCompanyPage = level === "company";
@@ -240,17 +242,23 @@ export function IssuesPage() {
   const [columnsDialog, setColumnsDialog] = useState(false);
   // Tasks are read in a board or in the whole workspace, never on the companies' pages.
   const readsTasks = !onRootPage && !onCompanyPage;
-  const issues = useIssues(org.id, search, projectParam, spaceParam);
+  const issues = useIssues(org.id, search, projectParam, spaceParam, mine ? "me" : "");
   const columnsQuery = useIssueColumns(org.id, projectParam);
   const columns = columnsQuery.data;
-  const all = issues.data ?? [];
+  // The member's page never shows canceled tasks, whatever the display option says for the other pages.
+  const all = (issues.data ?? []).filter((i) => !mine || i.status !== "canceled");
   const filtered = all.filter(
     (i) =>
-      (view.assignees.length === 0 || view.assignees.includes(actorKey(i.assignee))) &&
+      // The assignee filter saved for the other pages would empty the page that is that filter.
+      (chrome.assignee === false || view.assignees.length === 0 || view.assignees.includes(actorKey(i.assignee))) &&
       (view.priorities.length === 0 || view.priorities.includes(i.priority)),
   );
-  const noIssues = issues.isSuccess && all.length === 0 && !search && !projectParam;
-  const emptyProject = issues.isSuccess && all.length === 0 && !search && Boolean(projectParam);
+  const noIssues = !mine && issues.isSuccess && all.length === 0 && !search && !projectParam;
+  const emptyProject = !mine && issues.isSuccess && all.length === 0 && !search && Boolean(projectParam);
+  // Nothing is with the member: the empty page, or a filter (a company, a board) that leaves none.
+  const nothingMine = mine && issues.isSuccess && all.length === 0 && !search;
+  const mineFiltered = Boolean(projectParam || spaceParam);
+  const meAsActor: Actor = { type: "person", id: me.user.id };
   // A new task on a project's board starts in it. An archived project takes none, so its board offers none.
   const presetProject = project && !project.archived ? project.id : null;
   // The way back up (ADR 0180): Tarefas, then the company when there is one, then the board when inside one.
@@ -258,7 +266,7 @@ export function IssuesPage() {
   const boardSpace = project?.spaceId ? projectsQuery.data?.spaces.find((sp) => sp.id === project.spaceId) : undefined;
   const pathSpace = onCompanyPage ? space : boardSpace;
   const pathItems: BreadcrumbItem[] | null =
-    onCompanyPage || project
+    !mine && (onCompanyPage || project)
       ? [
           { label: t("issues.title"), href: home, onSelect: () => setSpaceParam(undefined) },
           ...(pathSpace
@@ -318,7 +326,9 @@ export function IssuesPage() {
             <PageHeader
               className="issues-head"
               title={
-                spaceParam ? (
+                mine ? (
+                  t("issues.mine.title")
+                ) : spaceParam ? (
                   <>
                     <ColorDot color={space?.color} />
                     {space ? space.name : t("issues.spaces.label")}
@@ -334,18 +344,22 @@ export function IssuesPage() {
                 )
               }
               count={
-                <>
-                  <span>
-                    {t("issues.summary", {
-                      open: open.length,
-                      agents: open.filter((i) => i.assignee?.type === "agent").length,
-                    })}
-                  </span>
-                  {open.some((i) => !i.assignee) && (
-                    <span> · {t("issues.unassigned", { count: open.filter((i) => !i.assignee).length })}</span>
-                  )}
-                  {project?.archived && <span> · {t("issues.projects.archivedMark")}</span>}
-                </>
+                mine ? (
+                  <span>{t("issues.mine.summary", { open: open.length })}</span>
+                ) : (
+                  <>
+                    <span>
+                      {t("issues.summary", {
+                        open: open.length,
+                        agents: open.filter((i) => i.assignee?.type === "agent").length,
+                      })}
+                    </span>
+                    {open.some((i) => !i.assignee) && (
+                      <span> · {t("issues.unassigned", { count: open.filter((i) => !i.assignee).length })}</span>
+                    )}
+                    {project?.archived && <span> · {t("issues.projects.archivedMark")}</span>}
+                  </>
+                )
               }
               actions={
                 // The action is the level's own: a company, a board, or a task (the empty state takes this one over).
@@ -473,7 +487,7 @@ export function IssuesPage() {
                   onNew={posts ? () => setProjectDialog("new") : undefined}
                 />
               )}
-              <IssueFilters view={view} issues={all} onChange={changeView} />
+              <IssueFilters view={view} issues={all} onChange={changeView} assignee={chrome.assignee !== false} />
             </Toolbar>
             {onRootPage && (
               <SpaceList
@@ -557,6 +571,27 @@ export function IssuesPage() {
                 {t(posts ? "issues.empty" : "issues.emptyViewer")}
               </EmptyState>
             )}
+            {readsTasks && nothingMine && !mineFiltered && (
+              <EmptyState
+                size="page"
+                agent={look}
+                title={t("issues.mine.emptyTitle")}
+                actions={
+                  // Every task of the workspace: the address the board of Tarefas reads (`useAllParam`).
+                  <Link
+                    className="ac-link"
+                    to="/org/$orgId/issues"
+                    params={{ orgId: org.id }}
+                    search={{ all: "1" } as never}
+                  >
+                    {t("issues.allTasks")}
+                  </Link>
+                }
+              >
+                {t("issues.mine.empty")}
+              </EmptyState>
+            )}
+            {readsTasks && nothingMine && mineFiltered && <EmptyState size="panel">{t("issues.noResults")}</EmptyState>}
             {readsTasks && emptyProject && (
               <EmptyState
                 size="panel"
@@ -612,6 +647,7 @@ export function IssuesPage() {
             open={creating !== false}
             columnId={creating ? creating.columnId : null}
             projectId={presetProject}
+            assignee={mine ? actorKey(meAsActor) : undefined}
             columns={columns ?? []}
             onClose={() => setCreating(false)}
           />

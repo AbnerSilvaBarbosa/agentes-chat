@@ -7486,6 +7486,13 @@ export const en = {
     /** The landmark of the path above a board or a company's page. */
     path: "Path",
     allTasks: "All tasks",
+    /** The page of the person's own tasks (ADR 0181): the ones with them, from every company and board. */
+    mine: {
+      title: "My tasks",
+      summary: "{{open}} open",
+      emptyTitle: "Nothing with you right now",
+      empty: "The tasks you are the person in charge of show up here, from every company and board.",
+    },
     /** A space: the company, client or product line that groups boards. */
     spaces: {
       label: "Company",

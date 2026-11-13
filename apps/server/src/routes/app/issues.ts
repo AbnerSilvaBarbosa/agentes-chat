@@ -262,6 +262,10 @@ export function issueRoutes(deps: AppDeps) {
             .uuid()
             .optional()
             .openapi({ description: "Only the tasks of that space's boards: a company's whole board." }),
+          assignee: z
+            .literal("me")
+            .optional()
+            .openapi({ description: "Only the tasks assigned to you as a person (ADR 0181)." }),
         }),
       },
       responses: { 200: json(z.object({ issues: z.array(Issue) })), ...errors },
@@ -275,6 +279,7 @@ export function issueRoutes(deps: AppDeps) {
         parentIssueId: query.parentIssueId,
         projectId: query.projectId,
         spaceId: query.spaceId,
+        assignee: query.assignee === "me" ? { type: "person", id: c.get("user").id } : undefined,
       });
       return c.json({ issues: list }, 200);
     },

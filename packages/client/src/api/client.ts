@@ -1291,8 +1291,14 @@ export interface ApiClient {
     saveToVault?(orgId: string, requestId: string, input: SecretToVaultInput): Promise<VaultItem>;
   };
   issues: {
-    /** `projectId`: only that project's tasks, or `none` for the ones with no project. */
-    list(orgId: string, filters?: { q?: string; projectId?: string; spaceId?: string }): Promise<Issue[]>;
+    /**
+     * `projectId`: only that project's tasks, or `none` for the ones with no project. `assignee: "me"`: only the
+     * tasks assigned to me as a person (the page of my own tasks, ADR 0181).
+     */
+    list(
+      orgId: string,
+      filters?: { q?: string; projectId?: string; spaceId?: string; assignee?: "me" },
+    ): Promise<Issue[]>;
     get(orgId: string, number: number): Promise<Issue>;
     create(orgId: string, input: IssueInput): Promise<Issue>;
     update(orgId: string, id: string, patch: IssuePatch): Promise<Issue>;
