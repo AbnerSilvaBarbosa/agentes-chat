@@ -136,3 +136,81 @@ describe("Minhas tarefas: the page", () => {
     expect(titles()).toEqual(["Fica"]);
   });
 });
+
+describe("Minhas tarefas: the controls", () => {
+  test("the header action is Nova tarefa, and nothing else", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await visit(s);
+    expect(headerActions()).toEqual(["Nova tarefa"]);
+  });
+
+  test("a task made there is assigned to the member and shows in the list", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await visit(s);
+    await click(within(document.querySelector(".ac-pagehead__actions") as HTMLElement).getByRole("button"));
+    await settle(3);
+    const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
+    // The form already says who it is for.
+    expect(within(dialog).getByRole("button", { name: /^Responsável: Walter/ })).toBeTruthy();
+    await type(within(dialog).getByLabelText("Título"), "Pagar o contador");
+    await click(within(dialog).getByRole("button", { name: "Criar tarefa" }));
+    await settle(8);
+    const made = (await s.api.issues.list(ORG_ID)).find((i) => i.title === "Pagar o contador");
+    expect(made?.assignee).toEqual(mine);
+    expect([...titles()].sort()).toEqual(["Algo meu", "Pagar o contador"]);
+  });
+
+  test("the header counts the open tasks: the done and the canceled are not in it", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Uma", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Duas", assignee: mine });
+    const finished = await s.api.issues.create(ORG_ID, { title: "Feita", assignee: mine });
+    await s.api.issues.update(ORG_ID, finished.id, { status: "done" });
+    const dropped = await s.api.issues.create(ORG_ID, { title: "Cancelada", assignee: mine });
+    await s.api.issues.update(ORG_ID, dropped.id, { status: "canceled" });
+    await s.api.issues.create(ORG_ID, { title: "Do João", assignee: joao });
+    await visit(s);
+    expect(document.querySelector(".ac-pagehead")?.textContent).toContain("2 em aberto");
+  });
+
+  test("Filtro has no assignee choice, and the Empresa and Board selects are there", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await visit(s);
+    const toolbar = document.querySelector(".ac-toolbar") as HTMLElement;
+    const triggers = [...toolbar.querySelectorAll(".ac-filter__trigger")].map((t) => t.textContent);
+    expect(triggers.some((t) => t?.startsWith("Empresa"))).toBe(true);
+    expect(triggers.some((t) => t?.startsWith("Board"))).toBe(true);
+    await open(within(toolbar).getByRole("button", { name: "Filtro" }));
+    const menu = screen().getByRole("menu");
+    expect(within(menu).queryByText("Responsável")).toBeNull();
+    expect(within(menu).queryByRole("menuitemcheckbox", { name: "Eu" })).toBeNull();
+    // The other filter is still offered.
+    expect(within(menu).getByText("Prioridade")).toBeTruthy();
+  });
+
+  test("with no task the page says Nada com você agora and links to Todas as tarefas", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Do João", assignee: joao });
+    const r = await visit(s);
+    expect(document.querySelector(".ac-empty__title")?.textContent).toBe("Nada com você agora");
+    expect(titles()).toEqual([]);
+    const link = screen().getByRole("link", { name: "Todas as tarefas" });
+    await click(link);
+    await settle(8);
+    expect(r.router.state.location.pathname).toBe(`/org/${ORG_ID}/issues`);
+    expect(heading()).toBe("Tarefas");
+    expect(titles()).toEqual(["Do João"]);
+  });
+
+  test("without the right to create tasks there is no Nova tarefa", async () => {
+    const s = await setup(["read", "talk_to_agents"]);
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await visit(s);
+    expect(titles()).toEqual(["Algo meu"]);
+    expect(screen().queryByRole("button", { name: "Nova tarefa" })).toBeNull();
+    expect(headerActions()).toEqual([]);
+  });
+});
