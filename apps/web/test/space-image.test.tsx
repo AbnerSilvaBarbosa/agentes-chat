@@ -28,6 +28,12 @@ const go = async (api: ReturnType<typeof createFakeApi>) => {
   await settle(8);
   return r;
 };
+// The Empresa chip lives on "Todas as tarefas" only: the root and a company's page are already scoped (TFL-01).
+const goAll = async (api: ReturnType<typeof createFakeApi>) => {
+  const r = await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
+  await settle(8);
+  return r;
+};
 const card = (name: string) =>
   [...document.querySelectorAll<HTMLElement>(".space-board")].find((c) => c.textContent?.includes(name)) as HTMLElement;
 const chip = () =>
@@ -45,7 +51,7 @@ const row = (menu: HTMLElement, name: string) =>
   ) as HTMLElement;
 
 describe("a company's image in Tarefas", () => {
-  test("the image shows on the card, the chip and the picker", async () => {
+  test("the image shows on the card", async () => {
     const { api, clinic } = await withCompanies();
     await go(api);
     const src = clinic.image as string;
@@ -54,26 +60,16 @@ describe("a company's image in Tarefas", () => {
     // The card wears it in place of its color dot.
     expect(card("Clínica Teo").querySelector(`.space-mark > img[src="${src}"]`)).toBeTruthy();
     expect(card("Clínica Teo").querySelector(".ac-colordot:not(.space-mark)")).toBeNull();
+  });
 
-    // The chip's menu rows wear it, and once picked so does the chip.
+  test("the image shows on the chip and the picker", async () => {
+    const { api, clinic } = await withCompanies();
+    await goAll(api);
+    const src = clinic.image as string;
+
+    // The chip's menu rows wear it (picking one scopes the page, and the chip leaves).
     const menu = await openMenu(chip());
     expect(row(menu, "Clínica Teo").querySelector(`img[src="${src}"]`)).toBeTruthy();
-    await click(row(menu, "Clínica Teo"));
-    await settle(4);
-    const worn = [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger")].find((c) =>
-      c.textContent?.includes("Clínica Teo"),
-    );
-    expect(worn?.querySelector(`img[src="${src}"]`)).toBeTruthy();
-
-    // The picker of "Novo board" lists the companies with it.
-    await click(within(document.body).getAllByRole("button", { name: "Novo board" }).at(-1) as HTMLElement);
-    await settle(3);
-    const dialog = screen().getByRole("dialog", { name: "Novo board" });
-    await click(within(dialog).getByRole("combobox", { name: "Empresa" }));
-    await settle(3);
-    const options = [...document.querySelectorAll<HTMLElement>("[role=option]")];
-    const clinicOption = options.find((o) => o.textContent?.includes("Clínica Teo")) as HTMLElement;
-    expect(clinicOption.querySelector(`img[src="${src}"]`)).toBeTruthy();
   });
 
   test("a company with no image shows the color", async () => {
@@ -86,11 +82,33 @@ describe("a company's image in Tarefas", () => {
     expect(mark?.classList.contains("space-mark")).toBe(false);
     expect(mark?.querySelector("img")).toBeNull();
     expect(mark?.style.getPropertyValue("--dot")).not.toBe("");
+  });
 
+  test("the chip row of a company without an image wears its color", async () => {
+    const { api } = await withCompanies();
+    await goAll(api);
     const menu = await openMenu(chip());
     const dot = row(menu, "Padaria Lia").querySelector<HTMLElement>(".ac-colordot");
     expect(dot?.style.getPropertyValue("--dot")).not.toBe("");
     expect(row(menu, "Padaria Lia").querySelector("img")).toBeNull();
+  });
+
+  test("the new board's company picker lists the companies with their image", async () => {
+    const { api, clinic } = await withCompanies();
+    await goAll(api);
+    const src = clinic.image as string;
+    const boardChip = [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger")].find((c) =>
+      c.textContent?.startsWith("Board"),
+    ) as HTMLElement;
+    const boards = await openMenu(boardChip);
+    await click(within(boards).getByRole("button", { name: "Novo board" }));
+    await settle(3);
+    const dialog = screen().getByRole("dialog", { name: "Novo board" });
+    await click(within(dialog).getByRole("combobox", { name: "Empresa" }));
+    await settle(3);
+    const options = [...document.querySelectorAll<HTMLElement>("[role=option]")];
+    const clinicOption = options.find((o) => o.textContent?.includes("Clínica Teo")) as HTMLElement;
+    expect(clinicOption.querySelector(`img[src="${src}"]`)).toBeTruthy();
   });
 });
 

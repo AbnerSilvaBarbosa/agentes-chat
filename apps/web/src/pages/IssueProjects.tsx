@@ -162,9 +162,15 @@ export function SpaceDialog({
                   {t(shownImage ? "issues.spaces.imageChange" : "issues.spaces.imageChoose")}
                 </Button>
                 {shownImage && (
-                  <Button type="button" size="sm" variant="ghost" onClick={() => setImage("removed")}>
-                    {t("issues.spaces.imageRemove")}
-                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    iconOnly
+                    icon="trash"
+                    aria-label={t("issues.spaces.imageRemove")}
+                    onClick={() => setImage("removed")}
+                  />
                 )}
               </div>
             </Field>
