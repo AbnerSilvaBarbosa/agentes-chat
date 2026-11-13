@@ -1310,10 +1310,12 @@ async function fireIssueMoved(
   };
   const [board] = view.project
     ? await db
-        .select({ spaceId: schema.issueProjects.spaceId })
+        .select({ spaceId: schema.issueProjects.spaceId, archivedAt: schema.issueProjects.archivedAt })
         .from(schema.issueProjects)
         .where(eq(schema.issueProjects.id, view.project.id))
     : [];
+  // An archived board's rules stay listed and never fire (ADR 0175 addendum).
+  const archivedBoard = board?.archivedAt && view.project ? view.project.id : null;
   // The routine behind the move, when a routine moved it: it never fires itself, and the chain counts one more hop.
   const authority =
     actor.type === "agent" && actor.runId ? await runAuthorityById(db, orgId, actor.runId).catch(() => null) : null;
@@ -1348,6 +1350,7 @@ async function fireIssueMoved(
     },
     {
       exceptRoutineId: routineRunId && authority?.kind === "routine" ? (authority.brief?.routineId ?? null) : null,
+      skip: (routine) => !!archivedBoard && routine.eventFilter?.projectId === archivedBoard,
       match: {
         projectId: view.project?.id ?? null,
         spaceId: board?.spaceId ?? null,

@@ -1848,6 +1848,31 @@ export async function deleteChannelRoutines(deps: RoutineDeps, actorId: string, 
   for (const row of rows) await dropRoutine(deps, actorId, row);
 }
 
+/**
+ * A deleted board column's routines on `issue.moved` go with it (ADR 0175 addendum): one that names it, as the column a
+ * card lands in or the one it leaves, could never fire again.
+ */
+export async function deleteColumnRoutines(
+  deps: { db: Database; pubsub?: PubSub },
+  actorId: string,
+  orgId: string,
+  columnId: string,
+) {
+  const rows = await deps.db
+    .select()
+    .from(routines)
+    .where(
+      and(
+        eq(routines.orgId, orgId),
+        isNull(routines.deletedAt),
+        eq(routines.triggerType, "event"),
+        eq(routines.event, "issue.moved"),
+        sql`(${routines.eventFilter}->>'columnId' = ${columnId} or ${routines.eventFilter}->>'fromColumnId' = ${columnId})`,
+      ),
+    );
+  for (const row of rows) await dropRoutine(deps as RoutineDeps, actorId, row);
+}
+
 async function dropRoutine(deps: RoutineDeps, actorId: string, current: RoutineRow) {
   const orgId = current.orgId;
   await deps.db
@@ -2092,6 +2117,8 @@ export async function fireRoutineEvent(
     visibleTo?: (userId: string) => Promise<boolean>;
     /** The routine whose own run caused the event (a move it made): it never fires itself (ADR 0175 §3). */
     exceptRoutineId?: string | null;
+    /** A routine the caller keeps from firing (an archived board's rules, ADR 0175 addendum). */
+    skip?: (routine: RoutineRow) => boolean;
     /** What the event says about a routine's `event_filter`: the board, the company, the column it landed in. */
     match?: Record<string, string | null>;
   } = {},
@@ -2111,6 +2138,7 @@ export async function fireRoutineEvent(
   let fired = 0;
   for (const r of rows) {
     if (options.exceptRoutineId && r.id === options.exceptRoutineId) continue;
+    if (options.skip?.(r)) continue;
     if (!eventFilterAllows(r.eventFilter, options.match)) continue;
     if (options.visibleTo && !(r.createdByUserId && (await options.visibleTo(r.createdByUserId)))) continue;
     const { outcome } = await queueEventRun(deps, r, {

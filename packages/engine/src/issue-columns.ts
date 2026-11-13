@@ -4,6 +4,7 @@ import { ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } fro
 import { publishOrgEvent } from "./events";
 import type { IssueStatus } from "./issues";
 import { can, requireActiveMembership } from "./organizations";
+import { deleteColumnRoutines } from "./routines";
 
 const { issueColumns, issueColumnTemplates, issues, issueActivity } = schema;
 
@@ -359,6 +360,8 @@ export async function deleteIssueColumn(
     }
     await tx.delete(issueColumns).where(eq(issueColumns.id, column.id));
   });
+  // The board's alert rules that name it could never fire again (ADR 0175 addendum).
+  await deleteColumnRoutines(deps, userId, orgId, column.id);
   return announce(deps, orgId);
 }
 

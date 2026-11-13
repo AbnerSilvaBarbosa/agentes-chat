@@ -7,9 +7,13 @@ import {
   boardAlerts,
   createIssueProject,
   createRoutine,
+  deleteIssueColumn,
   ForbiddenError,
   listIssueColumns,
+  NotFoundError,
+  removeBoardAlert,
   templateByName,
+  updateIssueColumn,
   ValidationError,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
@@ -195,5 +199,62 @@ describe("adding a rule", () => {
       alert(f, admin.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id }),
     ).rejects.toThrow();
     expect(await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).toEqual([]);
+  });
+});
+
+describe("a rule follows its board", () => {
+  const remove = (fx: Fixture, userId: string, boardId: string, ruleId: string) =>
+    removeBoardAlert(routineDeps(fx), userId, fx.org.id, boardId, ruleId);
+  const live = async (fx: Fixture) => (await fx.db.select().from(schema.routines)).filter((r) => r.deletedAt === null);
+
+  test("removing a rule deletes its routine", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    const rule = await addBoardAlert(routineDeps(f), f.owner.id, f.org.id, crm.board.id, {
+      agentId: f.agent.id,
+      columnId: crm.column("QA").id,
+    });
+    expect((await live(f)).map((r) => r.id)).toContain(rule.id);
+    await remove(f, f.owner.id, crm.board.id, rule.id);
+    expect((await live(f)).map((r) => r.id)).not.toContain(rule.id);
+    expect(await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).toEqual([]);
+    // It was a routine of another board's, or of none: this door doesn't reach it.
+    const other = await pipeline(f, "Site");
+    const kept = await moveRoutine(f, { projectId: other.board.id, columnId: other.column("QA").id });
+    await expect(remove(f, f.owner.id, crm.board.id, kept.id)).rejects.toBeInstanceOf(NotFoundError);
+    expect((await live(f)).map((r) => r.id)).toContain(kept.id);
+  });
+
+  test("deleting a column deletes its rules, and renaming one keeps them", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const toQa = await addBoardAlert(routineDeps(f), f.owner.id, f.org.id, crm.board.id, {
+      agentId: f.agent.id,
+      columnId: crm.column("QA").id,
+    });
+    const fromAjuste = await addBoardAlert(routineDeps(f), f.owner.id, f.org.id, crm.board.id, {
+      agentId: f.agent.id,
+      columnId: crm.column("Deploy").id,
+      fromColumnId: crm.column("Ajuste").id,
+    });
+    const toDeploy = await addBoardAlert(routineDeps(f), f.owner.id, f.org.id, crm.board.id, {
+      agentId: f.agent.id,
+      columnId: crm.column("Deploy").id,
+    });
+
+    await updateIssueColumn(deps, f.owner.id, f.org.id, crm.column("QA").id, { name: "Testes" });
+    expect((await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).map((r) => r.id)).toContain(toQa.id);
+
+    // "Ajuste" goes (its stage keeps "Ready for dev", "Em dev"): the rule that leaves it goes too, the rest stay.
+    await deleteIssueColumn(deps, f.owner.id, f.org.id, crm.column("Ajuste").id, crm.column("Em dev").id);
+    expect((await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).map((r) => r.id).sort()).toEqual(
+      [toQa.id, toDeploy.id].sort(),
+    );
+    expect((await live(f)).map((r) => r.id)).not.toContain(fromAjuste.id);
+
+    // The column a rule lands in goes: the rule goes with it.
+    await deleteIssueColumn(deps, f.owner.id, f.org.id, crm.column("QA").id, crm.column("PR / Develop").id);
+    expect((await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).map((r) => r.id)).toEqual([toDeploy.id]);
   });
 });
