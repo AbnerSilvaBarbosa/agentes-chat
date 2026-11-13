@@ -8,6 +8,7 @@ import {
   eq,
   inArray,
   isNull,
+  ne,
   or,
   rowsOf,
   type SQL,
@@ -1020,6 +1021,8 @@ export async function listIssues(
   filters: {
     q?: string;
     status?: IssueStatus;
+    /** Leave out the tasks in that status: before the cap, so they cannot spend it (ADR 0181). */
+    notStatus?: IssueStatus;
     assignee?: WorkActor;
     parentIssueId?: string;
     /** Only that project's tasks; `none`: the ones with no project. */
@@ -1039,6 +1042,7 @@ export async function listIssues(
         eq(issues.orgId, orgId),
         actor.type === "person" ? taskSeenSql("issues", sql`${actor.userId}::text`) : undefined,
         filters.status ? eq(issues.status, filters.status) : undefined,
+        filters.notStatus ? ne(issues.status, filters.notStatus) : undefined,
         filters.parentIssueId ? eq(issues.parentIssueId, filters.parentIssueId) : undefined,
         filters.projectId === "none"
           ? isNull(issues.projectId)

@@ -175,6 +175,24 @@ describe("Minhas tarefas: the controls", () => {
     expect(document.querySelector(".ac-pagehead")?.textContent).toContain("2 em aberto");
   });
 
+  test("the page shows the Empresa and Board filters", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await visit(s);
+    const triggers = [...document.querySelectorAll(".ac-toolbar .ac-filter__trigger")].map((t) => t.textContent);
+    expect(triggers.some((t) => t?.startsWith("Empresa"))).toBe(true);
+    expect(triggers.some((t) => t?.startsWith("Board"))).toBe(true);
+  });
+
+  test("a saved assignee filter from the other pages neither empties the page nor shows a chip", async () => {
+    const s = await setup();
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.orgs.setIssuesView(ORG_ID, { ...(await s.api.orgs.issuesView(ORG_ID)), assignees: ["person:u-joao"] });
+    await visit(s);
+    expect(titles()).toEqual(["Algo meu"]);
+    expect(document.querySelector(".ac-toolbar")?.textContent).not.toContain("João");
+  });
+
   test("Filtro has no assignee choice, and the Empresa and Board selects are there", async () => {
     const s = await setup();
     await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });

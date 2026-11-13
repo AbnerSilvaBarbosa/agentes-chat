@@ -280,6 +280,8 @@ export function issueRoutes(deps: AppDeps) {
         projectId: query.projectId,
         spaceId: query.spaceId,
         assignee: query.assignee === "me" ? { type: "person", id: c.get("user").id } : undefined,
+        // The member's own page leaves canceled tasks out, before the cap (ADR 0181).
+        notStatus: query.assignee === "me" ? "canceled" : undefined,
       });
       return c.json({ issues: list }, 200);
     },

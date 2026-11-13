@@ -554,7 +554,8 @@ export function createMockPlanning(
         const inProject = (i: Issue) =>
           !filters.projectId || (filters.projectId === "none" ? !i.project : i.project?.id === filters.projectId);
         const myId = filters.assignee === "me" ? (await me()).id : null;
-        const assignedToMe = (i: Issue) => !myId || (i.assignee?.type === "person" && i.assignee.id === myId);
+        const assignedToMe = (i: Issue) =>
+          !myId || (i.assignee?.type === "person" && i.assignee.id === myId && i.status !== "canceled");
         return clone(
           (await store(orgId)).issues
             .filter(

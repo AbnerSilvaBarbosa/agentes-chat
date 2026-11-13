@@ -41,4 +41,21 @@ describe("the member's own tasks list (my-tasks)", () => {
     const ownerList = await listIssues(f.db, person(f.owner.id), f.org.id, { assignee: mine });
     expect(ownerList.map((i) => i.title).sort()).toEqual([hidden.title, visible.title].sort());
   });
+
+  test("leaving canceled tasks out happens before the cap, so they cannot spend it", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const mine = { type: "person" as const, id: f.owner.id };
+    for (const title of ["c1", "c2", "c3"]) {
+      const made = await createIssue(deps, person(f.owner.id), f.org.id, { title, assignee: mine });
+      await f.db.update(schema.issues).set({ status: "canceled" }).where(eq(schema.issues.id, made.id));
+    }
+    await createIssue(deps, person(f.owner.id), f.org.id, { title: "aberta", assignee: mine });
+    const list = await listIssues(f.db, person(f.owner.id), f.org.id, {
+      assignee: mine,
+      notStatus: "canceled",
+      limit: 2,
+    });
+    expect(list.map((i) => i.title)).toEqual(["aberta"]);
+  });
 });
