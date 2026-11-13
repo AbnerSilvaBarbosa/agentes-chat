@@ -122,6 +122,7 @@ describe("a personal workspace's sidebar", () => {
       "Drive",
       "Calendário",
       "Tarefas",
+      "Minhas tarefas",
       "Threads",
       "Equipe",
       "Wiki",
