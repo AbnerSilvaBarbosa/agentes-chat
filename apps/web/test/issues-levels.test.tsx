@@ -47,6 +47,19 @@ describe("the level rule", () => {
     expect(chromeFor("board").action).toBe("task");
     expect(chromeFor("all")).toEqual({ action: "task", filters: { space: true, board: true } });
   });
+
+  test("the member's own page is a level of its own: the task action, and no assignee choice", () => {
+    expect(levelOf({ mine: true })).toBe("mine");
+    expect(levelOf({ mine: true, all: true })).toBe("mine");
+    expect(chromeFor("mine").action).toBe("task");
+    expect(chromeFor("mine").assignee).toBe(false);
+    // Every other level offers the assignee choice, as before.
+    for (const level of ["root", "company", "board", "all"] as const) expect(chromeFor(level).assignee).toBeUndefined();
+  });
+
+  test("the member's own page shows the Empresa and Board filters", () => {
+    expect(chromeFor("mine").filters).toEqual({ space: true, board: true });
+  });
 });
 
 describe("the header's action follows the level", () => {
