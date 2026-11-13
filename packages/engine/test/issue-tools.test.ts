@@ -10,6 +10,7 @@ import {
   grantScopes,
   listColumnTemplates,
   listIssueColumns,
+  listIssues,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
 
@@ -182,6 +183,24 @@ describe("what agents can do with cards", () => {
     expect((await run("update_issue", { issue: id, company: "Empresa A", priority: "high" })).isError).toBe(true);
     expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).priority).not.toBe("high");
     expect(crm.name).toBe("CRM");
+  });
+
+  test("create_issue refuses a company alone, lists its boards and creates nothing", async () => {
+    f = await setup();
+    await pipeline(f);
+    const { run } = await agentTools(f);
+    const before = (await listIssues(f.db, person(f.owner.id), f.org.id, {})).length;
+
+    const refused = await run("create_issue", { title: "Sem board", company: "Empresa A" });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("Empresa A");
+    expect(refused.content).toContain('"CRM"');
+    expect(refused.content).not.toContain('"Site"');
+    expect((await listIssues(f.db, person(f.owner.id), f.org.id, {})).length).toBe(before);
+    // With the board named, the same call creates the card there.
+    const made = await run("create_issue", { title: "Com board", company: "Empresa A", project: "CRM" });
+    expect(made.isError).toBe(false);
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id: issueOf(made.data) })).project?.name).toBe("CRM");
   });
 
   test("update_issue picks the board by its company when two companies share a board name", async () => {

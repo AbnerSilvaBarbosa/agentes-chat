@@ -307,6 +307,31 @@ async function chosenProject(deps: IssueDeps, ctx: ToolContext, input: Record<st
   return (await projectByName(deps, ctx.orgId, name, input.new_project === true ? "new" : "task", spaceId)).id;
 }
 
+/** A card belongs to a board, so a company alone can't place it: say which boards that company has. */
+async function companyAloneRefusal(
+  deps: IssueDeps,
+  ctx: ToolContext,
+  input: Record<string, unknown>,
+  projectId: string | null | undefined,
+) {
+  if (projectId !== undefined || !str(input.company).trim()) return null;
+  const space = await spaceByName(deps, ctx, str(input.company));
+  const boards = await deps.db
+    .select({ name: schema.issueProjects.name })
+    .from(schema.issueProjects)
+    .where(
+      and(
+        eq(schema.issueProjects.orgId, ctx.orgId),
+        eq(schema.issueProjects.spaceId, space.id),
+        isNull(schema.issueProjects.archivedAt),
+      ),
+    );
+  return {
+    content: `A task is placed in a board, not in a company: name the board in \`project\`. ${space.name}'s boards: ${boards.length ? boards.map((b) => `"${b.name}"`).join(", ") : "none yet"}.`,
+    isError: true,
+  };
+}
+
 /** Names a board together with the company it is in, for the tools that take a board (ADR 0178). */
 const companyField = {
   type: "string",
@@ -747,6 +772,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           }
           const audience = await chosenAudience(ctx, input.visible_to);
           const projectId = await chosenProject(deps, ctx, input);
+          const aloneRefusal = await companyAloneRefusal(deps, ctx, input, projectId);
+          if (aloneRefusal) return aloneRefusal;
           const column = str(input.column).trim()
             ? await namedColumn(deps, ctx, str(input.column), projectId ?? null)
             : null;
@@ -886,24 +913,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           const due = typeof input.due_date === "string" ? input.due_date.trim() : undefined;
           const columnName = str(input.column).trim();
           const projectId = await chosenProject(deps, ctx, input);
-          // A card belongs to a board, so a company alone can't place it: say which boards that company has.
-          if (projectId === undefined && str(input.company).trim()) {
-            const space = await spaceByName(deps, ctx, str(input.company));
-            const boards = await deps.db
-              .select({ name: schema.issueProjects.name })
-              .from(schema.issueProjects)
-              .where(
-                and(
-                  eq(schema.issueProjects.orgId, ctx.orgId),
-                  eq(schema.issueProjects.spaceId, space.id),
-                  isNull(schema.issueProjects.archivedAt),
-                ),
-              );
-            return {
-              content: `A task is placed in a board, not in a company: name the board in \`project\`. ${space.name}'s boards: ${boards.length ? boards.map((b) => `"${b.name}"`).join(", ") : "none yet"}.`,
-              isError: true,
-            };
-          }
+          const aloneRefusal = await companyAloneRefusal(deps, ctx, input, projectId);
+          if (aloneRefusal) return aloneRefusal;
           let before: Record<string, unknown> = {};
           const asked = givenFiles(input) ?? [];
           const files = asked.length
