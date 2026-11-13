@@ -204,6 +204,7 @@ const BUILTIN: Record<string, ActivityKind> = {
   wait_for_device: "waitingForDevice",
   create_wiki_page: "writingWiki",
   update_wiki_page: "writingWiki",
+  move_wiki_page: "writingWiki",
   read_wiki_page: "readingWiki",
   search_wiki: "readingWiki",
   link_to_wiki: "linkingWiki",

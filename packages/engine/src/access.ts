@@ -58,7 +58,7 @@ export const BUILTIN_TOOLS: Record<string, string[]> = {
     "schedule_action",
   ],
   "wiki:read": ["search_wiki", "read_wiki_page"],
-  "wiki:write": ["create_wiki_page", "update_wiki_page", "link_to_wiki"],
+  "wiki:write": ["create_wiki_page", "update_wiki_page", "move_wiki_page", "link_to_wiki"],
   "vault:read": ["vault_list"],
   "vault:write": ["vault_save", "vault_delete"],
   "setup:write": [
@@ -204,6 +204,7 @@ export const BUILTIN_TOOL_INFO: Record<string, { label: string; description: str
     label: "Edit wiki page",
     description: "Adds or rewrites a section when someone asks.",
   },
+  move_wiki_page: { label: "Move wiki pages", description: "Moves pages to another folder when someone asks." },
   link_to_wiki: { label: "Link wiki pages", description: "Links a page to others when someone asks." },
   vault_list: {
     label: "Look in the Vault",

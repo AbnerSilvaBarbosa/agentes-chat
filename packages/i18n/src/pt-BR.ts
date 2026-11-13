@@ -16450,6 +16450,10 @@ export const ptBR = {
       label: "Editar página da wiki",
       description: "Acrescenta ou reescreve um trecho quando alguém pede.",
     },
+    move_wiki_page: {
+      label: "Mover páginas da wiki",
+      description: "Move páginas para outra pasta quando alguém pede.",
+    },
     link_to_wiki: {
       label: "Ligar páginas da wiki",
       description: "Liga uma página a outras quando alguém pede.",

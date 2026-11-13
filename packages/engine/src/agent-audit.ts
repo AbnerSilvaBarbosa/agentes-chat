@@ -225,7 +225,7 @@ export const AUDIT_PAGE = 50;
 export const AUDIT_PAGE_MAX = 200;
 
 /** Tools whose input names a task or a wiki page. */
-const CONTENT_TOOLS = /^(create_issue|update_issue|comment_issue|create_wiki_page|update_wiki_page|link_to_wiki)$/;
+const CONTENT_TOOLS = /^(create_issue|update_issue|comment_issue|create_wiki_page|update_wiki_page|move_wiki_page|link_to_wiki)$/;
 
 type AuditLogRow = typeof auditLog.$inferSelect;
 

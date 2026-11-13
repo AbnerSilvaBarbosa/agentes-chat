@@ -9,11 +9,14 @@ import { audienceOfConversation } from "./task-access";
 import type { ToolContext, ToolDefinition, ToolOutput, ToolSource } from "./tools/types";
 import {
   appendToWikiPage,
+  cleanFolder,
   createWikiPage,
   getWikiPage,
+  moveWikiPage,
   recordWikiReads,
   searchWikiForRun,
   updateWikiPage,
+  WIKI_LIMITS,
   type WikiActor,
   type WikiDeps,
   wikiPageHeld,
@@ -67,8 +70,8 @@ const heldRun = (ctx: ToolContext) => ({
 
 /**
  * The org wiki for agents (ADR 0023): `search_wiki` and `read_wiki_page`
- * (`wiki:read`), `create_wiki_page`, `update_wiki_page` and `link_to_wiki`
- * (`wiki:write`). Writes need a person's request (the trigger message, or a
+ * (`wiki:read`), `create_wiki_page`, `update_wiki_page`, `move_wiki_page` and
+ * `link_to_wiki` (`wiki:write`). Writes need a person's request (the trigger message, or a
  * routine's instructions: its creator's), and every version records
  * "by {agent}, at {person}'s request".
  */
@@ -274,6 +277,74 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
             content: `Saved [[${p.title}]] as version ${p.version}.`,
             data: { wikiPageId: p.id, slug: p.slug, version: p.version },
           };
+        } catch (error) {
+          return failed(error);
+        }
+      },
+    },
+    {
+      name: "move_wiki_page",
+      description:
+        "Move wiki pages (by title or slug, up to 20) to another folder (\"\" is the top level; a folder that does not exist is created). A page keeps its address, so every link to it keeps working. ONLY when a person asks in the current message or your routine's instructions say so. Each page is moved on its own with the person's rules: the answer lists the moved and the refused, with why.",
+      scope: "wiki:write",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pages: { type: "array", items: pageRef, minItems: 1, maxItems: 20 },
+          folder: {
+            type: "string",
+            maxLength: WIKI_LIMITS.folder,
+            description: 'e.g. "Engenharia/Backend"; "" = the root',
+          },
+        },
+        required: ["pages", "folder"],
+        additionalProperties: false,
+      },
+      async execute(input, ctx) {
+        const actor = await writer(ctx);
+        if (!actor) return { content: WIKI_WRITE_REFUSAL, isError: true };
+        try {
+          const refs = Array.isArray(input.pages) ? input.pages.map(str).filter((r) => r.trim()) : [];
+          if (refs.length === 0) return { content: "Name at least one page to move.", isError: true };
+          if (refs.length > 20) return { content: "Move at most 20 pages at a time.", isError: true };
+          const wanted = str(input.folder);
+          if (wanted.length > WIKI_LIMITS.folder) {
+            return {
+              content: `The folder name is longer than the wiki allows (${WIKI_LIMITS.folder}).`,
+              isError: true,
+            };
+          }
+          const folder = cleanFolder(wanted);
+          const where = folder ? `"${folder}"` : "the top level";
+          const moved: string[] = [];
+          const there: string[] = [];
+          const refused: string[] = [];
+          const seen = new Set<string>();
+          for (const ref of refs) {
+            try {
+              const page = await getWikiPage(ctx.db, actor, ctx.orgId, ref);
+              if (seen.has(page.id)) continue;
+              seen.add(page.id);
+              if (page.folder === folder) {
+                there.push(`[[${page.title}]] was in ${where} already`);
+                continue;
+              }
+              const saved = await moveWikiPage({ ...wiki(ctx) }, actor, ctx.orgId, page.id, folder);
+              moved.push(
+                `[[${saved.title}]] (slug ${saved.slug}) from ${page.folder ? `"${page.folder}"` : "the top level"}`,
+              );
+            } catch (error) {
+              refused.push(`${ref}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+          const content = [
+            moved.length ? `Moved to ${where}:\n${moved.map((m) => `- ${m}`).join("\n")}` : "",
+            there.length ? there.map((m) => `- ${m}`).join("\n") : "",
+            refused.length ? `Refused:\n${refused.map((m) => `- ${m}`).join("\n")}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n");
+          return { content, isError: moved.length === 0 && there.length === 0 };
         } catch (error) {
           return failed(error);
         }

@@ -662,6 +662,7 @@ const LABELS: Record<string, readonly [en: string, ptBR: string]> = {
   cancel_follow_up: ["Cancel follow-up", "Cancelar retorno"],
   create_wiki_page: ["Create wiki page", "Criar página na wiki"],
   update_wiki_page: ["Change wiki page", "Alterar página da wiki"],
+  move_wiki_page: ["Move wiki pages", "Mover páginas da wiki"],
   read_wiki_page: ["Read wiki page", "Ler página da wiki"],
   search_wiki: ["Search the wiki", "Buscar na wiki"],
   search_context: ["Search what the team knows", "Buscar no que a equipe sabe"],

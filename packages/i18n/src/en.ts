@@ -16458,6 +16458,10 @@ export const en = {
       label: "Edit wiki page",
       description: "Adds or rewrites a section when someone asks.",
     },
+    move_wiki_page: {
+      label: "Move wiki pages",
+      description: "Moves pages to another folder when someone asks.",
+    },
     link_to_wiki: {
       label: "Link wiki pages",
       description: "Links a page to others when someone asks.",
