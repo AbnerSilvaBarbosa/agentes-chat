@@ -68,3 +68,32 @@ A pipeline is a chain of automations that move a card, so the guards are what ke
 - Not in this change: editing the filter from the routines page (people change the routine's instructions and the
   event; the filter is the agent's), a prompt per column, and firing on anything but status and column (a change of
   assignee or priority has no event yet).
+
+## Addendum (2026-11-13): a board's Avisos
+
+A person who runs a board had no place to say "when a card goes from X to Y, wake this agent": only an agent could set
+the routine up, by name, in chat. The board's columns dialog now has a section "Avisos" for it.
+
+- **A rule is a routine.** Saving one makes one event routine on `issue.moved` for the chosen agent, narrowed to the
+  board and the column the card goes to (`projectId`, `columnId`) and, when the person named it, the column it leaves
+  (`fromColumnId`), with `access: act`, a DM as its target and a fixed brief in the creator's language (pt-BR or
+  English): the card, where it came from, where it went and who moved it are in each run's event (`title` and
+  `fromColumn` were added to the payload for it), the brief only says why the agent was woken and asks it to read the
+  card, do the step this stage asks of it and say on the card what it did. No table and no event are new
+  (`packages/engine/src/board-alerts.ts`).
+- **Who may add one.** The checks are `createRoutine`'s own: who may manage routines for that agent (an admin or the
+  agent's owner, refused with `routine.manage_forbidden`) and who may talk to it, the agent's cap of active routines,
+  its budget and approvals. The loop guards of §3 apply unchanged, so a rule never fires on a move its own run made and
+  a chain stops after three.
+- **What is listed.** The board's event routines on `issue.moved` that name a destination column, whoever made them
+  (a routine an agent made with `board` and `column` shows too), as `routineSeer` lets the person see routines; the
+  Rotinas page shows them as it shows any routine. A rule whose agent is archived shows as paused with the reason.
+- **The board's columns.** A board that still followed the workspace's columns gets its own copy when its first rule is
+  added (`ensureBoardColumns`), because a rule names a column by id and the copy made by a later edit would give every
+  column a new one.
+- **When the board changes.** Deleting a column deletes the rules that name it, as the column a card goes to or the one
+  it leaves (`deleteColumnRoutines`), since they could never fire again; renaming one keeps them and the dialog shows the
+  new name. An archived board fires none of its rules (`fireIssueMoved` skips the routines that name it) and they stay
+  listed.
+- **Not here.** Alerting a person or several agents in one rule, rules for every board of a company, an instruction of
+  its own per rule, other events (created, commented, due date), the phone and the desktop shell.
