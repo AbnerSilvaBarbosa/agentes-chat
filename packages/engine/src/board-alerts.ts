@@ -1,7 +1,7 @@
 import { and, type Database, eq, inArray, isNull, schema } from "@agenteschat/db";
 import { appLocale } from "@agenteschat/i18n/locale";
 import { NotFoundError, ValidationError } from "./errors";
-import { boardColumnsOf } from "./issue-columns";
+import { boardColumnsOf, ensureBoardColumns } from "./issue-columns";
 import { requireActiveMembership } from "./organizations";
 import { createRoutine, deleteRoutine, type RoutineDeps, routineSeer } from "./routines";
 
@@ -153,13 +153,23 @@ export async function addBoardAlert(
   await requireActiveMembership(db, userId, orgId);
   const board = await boardOf(db, orgId, projectId);
   const fromColumnId = input.fromColumnId || null;
-  if (fromColumnId && fromColumnId === input.columnId) {
+  // A board that still follows the workspace's columns gets its own copy first: a rule names a column by id, and the
+  // copy made later (the first edit of its columns) would give every column a new one.
+  const followed = await boardColumnsOf(db, orgId, projectId);
+  const columns = await ensureBoardColumns(db, orgId, projectId);
+  // What the person picked from the workspace's set (the board showed it) is the copy's column at the same place.
+  const ownId = (id: string) => {
+    const at = followed.findIndex((c) => c.id === id);
+    return followed[at]?.projectId === null ? (columns[at]?.id ?? id) : id;
+  };
+  const toId = ownId(input.columnId);
+  const fromId = fromColumnId ? ownId(fromColumnId) : null;
+  if (fromId && fromId === toId) {
     throw new ValidationError("A card can't go from a status to itself", "board_alert.same_column");
   }
-  const columns = await boardColumnsOf(db, orgId, projectId);
-  const to = columns.find((c) => c.id === input.columnId);
-  const from = fromColumnId ? columns.find((c) => c.id === fromColumnId) : null;
-  if (!to || (fromColumnId && !from)) {
+  const to = columns.find((c) => c.id === toId);
+  const from = fromId ? columns.find((c) => c.id === fromId) : null;
+  if (!to || (fromId && !from)) {
     throw new ValidationError("That status is not one of this board's", "board_alert.column_not_on_board");
   }
   const [person] = await db.select({ locale: users.locale }).from(users).where(eq(users.id, userId));

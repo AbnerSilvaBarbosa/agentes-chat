@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { eq, schema } from "@agenteschat/db";
 import {
+  addBoardAlert,
   applyColumnTemplate,
   archiveAgent,
   boardAlerts,
   createIssueProject,
   createRoutine,
+  ForbiddenError,
+  listIssueColumns,
   templateByName,
+  ValidationError,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
 import { routineDeps } from "./routine-fixtures";
@@ -23,7 +28,7 @@ async function pipeline(fx: Fixture, name = "CRM") {
   if (!template) throw new Error("no template");
   const columns = await applyColumnTemplate(deps, fx.owner.id, fx.org.id, board.id, template.id);
   const column = (columnName: string) => {
-    const found = columns.find((c) => c.name === columnName);
+    const found = columns.find((c) => c.projectId === board.id && c.name === columnName);
     if (!found) throw new Error(`no column ${columnName}`);
     return found;
   };
@@ -82,5 +87,113 @@ describe("listing a board's rules", () => {
     await archiveAgent(f.db, f.owner.id, f.org.id, f.agent.id);
     const [listed] = await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id);
     expect(listed).toMatchObject({ id: rule.id, paused: true, pausedReason: "agent_archived" });
+  });
+});
+
+describe("adding a rule", () => {
+  const alert = (fx: Fixture, userId: string, boardId: string, input: Parameters<typeof addBoardAlert>[4]) =>
+    addBoardAlert(routineDeps(fx), userId, fx.org.id, boardId, input);
+  const routineOf = async (fx: Fixture, id: string) =>
+    (await fx.db.select().from(schema.routines).where(eq(schema.routines.id, id)))[0];
+
+  test("saves a rule as an event routine on issue.moved, narrowed to the board and its columns", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    const spec = crm.column("Especificar");
+    const backlog = crm.column("Backlog");
+    const rule = await alert(f, f.owner.id, crm.board.id, {
+      agentId: f.agent.id,
+      columnId: spec.id,
+      fromColumnId: backlog.id,
+    });
+    expect(rule).toMatchObject({ agentId: f.agent.id, columnId: spec.id, fromColumnId: backlog.id, paused: false });
+    const row = await routineOf(f, rule.id);
+    expect(row).toMatchObject({
+      triggerType: "event",
+      event: "issue.moved",
+      agentId: f.agent.id,
+      access: "act",
+      active: true,
+      eventFilter: { projectId: crm.board.id, columnId: spec.id, fromColumnId: backlog.id },
+    });
+    // The fixed brief says the board, the status it went to and where it came from; the card comes with each run.
+    expect(row?.prompt).toContain("CRM");
+    expect(row?.prompt).toContain("Especificar");
+    expect(row?.prompt).toContain("Backlog");
+    expect(await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).toHaveLength(1);
+
+    // No source: the filter names only the destination.
+    const any = await alert(f, f.owner.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id });
+    expect((await routineOf(f, any.id))?.eventFilter).toEqual({
+      projectId: crm.board.id,
+      columnId: crm.column("QA").id,
+    });
+    expect(any.fromColumnId).toBeNull();
+  });
+
+  test("a board that followed the workspace's columns names its own copy, which later edits keep", async () => {
+    f = await setup();
+    const board = await createIssueProject({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, { name: "Novo" });
+    const workspace = await listIssueColumns(f.db, f.owner.id, f.org.id, board.id);
+    expect(workspace.every((c) => c.projectId === null)).toBe(true);
+    const picked = workspace.find((c) => c.stage === "in_progress");
+    const rule = await alert(f, f.owner.id, board.id, { agentId: f.agent.id, columnId: picked?.id ?? "" });
+    const own = await listIssueColumns(f.db, f.owner.id, f.org.id, board.id);
+    expect(own.every((c) => c.projectId === board.id)).toBe(true);
+    const copy = own.find((c) => c.stage === "in_progress");
+    expect(copy).toBeDefined();
+    expect(rule.columnId).toBe(copy?.id as string);
+  });
+
+  test("writes the brief in the person's language", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    await f.db.update(schema.users).set({ locale: "pt-BR" }).where(eq(schema.users.id, f.owner.id));
+    const pt = await alert(f, f.owner.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id });
+    expect((await routineOf(f, pt.id))?.prompt).toContain("Você foi avisado");
+    await f.db.update(schema.users).set({ locale: "en" }).where(eq(schema.users.id, f.owner.id));
+    const en = await alert(f, f.owner.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("Deploy").id });
+    expect((await routineOf(f, en.id))?.prompt).toContain("You were alerted");
+  });
+
+  test("refuses a status that is not the board's and a source equal to the destination", async () => {
+    f = await setup();
+    const crm = await pipeline(f, "CRM");
+    const site = await pipeline(f, "Site");
+    const qa = crm.column("QA");
+    await expect(
+      alert(f, f.owner.id, crm.board.id, { agentId: f.agent.id, columnId: site.column("QA").id }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      alert(f, f.owner.id, crm.board.id, {
+        agentId: f.agent.id,
+        columnId: qa.id,
+        fromColumnId: site.column("Backlog").id,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      alert(f, f.owner.id, crm.board.id, { agentId: f.agent.id, columnId: qa.id, fromColumnId: qa.id }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).toEqual([]);
+  });
+
+  test("refuses a rule for an agent the member may not manage", async () => {
+    f = await setup();
+    const crm = await pipeline(f);
+    const member = await addMember(f.db, f.org.id, "member", "Caio");
+    await expect(
+      alert(f, member.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+
+    // An admin manages routines, but not for an agent that answers only its owner.
+    const admin = await addMember(f.db, f.org.id, "admin", "Bia");
+    await f.db
+      .update(schema.agents)
+      .set({ audienceMode: "owner", ownerUserId: f.owner.id })
+      .where(eq(schema.agents.id, f.agent.id));
+    await expect(
+      alert(f, admin.id, crm.board.id, { agentId: f.agent.id, columnId: crm.column("QA").id }),
+    ).rejects.toThrow();
+    expect(await boardAlerts(f.db, f.owner.id, f.org.id, crm.board.id)).toEqual([]);
   });
 });
