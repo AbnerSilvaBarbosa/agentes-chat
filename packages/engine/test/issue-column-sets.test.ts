@@ -146,6 +146,22 @@ describe("status sets", () => {
     });
   });
 
+  test("two renames to one name at once leave the loser a name_taken answer", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const columns = [{ name: "Lead", stage: "todo" as const }];
+    const a = await createColumnTemplate(deps, f.owner.id, f.org.id, { name: "A", columns });
+    const b = await createColumnTemplate(deps, f.owner.id, f.org.id, { name: "B", columns });
+    const results = await Promise.all([
+      rejection(updateColumnTemplate(deps, f.owner.id, f.org.id, a.id, { name: "Same" })),
+      rejection(updateColumnTemplate(deps, f.owner.id, f.org.id, b.id, { name: "same" })),
+    ]);
+    const refused = results.filter((r) => r !== undefined);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toBeInstanceOf(ValidationError);
+    expect(refused[0]).toMatchObject({ code: "issue_template.name_taken" });
+  });
+
   test("refuses a set with no columns, and a member who may not create tasks", async () => {
     f = await setup();
     const deps = { db: f.db, pubsub: f.pubsub };

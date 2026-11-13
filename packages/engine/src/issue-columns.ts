@@ -1,6 +1,6 @@
 import type { PubSub } from "@agenteschat/adapters";
 import { and, type Database, desc, eq, inArray, isNull, schema, sql } from "@agenteschat/db";
-import { ForbiddenError, NotFoundError, ValidationError } from "./errors";
+import { ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "./errors";
 import { publishOrgEvent } from "./events";
 import type { IssueStatus } from "./issues";
 import { can, requireActiveMembership } from "./organizations";
@@ -598,11 +598,15 @@ export async function updateColumnTemplate(
     const others = (await columnTemplates(deps.db, orgId)).filter((t) => t.id !== templateId);
     if (others.some((t) => t.name.toLowerCase() === wanted)) throw takenName(set.name);
   }
+  // The check above is not atomic: two renames to the same name race, and the unique index answers the loser.
   const [row] = await deps.db
     .update(issueColumnTemplates)
     .set(set)
     .where(and(eq(issueColumnTemplates.id, templateId), eq(issueColumnTemplates.orgId, orgId)))
-    .returning();
+    .returning()
+    .catch((error: unknown) => {
+      throw isUniqueViolation(error) && set.name ? takenName(set.name) : error;
+    });
   if (!row) throw new NotFoundError("Template not found");
   return templateRef(row);
 }
