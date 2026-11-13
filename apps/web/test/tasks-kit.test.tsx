@@ -136,4 +136,13 @@ describe("the Tarefas screens hold to the kit", () => {
     expect(css).not.toContain(".space-board-wrap>.ac-button");
     expect(css).not.toContain(".space-board-wrap > .ac-button");
   });
+
+  test("a company's image sits alone in its box, centred beside the name", async () => {
+    const css = await builtCss("src/styles.css", "src/pages/issues.css");
+    // The kit's dot is the box's ::before: left on an image mark it is a second grid item that pushes the picture off
+    // the middle of the name beside it, on a card and in the path.
+    expect(css).toMatch(/\.space-mark::?before\s*\{\s*content:\s*none/);
+    // The picture is the size of its box, whatever place sets it.
+    expect(css).toMatch(/\.space-mark>img\{[^}]*width:var\(--dot-box\)/);
+  });
 });

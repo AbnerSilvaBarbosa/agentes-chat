@@ -1975,10 +1975,18 @@ html:not([data-pointer]) .task-talk__summary:focus-visible {
 .space-board__name .space-mark {
   --dot-box: var(--control-icon-lg);
 }
+/* The dot's box holds the image alone: the kit's dot is that box's `::before`, which would be a second grid item pushing
+   the image off its middle. Where a place sets its own `--dot-box` (a row, a card) that wins over this default. */
+.space-mark {
+  --dot-box: var(--control-icon-sm);
+}
+.space-mark::before {
+  content: none;
+}
 .space-mark > img {
   display: block;
-  width: var(--dot-box, var(--control-icon-sm));
-  height: var(--dot-box, var(--control-icon-sm));
+  width: var(--dot-box);
+  height: var(--dot-box);
   border-radius: var(--space-1);
   object-fit: cover;
 }
