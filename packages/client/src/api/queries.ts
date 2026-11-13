@@ -4408,6 +4408,8 @@ export const useCompanyDashboard = (orgId: string, spaceId: string, days: 7 | 30
   return useQuery({
     queryKey: keys.companyDashboard(orgId, spaceId, days),
     queryFn: () => api.issues.companyDashboard(orgId, spaceId, days),
+    // The numbers stay on screen while another period loads.
+    placeholderData: (prev) => prev,
   });
 };
 

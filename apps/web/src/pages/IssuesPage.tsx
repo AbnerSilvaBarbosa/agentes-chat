@@ -42,6 +42,8 @@ import {
   MenuSeparator,
   PageHeader,
   SearchField,
+  TabPanel,
+  Tabs,
   Toolbar,
   WorkSweep,
 } from "@agenteschat/ui";
@@ -85,6 +87,7 @@ import { inPlaceClick } from "@/lib/navigate";
 import { useOpenParam } from "@/lib/open-param";
 import { type ToastText, useToast } from "@/lib/toast";
 import { BoardColumnsDialog } from "./BoardColumns";
+import { CompanyDashboard } from "./CompanyDashboard";
 import {
   AddColumnDialog,
   Board,
@@ -132,7 +135,7 @@ function useProjectParam(): [string | undefined, (value: string | undefined) => 
       to: ".",
       search: ((prev: Record<string, unknown>) => {
         // A board belongs to a company: picking one leaves the company's own board.
-        const { project: _project, space: _space, all: _all, open: _open, m: _m, ...rest } = prev;
+        const { project: _project, space: _space, all: _all, open: _open, m: _m, tab: _tab, ...rest } = prev;
         return next ? { ...rest, project: next } : rest;
       }) as never,
     });
@@ -150,7 +153,7 @@ function useAllParam(): [boolean, (on: boolean) => void] {
     void navigate({
       to: ".",
       search: ((prev: Record<string, unknown>) => {
-        const { project: _project, space: _space, all: _all, open: _open, m: _m, ...rest } = prev;
+        const { project: _project, space: _space, all: _all, open: _open, m: _m, tab: _tab, ...rest } = prev;
         return on ? { ...rest, all: "1" } : rest;
       }) as never,
     });
@@ -168,11 +171,29 @@ function useSpaceParam(): [string | undefined, (value: string | undefined) => vo
     void navigate({
       to: ".",
       search: ((prev: Record<string, unknown>) => {
-        const { project: _project, space: _space, all: _all, open: _open, m: _m, ...rest } = prev;
+        const { project: _project, space: _space, all: _all, open: _open, m: _m, tab: _tab, ...rest } = prev;
         return next ? { ...rest, space: next } : rest;
       }) as never,
     });
   return [value, set];
+}
+
+/**
+ * The tab of a company's page (`?tab=painel`, ADR 0182): its boards, or its Painel. In the URL like the company itself,
+ * so the path above it and Back keep working; "Boards" is the address without it.
+ */
+function useTabParam(): ["boards" | "painel", (value: "boards" | "painel") => void] {
+  const value = useRouterState({ select: (s) => (s.location.search as { tab?: string }).tab });
+  const navigate = useNavigate();
+  const set = (next: "boards" | "painel") =>
+    void navigate({
+      to: ".",
+      search: ((prev: Record<string, unknown>) => {
+        const { tab: _tab, ...rest } = prev;
+        return next === "painel" ? { ...rest, tab: "painel" } : rest;
+      }) as never,
+    });
+  return [value === "painel" ? "painel" : "boards", set];
 }
 
 /**
@@ -204,6 +225,7 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const search = useDeferredValue(q.trim());
   const [projectParam, setProjectParam] = useProjectParam();
   const [spaceParam, setSpaceParam] = useSpaceParam();
+  const [tabParam, setTabParam] = useTabParam();
   const projectsQuery = useIssueProjects(org.id);
   const project = projectOfFilter(projectsQuery.data?.projects, projectParam);
   const space = spaceOfFilter(projectsQuery.data?.spaces, spaceParam);
@@ -235,6 +257,8 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const chrome = chromeFor(level);
   const onRootPage = level === "root";
   const onCompanyPage = level === "company";
+  // A company's page is two tabs: its boards, and its Painel (ADR 0182).
+  const onPainel = onCompanyPage && tabParam === "painel";
   // A board opened from a company's grid: its dialogs live with the page's, as the board of the URL's do.
   const [gridDialog, setGridDialog] = useState<"edit" | "delete" | null>(null);
   const [gridBoard, setGridBoard] = useState<IssueProjectRef | null>(null);
@@ -389,106 +413,123 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
               }
             />
             <WorkingNow issues={all} onOpen={toggle} />
-            <Toolbar
-              label={t("issues.filters")}
-              search={
-                <SearchField
-                  ref={searchRef}
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  onClear={() => setQ("")}
-                  clearLabel={copy.clearSearch}
-                  placeholder={t("issues.search")}
-                  aria-label={t("issues.search")}
-                  shortcut={<Kbd aria-hidden="true">/</Kbd>}
-                />
-              }
-              actions={
-                <span className="issues-tools">
-                  <DisplayButton view={view} onChange={changeView} />
-                  {(view.group === "stage" || (project && posts)) && (
-                    <Menu
-                      align="end"
-                      label={t("issues.moreOptions")}
-                      trigger={<Button size="sm" iconOnly icon="more" aria-label={t("issues.moreOptions")} />}
-                    >
-                      {view.group === "stage" && (
-                        <>
-                          <MenuItem icon="layers" onSelect={() => setColumnsDialog(true)} disabled={!columns}>
-                            {t("issues.columns.configTitle")}
-                          </MenuItem>
-                          <MenuItem icon="plus" onSelect={() => setAddingColumn(true)} disabled={!columns}>
-                            {t("issues.columns.add")}
-                          </MenuItem>
-                        </>
-                      )}
-                      {project && posts && (
-                        <>
-                          {view.group === "stage" && <MenuSeparator />}
-                          <MenuItem icon="edit" onSelect={() => setProjectDialog("edit")}>
-                            {t("issues.projects.edit")}
-                          </MenuItem>
-                          <MenuItem
-                            icon="archive"
-                            disabled={projectAction.isPending}
-                            onSelect={() =>
-                              projectAction.mutate({
-                                type: "update",
-                                projectId: project.id,
-                                archived: !project.archived,
-                              })
-                            }
-                          >
-                            {t(project.archived ? "issues.projects.unarchive" : "issues.projects.archive")}
-                          </MenuItem>
-                          <MenuItem icon="trash" danger onSelect={() => setProjectDialog("delete")}>
-                            {t("issues.projects.delete")}
-                          </MenuItem>
-                        </>
-                      )}
-                      {space && posts && (
-                        <>
-                          <MenuSeparator />
-                          <MenuItem icon="edit" onSelect={() => setSpaceDialog("edit")}>
-                            {t("issues.spaces.edit")}
-                          </MenuItem>
-                          <MenuItem
-                            icon="archive"
-                            disabled={spaceAction.isPending}
-                            onSelect={() =>
-                              spaceAction.mutate({ type: "update", spaceId: space.id, archived: !space.archived })
-                            }
-                          >
-                            {t(space.archived ? "issues.spaces.unarchive" : "issues.spaces.archive")}
-                          </MenuItem>
-                          <MenuItem icon="trash" danger onSelect={() => setSpaceDialog("delete")}>
-                            {t("issues.spaces.delete")}
-                          </MenuItem>
-                        </>
-                      )}
-                    </Menu>
-                  )}
-                </span>
-              }
-            >
-              {chrome.filters.space && (
-                <SpaceChip
-                  data={projectsQuery.data}
-                  value={spaceParam}
-                  onChange={setSpaceParam}
-                  onNew={posts ? () => setSpaceDialog("new") : undefined}
-                />
-              )}
-              {chrome.filters.board && (
-                <ProjectChip
-                  data={projectsQuery.data}
-                  value={projectParam}
-                  onChange={setProjectParam}
-                  onNew={posts ? () => setProjectDialog("new") : undefined}
-                />
-              )}
-              <IssueFilters view={view} issues={all} onChange={changeView} assignee={chrome.assignee !== false} />
-            </Toolbar>
+            {onCompanyPage && space && (
+              <Tabs
+                value={tabParam}
+                onValueChange={setTabParam}
+                label={t("issues.dashboard.tabsLabel")}
+                items={[
+                  { value: "boards", label: t("issues.dashboard.boards") },
+                  { value: "painel", label: t("issues.dashboard.tab") },
+                ]}
+              >
+                <TabPanel value="painel">
+                  <CompanyDashboard orgId={org.id} spaceId={space.id} />
+                </TabPanel>
+              </Tabs>
+            )}
+            {!onPainel && (
+              <Toolbar
+                label={t("issues.filters")}
+                search={
+                  <SearchField
+                    ref={searchRef}
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    onClear={() => setQ("")}
+                    clearLabel={copy.clearSearch}
+                    placeholder={t("issues.search")}
+                    aria-label={t("issues.search")}
+                    shortcut={<Kbd aria-hidden="true">/</Kbd>}
+                  />
+                }
+                actions={
+                  <span className="issues-tools">
+                    <DisplayButton view={view} onChange={changeView} />
+                    {(view.group === "stage" || (project && posts)) && (
+                      <Menu
+                        align="end"
+                        label={t("issues.moreOptions")}
+                        trigger={<Button size="sm" iconOnly icon="more" aria-label={t("issues.moreOptions")} />}
+                      >
+                        {view.group === "stage" && (
+                          <>
+                            <MenuItem icon="layers" onSelect={() => setColumnsDialog(true)} disabled={!columns}>
+                              {t("issues.columns.configTitle")}
+                            </MenuItem>
+                            <MenuItem icon="plus" onSelect={() => setAddingColumn(true)} disabled={!columns}>
+                              {t("issues.columns.add")}
+                            </MenuItem>
+                          </>
+                        )}
+                        {project && posts && (
+                          <>
+                            {view.group === "stage" && <MenuSeparator />}
+                            <MenuItem icon="edit" onSelect={() => setProjectDialog("edit")}>
+                              {t("issues.projects.edit")}
+                            </MenuItem>
+                            <MenuItem
+                              icon="archive"
+                              disabled={projectAction.isPending}
+                              onSelect={() =>
+                                projectAction.mutate({
+                                  type: "update",
+                                  projectId: project.id,
+                                  archived: !project.archived,
+                                })
+                              }
+                            >
+                              {t(project.archived ? "issues.projects.unarchive" : "issues.projects.archive")}
+                            </MenuItem>
+                            <MenuItem icon="trash" danger onSelect={() => setProjectDialog("delete")}>
+                              {t("issues.projects.delete")}
+                            </MenuItem>
+                          </>
+                        )}
+                        {space && posts && (
+                          <>
+                            <MenuSeparator />
+                            <MenuItem icon="edit" onSelect={() => setSpaceDialog("edit")}>
+                              {t("issues.spaces.edit")}
+                            </MenuItem>
+                            <MenuItem
+                              icon="archive"
+                              disabled={spaceAction.isPending}
+                              onSelect={() =>
+                                spaceAction.mutate({ type: "update", spaceId: space.id, archived: !space.archived })
+                              }
+                            >
+                              {t(space.archived ? "issues.spaces.unarchive" : "issues.spaces.archive")}
+                            </MenuItem>
+                            <MenuItem icon="trash" danger onSelect={() => setSpaceDialog("delete")}>
+                              {t("issues.spaces.delete")}
+                            </MenuItem>
+                          </>
+                        )}
+                      </Menu>
+                    )}
+                  </span>
+                }
+              >
+                {chrome.filters.space && (
+                  <SpaceChip
+                    data={projectsQuery.data}
+                    value={spaceParam}
+                    onChange={setSpaceParam}
+                    onNew={posts ? () => setSpaceDialog("new") : undefined}
+                  />
+                )}
+                {chrome.filters.board && (
+                  <ProjectChip
+                    data={projectsQuery.data}
+                    value={projectParam}
+                    onChange={setProjectParam}
+                    onNew={posts ? () => setProjectDialog("new") : undefined}
+                  />
+                )}
+                <IssueFilters view={view} issues={all} onChange={changeView} assignee={chrome.assignee !== false} />
+              </Toolbar>
+            )}
             {onRootPage && (
               <SpaceList
                 data={projectsQuery.data}
@@ -498,7 +539,7 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                 onNew={posts ? () => setSpaceDialog("new") : undefined}
               />
             )}
-            {onCompanyPage && (
+            {onCompanyPage && !onPainel && (
               <SpaceBoards
                 space={space ?? null}
                 data={projectsQuery.data}

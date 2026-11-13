@@ -7520,6 +7520,14 @@ export const en = {
       imageTitle: "Company image",
       imageHelp: "Drag to frame it. The square is what shows. PNG, JPEG or WebP, up to 1 MB.",
     },
+    /** A company's Painel (ADR 0182): the numbers of its tasks. */
+    dashboard: {
+      tabsLabel: "Company view",
+      boards: "Boards",
+      tab: "Dashboard",
+      periodLabel: "Period",
+      days: "{{count}} days",
+    },
     alerts: {
       title: "Alerts",
       empty: "No alerts yet",

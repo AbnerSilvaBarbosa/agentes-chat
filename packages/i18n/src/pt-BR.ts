@@ -7520,6 +7520,14 @@ export const ptBR = {
       imageTitle: "Imagem da empresa",
       imageHelp: "Arraste para enquadrar. O quadrado é o que aparece. PNG, JPEG ou WebP, até 1 MB.",
     },
+    /** O Painel da empresa (ADR 0182): os números das tarefas dela. */
+    dashboard: {
+      tabsLabel: "Visão da empresa",
+      boards: "Boards",
+      tab: "Painel",
+      periodLabel: "Período",
+      days: "{{count}} dias",
+    },
     alerts: {
       title: "Avisos",
       empty: "Nenhum aviso ainda",
