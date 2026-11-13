@@ -1,8 +1,11 @@
 import { AGENT_COLORS } from "@agenteschat/tokens/look";
-import type { IssueProject, IssueProjectRef } from "../api/types";
+import type { IssueProject, IssueProjectRef, IssueSpace, IssueSpaceRef } from "../api/types";
 
 /** A project's name holds at most this (mirror of `PROJECT_NAME_MAX`, packages/engine/src/issue-projects.ts). */
 export const PROJECT_NAME_MAX = 80;
+
+/** A space's name holds at most this (mirror of `SPACE_NAME_MAX`, packages/engine/src/issue-projects.ts). */
+export const SPACE_NAME_MAX = 80;
 
 /** The colors a project can take: the roles' (mirror of `ROLE_COLORS`, packages/engine/src/permissions.ts). */
 export const PROJECT_COLORS = AGENT_COLORS.filter((c) => c !== "sky");
@@ -40,3 +43,44 @@ export const liveProjectFilter = (projects: IssueProjectRef[], picked: string) =
 /** The project a filter names, when it is one that still exists. */
 export const projectOfFilter = (projects: IssueProject[] | undefined, filter: string | undefined) =>
   filter && filter !== NO_PROJECT ? (projects?.find((p) => p.id === filter) ?? null) : null;
+
+/** A space filter from a URL or a stored value: a space's id, or nothing. */
+export const spaceFilterOf = (value: unknown): string | undefined =>
+  typeof value === "string" && UUID.test(value) ? value : undefined;
+
+/** The space a filter names, when it is one that still exists. */
+export const spaceOfFilter = (spaces: IssueSpace[] | undefined, filter: string | undefined) =>
+  filter ? (spaces?.find((s) => s.id === filter) ?? null) : null;
+
+/**
+ * A board filter's rows in order: each space's boards under the space's name, the boards in no space, the tasks with
+ * none (`null`), then the archived ones. The reader sees a company as a heading, as they do in any tracker.
+ */
+export function boardFilterRows<P extends IssueProjectRef>(
+  projects: P[],
+  spaces: IssueSpaceRef[] | undefined,
+): { rows: P[]; group: string | null }[] {
+  const live = projects.filter((p) => !p.archived);
+  const out: { rows: P[]; group: string | null }[] = [];
+  const push = (group: string | null, rows: P[]) => {
+    if (rows.length > 0) out.push({ rows, group });
+  };
+  const known = new Set((spaces ?? []).map((s) => s.id));
+  for (const space of spaces ?? []) {
+    if (space.archived) continue;
+    push(
+      space.name,
+      live.filter((p) => p.spaceId === space.id),
+    );
+  }
+  // A board whose space was deleted, and one that never had one, sit together under no heading.
+  push(
+    null,
+    live.filter((p) => !p.spaceId || !known.has(p.spaceId)),
+  );
+  push(
+    null,
+    projects.filter((p) => p.archived),
+  );
+  return out;
+}

@@ -3,9 +3,11 @@ import { schema } from "@agenteschat/db";
 import {
   createIssue,
   createIssueProject,
+  createIssueSpace,
   createIssueToolSource,
   createOrganization,
   deleteIssueProject,
+  deleteIssueSpace,
   ForbiddenError,
   getIssue,
   grantScopes,
@@ -45,7 +47,7 @@ describe("task projects", () => {
     const a = await createIssue(deps, ana, f.org.id, { title: "Lembrete de retorno", projectId: clinic.id });
     const b = await createIssue(deps, ana, f.org.id, { title: "Cardápio com fotos", projectId: bakery.id });
     const loose = await createIssue(deps, ana, f.org.id, { title: "Organizar o trimestre" });
-    expect(a.project).toEqual({ id: clinic.id, name: "Clínica Teo", color: "teal", archived: false });
+    expect(a.project).toEqual({ id: clinic.id, name: "Clínica Teo", color: "teal", archived: false, spaceId: null });
     expect(loose.project).toBeNull();
 
     const titles = async (projectId?: string) =>
@@ -261,5 +263,70 @@ describe("task projects", () => {
     const brief = await openTasksBrief(f.db, f.org.id, f.agent.id, f.general.id, false);
     expect(brief).toContain("Pedido no site (todo, project Padaria Lia)");
     expect(brief).toContain("Sem projeto (todo)");
+  });
+});
+
+describe("task spaces", () => {
+  test("a company groups boards, and its board is every task of them", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const ana = person(f.owner.id);
+    const acme = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "  Empresa   A ", color: "teal" });
+    expect(acme).toMatchObject({ name: "Empresa A", color: "teal", archived: false, open: 0 });
+    const crm = await createIssueProject(deps, f.owner.id, f.org.id, { name: "CRM", spaceId: acme.id });
+    const site = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site", spaceId: acme.id });
+    const loose = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Solto" });
+    expect(crm.spaceId).toBe(acme.id);
+    expect(loose.spaceId).toBeNull();
+
+    const a = await createIssue(deps, ana, f.org.id, { title: "Criar lead", projectId: crm.id });
+    expect(a.project).toMatchObject({ name: "CRM", spaceId: acme.id });
+    await createIssue(deps, ana, f.org.id, { title: "Landing", projectId: site.id });
+    await createIssue(deps, ana, f.org.id, { title: "Fora", projectId: loose.id });
+
+    const list = await listIssueProjects(f.db, f.owner.id, f.org.id);
+    expect(list.spaces).toEqual([{ ...acme, open: 2 }]);
+    expect(list.projects.find((p) => p.name === "CRM")?.open).toBe(1);
+
+    // The company's board is every task of every board in it.
+    const inSpace = await listIssues(f.db, ana, f.org.id, { spaceId: acme.id });
+    expect(inSpace.map((i) => i.title).sort()).toEqual(["Criar lead", "Landing"]);
+  });
+
+  test("a space has one name whatever its capitals, and moving a board out of it is allowed", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const box = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Box" });
+    const taken = await rejection(createIssueSpace(deps, f.owner.id, f.org.id, { name: "box" }));
+    expect(taken?.code).toBe("issue_space.name_taken");
+
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "App", spaceId: box.id });
+    const moved = await updateIssueProject(deps, f.owner.id, f.org.id, board.id, { spaceId: null });
+    expect(moved.spaceId).toBeNull();
+    const unknown = await rejection(
+      updateIssueProject(deps, f.owner.id, f.org.id, board.id, { spaceId: crypto.randomUUID() }),
+    );
+    expect(unknown?.code).toBe("issue_space.not_found");
+  });
+
+  test("deleting a company keeps its boards, with their tasks", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const space = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa B" });
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Loja", spaceId: space.id });
+    const issue = await createIssue(deps, person(f.owner.id), f.org.id, { title: "Carrinho", projectId: board.id });
+
+    await deleteIssueSpace(deps, f.owner.id, f.org.id, space.id);
+    const list = await listIssueProjects(f.db, f.owner.id, f.org.id);
+    expect(list.spaces).toEqual([]);
+    expect(list.projects.find((p) => p.id === board.id)?.spaceId).toBeNull();
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id: issue.id })).project?.name).toBe("Loja");
+  });
+
+  test("a person of no workspace makes no company", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const denied = await createIssueSpace(deps, "someone-else", f.org.id, { name: "Nova" }).catch((e: unknown) => e);
+    expect(denied).toBeInstanceOf(ForbiddenError);
   });
 });

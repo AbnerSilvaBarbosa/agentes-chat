@@ -132,6 +132,8 @@ import type {
   IssueProject,
   IssueProjectRef,
   IssueProjects,
+  IssueSpace,
+  IssueSpaceRef,
   IssuesView,
   JevKey,
   JoinApproval,
@@ -1467,7 +1469,7 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
       list: async (orgId, filters = {}) =>
         (
           await request<{ issues: Issue[] }>(`${org(orgId)}/issues`, {
-            query: { q: filters.q, projectId: filters.projectId },
+            query: { q: filters.q, projectId: filters.projectId, spaceId: filters.spaceId },
           })
         ).issues,
       get: (orgId, number) => request<Issue>(`${org(orgId)}/issues/by-number/${number}`),
@@ -1515,6 +1517,11 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         request<IssueProjectRef>(`${org(orgId)}/issue-projects/${enc(projectId)}`, { method: "PATCH", json: patch }),
       deleteProject: (orgId, projectId) =>
         request<void>(`${org(orgId)}/issue-projects/${enc(projectId)}`, { method: "DELETE" }),
+      createSpace: (orgId, input) => request<IssueSpace>(`${org(orgId)}/issue-spaces`, { json: input }),
+      updateSpace: (orgId, spaceId, patch) =>
+        request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}`, { method: "PATCH", json: patch }),
+      deleteSpace: (orgId, spaceId) =>
+        request<void>(`${org(orgId)}/issue-spaces/${enc(spaceId)}`, { method: "DELETE" }),
     },
     threads: {
       list: (orgId, filters = {}) => request<ThreadPage>(`${org(orgId)}/threads`, { query: threadQuery(filters) }),

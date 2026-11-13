@@ -4,6 +4,7 @@ import {
   useIssueColumns,
   useIssueProjectAction,
   useIssueProjects,
+  useIssueSpaceAction,
   useIssues,
   useIssuesView,
   useSetIssuesView,
@@ -11,7 +12,7 @@ import {
 } from "@agenteschat/client";
 import { dueLabel, dueTone, relativeTime } from "@agenteschat/client/lib/format";
 import { githubLinkLabel } from "@agenteschat/client/lib/github-link";
-import { NO_PROJECT, projectOfFilter } from "@agenteschat/client/lib/issue-projects";
+import { NO_PROJECT, projectOfFilter, spaceOfFilter } from "@agenteschat/client/lib/issue-projects";
 import { ISSUES_VIEW_DEFAULT, PRIORITY_ORDER, sortIssues } from "@agenteschat/client/lib/issues-view";
 import { can } from "@agenteschat/client/lib/permissions";
 import {
@@ -76,7 +77,14 @@ import { type ToastText, useToast } from "@/lib/toast";
 import { AddColumnDialog, Board, type CardState, type IssueGroup, useMoveIssue, usePatchIssue } from "./IssueBoard";
 import { IssueDeleteProvider, useIssueDeleting } from "./IssueDelete";
 import { IssueDialog } from "./IssuePage";
-import { DeleteProjectDialog, ProjectChip, ProjectDialog } from "./IssueProjects";
+import {
+  DeleteProjectDialog,
+  DeleteSpaceDialog,
+  ProjectChip,
+  ProjectDialog,
+  SpaceChip,
+  SpaceDialog,
+} from "./IssueProjects";
 import { DisplayButton, IssueFilters, PRIORITY_ICON } from "./IssuesToolbar";
 import { type CardMove, type DropResult, type IssueDrag, useIssueDrag } from "./issue-drag";
 import { NewIssueDialog } from "./NewIssueDialog";
@@ -100,8 +108,27 @@ function useProjectParam(): [string | undefined, (value: string | undefined) => 
     void navigate({
       to: ".",
       search: ((prev: Record<string, unknown>) => {
-        const { project: _project, open: _open, m: _m, ...rest } = prev;
+        // A board belongs to a company: picking one leaves the company's own board.
+        const { project: _project, space: _space, open: _open, m: _m, ...rest } = prev;
         return next ? { ...rest, project: next } : rest;
+      }) as never,
+    });
+  return [value, set];
+}
+
+/**
+ * The company whose board this is, in the URL (`?space=<id>`): every task of its boards at once. Picking one leaves the
+ * board of a single board, as picking a board leaves the company.
+ */
+function useSpaceParam(): [string | undefined, (value: string | undefined) => void] {
+  const value = useRouterState({ select: (s) => (s.location.search as { space?: string }).space });
+  const navigate = useNavigate();
+  const set = (next: string | undefined) =>
+    void navigate({
+      to: ".",
+      search: ((prev: Record<string, unknown>) => {
+        const { project: _project, space: _space, open: _open, m: _m, ...rest } = prev;
+        return next ? { ...rest, space: next } : rest;
       }) as never,
     });
   return [value, set];
@@ -133,11 +160,15 @@ export function IssuesPage() {
   const [addingColumn, setAddingColumn] = useState(false);
   const search = useDeferredValue(q.trim());
   const [projectParam, setProjectParam] = useProjectParam();
+  const [spaceParam, setSpaceParam] = useSpaceParam();
   const projectsQuery = useIssueProjects(org.id);
   const project = projectOfFilter(projectsQuery.data?.projects, projectParam);
+  const space = spaceOfFilter(projectsQuery.data?.spaces, spaceParam);
   const projectAction = useIssueProjectAction(org.id);
-  // "Novo projeto", "Editar projeto" and "Excluir projeto", one at a time.
+  const spaceAction = useIssueSpaceAction(org.id);
+  // "Novo board", "Editar board" and "Excluir board", and the same three for a company, one at a time.
   const [projectDialog, setProjectDialog] = useState<"new" | "edit" | "delete" | null>(null);
+  const [spaceDialog, setSpaceDialog] = useState<"new" | "edit" | "delete" | null>(null);
   // A project deleted elsewhere, or a link to one that is gone: back to every task.
   const projectGone = Boolean(
     projectParam && projectParam !== NO_PROJECT && projectsQuery.isSuccess && !projectsQuery.isFetching && !project,
@@ -147,7 +178,14 @@ export function IssuesPage() {
     setProjectDialog(null);
     setProjectParam(undefined);
   });
-  const issues = useIssues(org.id, search, projectParam);
+  // The same for a company.
+  const spaceGone = Boolean(spaceParam && projectsQuery.isSuccess && !projectsQuery.isFetching && !space);
+  useEffect(() => {
+    if (!spaceGone) return;
+    setSpaceDialog(null);
+    setSpaceParam(undefined);
+  });
+  const issues = useIssues(org.id, search, projectParam, spaceParam);
   const columnsQuery = useIssueColumns(org.id);
   const columns = columnsQuery.data;
   const all = issues.data ?? [];
@@ -199,7 +237,12 @@ export function IssuesPage() {
           <PageHeader
             className="issues-head"
             title={
-              projectParam ? (
+              spaceParam ? (
+                <>
+                  <ColorDot color={space?.color} />
+                  {space ? space.name : t("issues.spaces.label")}
+                </>
+              ) : projectParam ? (
                 // Inside the title, so the dot stays on the first line of a name that wraps.
                 <>
                   <ColorDot color={project?.color} />
@@ -282,11 +325,37 @@ export function IssuesPage() {
                         </MenuItem>
                       </>
                     )}
+                    {space && posts && (
+                      <>
+                        <MenuSeparator />
+                        <MenuItem icon="edit" onSelect={() => setSpaceDialog("edit")}>
+                          {t("issues.spaces.edit")}
+                        </MenuItem>
+                        <MenuItem
+                          icon="archive"
+                          disabled={spaceAction.isPending}
+                          onSelect={() =>
+                            spaceAction.mutate({ type: "update", spaceId: space.id, archived: !space.archived })
+                          }
+                        >
+                          {t(space.archived ? "issues.spaces.unarchive" : "issues.spaces.archive")}
+                        </MenuItem>
+                        <MenuItem icon="trash" danger onSelect={() => setSpaceDialog("delete")}>
+                          {t("issues.spaces.delete")}
+                        </MenuItem>
+                      </>
+                    )}
                   </Menu>
                 )}
               </span>
             }
           >
+            <SpaceChip
+              data={projectsQuery.data}
+              value={spaceParam}
+              onChange={setSpaceParam}
+              onNew={posts ? () => setSpaceDialog("new") : undefined}
+            />
             <ProjectChip
               data={projectsQuery.data}
               value={projectParam}
@@ -404,6 +473,17 @@ export function IssuesPage() {
             project={project}
             onClose={() => setProjectDialog(null)}
             onDeleted={() => setProjectParam(undefined)}
+          />
+        )}
+        {spaceDialog === "new" && (
+          <SpaceDialog onClose={() => setSpaceDialog(null)} onDone={(s) => setSpaceParam(s.id)} />
+        )}
+        {spaceDialog === "edit" && space && <SpaceDialog space={space} onClose={() => setSpaceDialog(null)} />}
+        {spaceDialog === "delete" && space && (
+          <DeleteSpaceDialog
+            space={space}
+            onClose={() => setSpaceDialog(null)}
+            onDeleted={() => setSpaceParam(undefined)}
           />
         )}
         {columns && (

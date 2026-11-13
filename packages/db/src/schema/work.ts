@@ -56,8 +56,33 @@ export const issueColumns = pgTable(
 );
 
 /**
+ * A space (ADR 0174): a company, a client, a product line — a group of boards. It holds no task of its own: the tasks
+ * of a space are its boards', so there is never a task whose board and space disagree. Archived: out of every picker,
+ * its boards and their tasks stay.
+ */
+export const issueSpaces = pgTable(
+  "issue_spaces",
+  {
+    id: uuid()
+      .primaryKey()
+      .$defaultFn(() => Bun.randomUUIDv7()),
+    orgId: uuid()
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text().notNull(),
+    /** One of the roles' colors (`ROLE_COLORS`). */
+    color: text().notNull().default("graphite"),
+    archivedAt: timestamp({ withTimezone: true }),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  // Two spaces can't differ only by case, as with the boards' names.
+  (t) => [uniqueIndex("issue_spaces_org_name").on(t.orgId, sql`lower(${t.name})`)],
+);
+
+/**
  * A task's project (ADR 0171): a name and a colour. A task has at most one, and a project's board is the org's board
- * showing only its tasks. Archived: offered nowhere new, its tasks keep it.
+ * showing only its tasks. Archived: offered nowhere new, its tasks keep it. Its `spaceId` (ADR 0174) is the company it
+ * belongs to: a board sits in one space or in none, and never decides who sees its tasks.
  */
 export const issueProjects = pgTable(
   "issue_projects",
@@ -69,6 +94,8 @@ export const issueProjects = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     name: text().notNull(),
+    /** Its space; null: a board outside any space. Deleting the space leaves the board, in no space. */
+    spaceId: uuid().references(() => issueSpaces.id, { onDelete: "set null" }),
     /** One of the roles' colors (`ROLE_COLORS`). */
     color: text().notNull().default("graphite"),
     archivedAt: timestamp({ withTimezone: true }),

@@ -1019,6 +1019,8 @@ export async function listIssues(
     parentIssueId?: string;
     /** Only that project's tasks; `none`: the ones with no project. */
     projectId?: string;
+    /** Only the tasks of that space's boards (ADR 0174): every board of a company at once. */
+    spaceId?: string;
     limit?: number;
   } = {},
 ): Promise<IssueView[]> {
@@ -1038,6 +1040,9 @@ export async function listIssues(
           : filters.projectId
             ? eq(issues.projectId, filters.projectId)
             : undefined,
+        filters.spaceId
+          ? sql`${issues.projectId} in (select id from issue_projects where space_id = ${filters.spaceId} and org_id = ${orgId})`
+          : undefined,
         filters.assignee
           ? and(eq(issues.assigneeType, filters.assignee.type), eq(issues.assigneeId, filters.assignee.id))
           : undefined,

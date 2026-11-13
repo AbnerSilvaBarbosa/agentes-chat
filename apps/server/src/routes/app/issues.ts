@@ -4,9 +4,11 @@ import {
   createIssue,
   createIssueColumn,
   createIssueProject,
+  createIssueSpace,
   deleteIssue,
   deleteIssueColumn,
   deleteIssueProject,
+  deleteIssueSpace,
   getIssueDetail,
   type IssueDeps,
   issueFromMessage,
@@ -17,11 +19,13 @@ import {
   openTaskConversation,
   PROJECT_NAME_MAX,
   ROLE_COLORS,
+  SPACE_NAME_MAX,
   setCriterion,
   setIssueAudience,
   updateIssue,
   updateIssueColumn,
   updateIssueProject,
+  updateIssueSpace,
 } from "@agenteschat/engine";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
@@ -52,12 +56,28 @@ const DueDate = z
   .nullable();
 
 const ProjectColor = z.enum(ROLE_COLORS);
+const SpaceRef = z
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    color: z.string().openapi({ description: "One of the roles' colors." }),
+    archived: z.boolean().openapi({ description: "Offered to no new board. Its boards keep their tasks." }),
+  })
+  .openapi("IssueSpaceRef");
+const Space = SpaceRef.extend({
+  open: z.number().int().openapi({ description: "Open tasks in its boards that you see." }),
+}).openapi("IssueSpace");
+const SpaceId = z.uuid().nullable().openapi({
+  description: "The space the board joins (`null`: outside every space). An archived space takes no board.",
+});
+const SpaceParams = OrgParams.extend({ spaceId: z.uuid() });
 const ProjectRef = z
   .object({
     id: z.uuid(),
     name: z.string(),
     color: z.string().openapi({ description: "One of the roles' colors." }),
     archived: z.boolean().openapi({ description: "Offered to no new task. Its tasks keep it." }),
+    spaceId: z.uuid().nullable().openapi({ description: "The space it belongs to (`null`: no space)." }),
   })
   .openapi("IssueProjectRef");
 const Project = ProjectRef.extend({
@@ -212,6 +232,10 @@ export function issueRoutes(deps: AppDeps) {
             .union([z.uuid(), z.literal("none")])
             .optional()
             .openapi({ description: "Only that project's tasks. `none`: the ones with no project." }),
+          spaceId: z
+            .uuid()
+            .optional()
+            .openapi({ description: "Only the tasks of that space's boards: a company's whole board." }),
         }),
       },
       responses: { 200: json(z.object({ issues: z.array(Issue) })), ...errors },
@@ -224,6 +248,7 @@ export function issueRoutes(deps: AppDeps) {
         status: query.status,
         parentIssueId: query.parentIssueId,
         projectId: query.projectId,
+        spaceId: query.spaceId,
       });
       return c.json({ issues: list }, 200);
     },
@@ -454,11 +479,12 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-projects",
       tags,
       security,
-      summary: "The tasks' projects by name, archived ones last, with your open tasks in each",
+      summary: "The spaces and their boards by name, archived ones last, with your open tasks in each",
       request: { params: OrgParams },
       responses: {
         200: json(
           z.object({
+            spaces: z.array(Space),
             projects: z.array(Project),
             unfiled: z.number().int().openapi({ description: "Open tasks you see that have no project." }),
           }),
@@ -478,11 +504,18 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-projects",
       tags,
       security,
-      summary: "Create a project (whoever may create tasks)",
-      description: "`issue_project.name_taken`: another project has that name, whatever its capitals.",
+      summary: "Create a board (whoever may create tasks)",
+      description:
+        "`issue_project.name_taken`: another board has that name, whatever its capitals. `issue_space.not_found`: the space isn't this workspace's.",
       request: {
         params: OrgParams,
-        body: body(z.object({ name: z.string().min(1).max(PROJECT_NAME_MAX), color: ProjectColor.optional() })),
+        body: body(
+          z.object({
+            name: z.string().min(1).max(PROJECT_NAME_MAX),
+            color: ProjectColor.optional(),
+            spaceId: SpaceId.optional(),
+          }),
+        ),
       },
       responses: { 201: json(Project, "Created"), ...errors },
     }),
@@ -498,7 +531,7 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-projects/{projectId}",
       tags,
       security,
-      summary: "Rename, recolour, archive or bring back a project",
+      summary: "Rename, recolour, archive or bring back a board, or move it to another space",
       request: {
         params: ProjectParams,
         body: body(
@@ -506,6 +539,7 @@ export function issueRoutes(deps: AppDeps) {
             name: z.string().min(1).max(PROJECT_NAME_MAX).optional(),
             color: ProjectColor.optional(),
             archived: z.boolean().optional(),
+            spaceId: SpaceId.optional(),
           }),
         ),
       },
@@ -524,13 +558,75 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-projects/{projectId}",
       tags,
       security,
-      summary: "Delete a project. Its tasks stay, with no project",
+      summary: "Delete a board. Its tasks stay, with no board",
       request: { params: ProjectParams },
       responses: { 204: noContent[204], ...errors },
     }),
     async (c) => {
       const { orgId, projectId } = c.req.valid("param");
       await deleteIssueProject(issues, c.get("user").id, orgId, projectId);
+      return c.body(null, 204);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/organizations/{orgId}/issue-spaces",
+      tags,
+      security,
+      summary: "Create a space, a company whose boards share nothing but their reader (whoever may create tasks)",
+      description: "`issue_space.name_taken`: another space has that name, whatever its capitals.",
+      request: {
+        params: OrgParams,
+        body: body(z.object({ name: z.string().min(1).max(SPACE_NAME_MAX), color: ProjectColor.optional() })),
+      },
+      responses: { 201: json(Space, "Created"), ...errors },
+    }),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      return c.json(await createIssueSpace(issues, c.get("user").id, orgId, c.req.valid("json")), 201);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "patch",
+      path: "/organizations/{orgId}/issue-spaces/{spaceId}",
+      tags,
+      security,
+      summary: "Rename, recolour, archive or bring back a space",
+      request: {
+        params: SpaceParams,
+        body: body(
+          z.object({
+            name: z.string().min(1).max(SPACE_NAME_MAX).optional(),
+            color: ProjectColor.optional(),
+            archived: z.boolean().optional(),
+          }),
+        ),
+      },
+      responses: { 200: json(SpaceRef), ...errors },
+    }),
+    async (c) => {
+      const { orgId, spaceId } = c.req.valid("param");
+      return c.json(await updateIssueSpace(issues, c.get("user").id, orgId, spaceId, c.req.valid("json")), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/organizations/{orgId}/issue-spaces/{spaceId}",
+      tags,
+      security,
+      summary: "Delete a space. Its boards stay, in no space",
+      request: { params: SpaceParams },
+      responses: { 204: noContent[204], ...errors },
+    }),
+    async (c) => {
+      const { orgId, spaceId } = c.req.valid("param");
+      await deleteIssueSpace(issues, c.get("user").id, orgId, spaceId);
       return c.body(null, 204);
     },
   );

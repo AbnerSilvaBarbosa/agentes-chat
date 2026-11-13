@@ -23,6 +23,7 @@ const project = (n: number, name: string, archived = false): IssueProject => ({
   name,
   color: "teal",
   archived,
+  spaceId: null,
   open: n,
 });
 /** Twenty, as the server lists them: by name, the archived last. One name is the longest a project takes. */
@@ -82,7 +83,7 @@ describe("task projects", () => {
   test("a project's tasks are their own cached list, under the tasks' key with the projects", () => {
     const all = keys.issueList("o1", "");
     const one = keys.issueList("o1", "", id(1));
-    expect(all).toEqual(["org", "o1", "issues", "list", "", ""]);
+    expect(all).toEqual(["org", "o1", "issues", "list", "", "", ""]);
     expect(one).not.toEqual(all);
     const qc = new QueryClient();
     qc.setQueryData(one, []);

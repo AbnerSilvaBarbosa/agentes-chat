@@ -25,6 +25,7 @@ import type {
   IssueColumn,
   IssuePatch,
   IssueProjectRef,
+  IssueSpaceRef,
   IssueStatus,
   Routine,
   RoutineHook,
@@ -199,6 +200,8 @@ interface Store {
   columns: IssueColumn[];
   /** None until a test makes one, as a workspace that never used projects. */
   projects: IssueProjectRef[];
+  /** The companies the boards are grouped under; none until a test makes one. */
+  spaces: IssueSpaceRef[];
   activity: Map<string, IssueActivity[]>;
   routines: Routine[];
   runs: Map<string, RoutineRun[]>;
@@ -220,6 +223,7 @@ export function createMockPlanning(
       issues: [],
       columns: defaultColumns(),
       projects: [],
+      spaces: [],
       activity: new Map(),
       routines: [],
       runs: new Map(),
@@ -739,7 +743,12 @@ export function createMockPlanning(
         const byName = [...s.projects].sort(
           (a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name),
         );
-        return clone({ projects: byName.map((p) => ({ ...p, open: open(p.id) })), unfiled: open(null) });
+        const boards = byName.map((p) => ({ ...p, open: open(p.id) }));
+        const inSpace = (id: string) => boards.filter((p) => p.spaceId === id).reduce((sum, p) => sum + p.open, 0);
+        const spaces = [...s.spaces]
+          .sort((a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name))
+          .map((sp) => ({ ...sp, open: inSpace(sp.id) }));
+        return clone({ spaces, projects: boards, unfiled: open(null) });
       },
       createProject: async (orgId, input) => {
         record("issues.createProject", input);
@@ -750,6 +759,7 @@ export function createMockPlanning(
           name: input.name.trim(),
           color: input.color ?? "graphite",
           archived: false,
+          spaceId: input.spaceId ?? null,
         };
         s.projects.push(project);
         return clone({ ...project, open: 0 });
@@ -769,6 +779,33 @@ export function createMockPlanning(
         const s = await store(orgId);
         s.projects = s.projects.filter((p) => p.id !== projectId);
         for (const i of s.issues) if (i.project?.id === projectId) i.project = null;
+      },
+      createSpace: async (orgId, input) => {
+        record("issues.createSpace", input);
+        const s = await store(orgId);
+        const space = {
+          id: crypto.randomUUID(),
+          name: input.name.trim(),
+          color: input.color ?? "graphite",
+          archived: false,
+        };
+        s.spaces.push(space);
+        return clone({ ...space, open: 0 });
+      },
+      updateSpace: async (orgId, spaceId, patch) => {
+        record("issues.updateSpace", spaceId, patch);
+        const s = await store(orgId);
+        const space = s.spaces.find((sp) => sp.id === spaceId);
+        if (!space) throw new MockNotFoundError("Empresa não encontrada.");
+        Object.assign(space, patch);
+        return clone(space);
+      },
+      deleteSpace: async (orgId, spaceId) => {
+        record("issues.deleteSpace", spaceId);
+        const s = await store(orgId);
+        s.spaces = s.spaces.filter((sp) => sp.id !== spaceId);
+        // Its boards stay, in no space, as the server does it.
+        for (const p of s.projects) if (p.spaceId === spaceId) p.spaceId = null;
       },
       delete: async (orgId, id) => {
         record("issues.delete", orgId, id);

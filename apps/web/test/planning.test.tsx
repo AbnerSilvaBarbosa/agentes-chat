@@ -368,7 +368,7 @@ describe("Issues (board and list)", () => {
     expect(strip.classList.contains("ac-props")).toBe(true);
     expect(strip.previousElementSibling?.getAttribute("aria-label")).toBe("Título");
     expect([...strip.querySelectorAll("button")].map((b) => b.getAttribute("aria-label")?.replace(/:.*$/, ""))).toEqual(
-      ["Projeto", "Responsável", "Prioridade", "Quem vê", "Prazo"],
+      ["Board", "Responsável", "Prioridade", "Quem vê", "Prazo"],
     );
     const add = within(dialog).getByPlaceholderText("Adicionar critério");
     await type(add, "PDF com o logo");
@@ -483,7 +483,7 @@ describe("Issue detail", () => {
     expect(strip.previousElementSibling?.classList.contains("issue-details__head")).toBe(true);
     expect(strip.nextElementSibling?.querySelector('[role="tablist"]')).toBeTruthy();
     expect([...strip.querySelectorAll(".issue-prop")].map((p) => p.getAttribute("title"))).toEqual([
-      "Projeto",
+      "Board",
       "Coluna",
       "Responsável",
       "Prioridade",

@@ -172,6 +172,8 @@ import type {
   IssueProject,
   IssueProjectRef,
   IssueProjects,
+  IssueSpace,
+  IssueSpaceRef,
   IssueStatus,
   IssuesView,
   JevKey,
@@ -1289,7 +1291,7 @@ export interface ApiClient {
   };
   issues: {
     /** `projectId`: only that project's tasks, or `none` for the ones with no project. */
-    list(orgId: string, filters?: { q?: string; projectId?: string }): Promise<Issue[]>;
+    list(orgId: string, filters?: { q?: string; projectId?: string; spaceId?: string }): Promise<Issue[]>;
     get(orgId: string, number: number): Promise<Issue>;
     create(orgId: string, input: IssueInput): Promise<Issue>;
     update(orgId: string, id: string, patch: IssuePatch): Promise<Issue>;
@@ -1318,15 +1320,27 @@ export interface ApiClient {
     /** Deletes a column; its tasks go to `moveTo`. A stage keeps at least one column. */
     deleteColumn(orgId: string, columnId: string, moveTo: string): Promise<IssueColumn[]>;
     projects(orgId: string): Promise<IssueProjects>;
-    createProject(orgId: string, input: { name: string; color?: string }): Promise<IssueProject>;
-    /** Rename, recolour, archive or bring back. */
+    createProject(
+      orgId: string,
+      input: { name: string; color?: string; spaceId?: string | null },
+    ): Promise<IssueProject>;
+    /** Rename, recolour, archive or bring back, or move it to another space. */
     updateProject(
       orgId: string,
       projectId: string,
-      patch: { name?: string; color?: string; archived?: boolean },
+      patch: { name?: string; color?: string; archived?: boolean; spaceId?: string | null },
     ): Promise<IssueProjectRef>;
     /** Its tasks stay, with no project. */
     deleteProject(orgId: string, projectId: string): Promise<void>;
+    /** A space groups boards (a company, a client): its tasks are its boards'. */
+    createSpace(orgId: string, input: { name: string; color?: string }): Promise<IssueSpace>;
+    updateSpace(
+      orgId: string,
+      spaceId: string,
+      patch: { name?: string; color?: string; archived?: boolean },
+    ): Promise<IssueSpaceRef>;
+    /** Its boards stay, with no space. */
+    deleteSpace(orgId: string, spaceId: string): Promise<void>;
   };
   /** Threads (ADR 0029): the Threads page, a thread from a range, moving it, closing and archiving. */
   threads: {

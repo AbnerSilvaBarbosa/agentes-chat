@@ -120,6 +120,7 @@ import type {
   IssueInput,
   IssuePatch,
   IssueProjectRef,
+  IssueSpaceRef,
   IssueStatus,
   IssuesView,
   JevKey,
@@ -4090,11 +4091,16 @@ export const useArtifactBlob = (orgId: string, id: string, version: number, enab
 // ── Issues ───────────────────────────────────────────────────────────────────
 
 /** `project`: only a project's tasks (its id), or `none` for the ones with no project. The server filters. */
-export const useIssues = (orgId: string, q = "", project = "") => {
+export const useIssues = (orgId: string, q = "", project = "", space = "") => {
   const api = useApi();
   return useQuery({
-    queryKey: keys.issueList(orgId, q, project),
-    queryFn: () => api.issues.list(orgId, { ...(q ? { q } : {}), ...(project ? { projectId: project } : {}) }),
+    queryKey: keys.issueList(orgId, q, project, space),
+    queryFn: () =>
+      api.issues.list(orgId, {
+        ...(q ? { q } : {}),
+        ...(project ? { projectId: project } : {}),
+        ...(space ? { spaceId: space } : {}),
+      }),
     placeholderData: (prev) => prev,
     // While an agent works on an issue its steps change without an event: look again every 10 s.
     refetchInterval: (query) => (query.state.data?.some((i) => i.work && i.work.state !== "stalled") ? 10_000 : false),
@@ -4292,13 +4298,24 @@ export function useIssueProjectAction(orgId: string) {
   return useMutation({
     mutationFn: (
       action:
-        | { type: "create"; name: string; color: string }
-        | { type: "update"; projectId: string; name?: string; color?: string; archived?: boolean }
+        | { type: "create"; name: string; color: string; spaceId?: string | null }
+        | {
+            type: "update";
+            projectId: string;
+            name?: string;
+            color?: string;
+            archived?: boolean;
+            spaceId?: string | null;
+          }
         | { type: "delete"; projectId: string },
     ): Promise<IssueProjectRef | undefined> => {
       switch (action.type) {
         case "create":
-          return api.issues.createProject(orgId, { name: action.name, color: action.color });
+          return api.issues.createProject(orgId, {
+            name: action.name,
+            color: action.color,
+            spaceId: action.spaceId,
+          });
         case "update": {
           const { type: _type, projectId, ...patch } = action;
           return api.issues.updateProject(orgId, projectId, patch);
@@ -4308,6 +4325,33 @@ export function useIssueProjectAction(orgId: string) {
       }
     },
     // The tasks carry their project's name and colour: they read again too.
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.issues(orgId) }),
+  });
+}
+
+/** A space (a company, a client) and the boards inside it: created, renamed, archived or deleted from the menu. */
+export function useIssueSpaceAction(orgId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      action:
+        | { type: "create"; name: string; color: string }
+        | { type: "update"; spaceId: string; name?: string; color?: string; archived?: boolean }
+        | { type: "delete"; spaceId: string },
+    ): Promise<IssueSpaceRef | undefined> => {
+      switch (action.type) {
+        case "create":
+          return api.issues.createSpace(orgId, { name: action.name, color: action.color });
+        case "update": {
+          const { type: _type, spaceId, ...patch } = action;
+          return api.issues.updateSpace(orgId, spaceId, patch);
+        }
+        case "delete":
+          return api.issues.deleteSpace(orgId, action.spaceId).then(() => undefined);
+      }
+    },
+    // The boards name their space: they read again too.
     onSettled: () => qc.invalidateQueries({ queryKey: keys.issues(orgId) }),
   });
 }

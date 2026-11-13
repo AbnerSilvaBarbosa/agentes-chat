@@ -6,12 +6,29 @@ import { can, requireActiveMembership } from "./organizations";
 import { ROLE_COLORS } from "./permissions";
 import { taskSeenSql } from "./task-access";
 
-const { issueProjects, issues } = schema;
+const { issueProjects, issueSpaces, issues } = schema;
 
 /** A project's name holds at most this (the dialogs mirror it: packages/client/src/lib/issue-projects.ts). */
 export const PROJECT_NAME_MAX = 80;
 /** More than a workspace runs at once: the menu and the pickers stay a list someone can read. */
 export const PROJECTS_MAX = 200;
+/** A space's name holds at most this. */
+export const SPACE_NAME_MAX = 80;
+/** How many companies one workspace groups its boards into. */
+export const SPACES_MAX = 100;
+
+/** A space (a company, a client) as the boards menu shows it. */
+export interface IssueSpaceRef {
+  id: string;
+  name: string;
+  color: string;
+  archived: boolean;
+}
+
+/** A space in the boards menu. `open`: the open tasks in its boards that the reader sees. */
+export interface IssueSpaceView extends IssueSpaceRef {
+  open: number;
+}
 
 /** A task's project as its card shows it. */
 export interface IssueProjectRef {
@@ -19,6 +36,8 @@ export interface IssueProjectRef {
   name: string;
   color: string;
   archived: boolean;
+  /** The space it belongs to; null: a board outside any space. */
+  spaceId: string | null;
 }
 
 /** A project in the projects menu. `open`: the open tasks in it that the reader sees. */
@@ -27,12 +46,21 @@ export interface IssueProjectView extends IssueProjectRef {
 }
 
 type ProjectRow = typeof issueProjects.$inferSelect;
+type SpaceRow = typeof issueSpaces.$inferSelect;
 
 export const projectRef = (p: ProjectRow): IssueProjectRef => ({
   id: p.id,
   name: p.name,
   color: p.color,
   archived: p.archivedAt !== null,
+  spaceId: p.spaceId,
+});
+
+export const spaceRef = (s: SpaceRow): IssueSpaceRef => ({
+  id: s.id,
+  name: s.name,
+  color: s.color,
+  archived: s.archivedAt !== null,
 });
 
 export interface ProjectDeps {
@@ -67,6 +95,15 @@ async function projectRows(db: Database, orgId: string) {
     .orderBy(sql`${issueProjects.archivedAt} is not null`, asc(sql`lower(${issueProjects.name})`));
 }
 
+/** The org's spaces by name, archived ones last. */
+async function spaceRows(db: Database, orgId: string) {
+  return db
+    .select()
+    .from(issueSpaces)
+    .where(eq(issueSpaces.orgId, orgId))
+    .orderBy(sql`${issueSpaces.archivedAt} is not null`, asc(sql`lower(${issueSpaces.name})`));
+}
+
 /** The projects of these tasks, by project id. */
 export async function projectsById(db: Database, ids: (string | null)[]) {
   const wanted = [...new Set(ids.filter((id): id is string => id !== null))];
@@ -75,17 +112,19 @@ export async function projectsById(db: Database, ids: (string | null)[]) {
 }
 
 /**
- * The projects with how many open tasks the reader sees in each, and how many open tasks have none (`unfiled`).
- * The counts follow who sees each task, so a project never tells of work the reader can't open.
+ * The boards and the spaces that group them, with how many open tasks the reader sees in each, and how many open tasks
+ * have no board (`unfiled`). The counts follow who sees each task, so a board never tells of work the reader can't
+ * open, and a space's count is its boards' added up.
  */
 export async function listIssueProjects(
   db: Database,
   userId: string,
   orgId: string,
-): Promise<{ projects: IssueProjectView[]; unfiled: number }> {
+): Promise<{ spaces: IssueSpaceView[]; projects: IssueProjectView[]; unfiled: number }> {
   await requireActiveMembership(db, userId, orgId);
-  const [rows, counts] = await Promise.all([
+  const [rows, spaceList, counts] = await Promise.all([
     projectRows(db, orgId),
+    spaceRows(db, orgId),
     db
       .select({ projectId: issues.projectId, open: sql<number>`count(*)::int` })
       .from(issues)
@@ -99,8 +138,14 @@ export async function listIssueProjects(
       .groupBy(issues.projectId),
   ]);
   const open = new Map(counts.map((c) => [c.projectId, c.open]));
+  const projects = rows.map((p) => ({ ...projectRef(p), open: open.get(p.id) ?? 0 }));
+  const inSpace = new Map<string, number>();
+  for (const p of projects) {
+    if (p.spaceId) inSpace.set(p.spaceId, (inSpace.get(p.spaceId) ?? 0) + p.open);
+  }
   return {
-    projects: rows.map((p) => ({ ...projectRef(p), open: open.get(p.id) ?? 0 })),
+    spaces: spaceList.map((s) => ({ ...spaceRef(s), open: inSpace.get(s.id) ?? 0 })),
+    projects,
     unfiled: open.get(null) ?? 0,
   };
 }
@@ -109,9 +154,26 @@ async function announce(deps: ProjectDeps, orgId: string) {
   await publishOrgEvent(deps.pubsub, { type: "org.broadcast", orgId, event: { type: "issue.projects" } });
 }
 
-async function insertProject(db: Database, orgId: string, input: { name: string; color?: string }) {
+/** A space of the org a board may join: an archived one takes no board, and neither does another org's. */
+async function checkSpace(db: Database, orgId: string, spaceId: string | null | undefined) {
+  if (spaceId === undefined || spaceId === null) return spaceId ?? null;
+  const [space] = await db
+    .select()
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
+  if (!space) throw new ValidationError("That space does not exist", "issue_space.not_found");
+  if (space.archivedAt) throw new ValidationError("That space is archived", "issue_space.archived");
+  return space.id;
+}
+
+async function insertProject(
+  db: Database,
+  orgId: string,
+  input: { name: string; color?: string; spaceId?: string | null },
+) {
   const name = cleanName(input.name);
   const color = checkColor(input.color) ?? "graphite";
+  const spaceId = await checkSpace(db, orgId, input.spaceId);
   const existing = await db
     .select({ id: issueProjects.id, name: issueProjects.name })
     .from(issueProjects)
@@ -123,7 +185,11 @@ async function insertProject(db: Database, orgId: string, input: { name: string;
     });
   }
   // Two at once with one name: the unique index refuses the second.
-  const [row] = await db.insert(issueProjects).values({ orgId, name, color }).onConflictDoNothing().returning();
+  const [row] = await db
+    .insert(issueProjects)
+    .values({ orgId, name, color, spaceId })
+    .onConflictDoNothing()
+    .returning();
   if (!row) throw nameTaken(name);
   return row;
 }
@@ -138,7 +204,7 @@ export async function createIssueProject(
   deps: ProjectDeps,
   userId: string,
   orgId: string,
-  input: { name: string; color?: string },
+  input: { name: string; color?: string; spaceId?: string | null },
 ): Promise<IssueProjectView> {
   await requirePoster(deps.db, userId, orgId);
   const row = await insertProject(deps.db, orgId, input);
@@ -152,7 +218,7 @@ export async function updateIssueProject(
   userId: string,
   orgId: string,
   projectId: string,
-  patch: { name?: string; color?: string; archived?: boolean },
+  patch: { name?: string; color?: string; archived?: boolean; spaceId?: string | null },
 ): Promise<IssueProjectRef> {
   await requirePoster(deps.db, userId, orgId);
   const [current] = await deps.db
@@ -172,6 +238,8 @@ export async function updateIssueProject(
   const color = checkColor(patch.color);
   if (color !== undefined) set.color = color;
   if (patch.archived !== undefined) set.archivedAt = patch.archived ? (current.archivedAt ?? new Date()) : null;
+  // Moving a board between spaces, or out of every space (`null`).
+  if (patch.spaceId !== undefined) set.spaceId = await checkSpace(deps.db, orgId, patch.spaceId);
   if (Object.keys(set).length === 0) return projectRef(current);
   const [row] = await deps.db
     .update(issueProjects)
@@ -194,6 +262,96 @@ export async function deleteIssueProject(deps: ProjectDeps, userId: string, orgI
     .where(and(eq(issueProjects.id, projectId), eq(issueProjects.orgId, orgId)))
     .returning({ id: issueProjects.id });
   if (gone.length === 0) throw new NotFoundError("Project not found");
+  await announce(deps, orgId);
+}
+
+const spaceNameTaken = (name: string) =>
+  new ValidationError(`A space named "${name}" already exists`, "issue_space.name_taken", { name });
+
+function cleanSpaceName(name: string) {
+  const n = name.trim().replace(/\s+/g, " ").slice(0, SPACE_NAME_MAX).trim();
+  if (!n) throw new ValidationError("name is required");
+  return n;
+}
+
+const spaceByName = (orgId: string, name: string) =>
+  and(eq(issueSpaces.orgId, orgId), sql`lower(${issueSpaces.name}) = lower(${name})`);
+
+/**
+ * A space (ADR 0174): the company, client or product line a workspace groups boards under. Whoever may create tasks
+ * creates, renames, recolours, archives and deletes one, as with a board.
+ */
+export async function createIssueSpace(
+  deps: ProjectDeps,
+  userId: string,
+  orgId: string,
+  input: { name: string; color?: string },
+): Promise<IssueSpaceView> {
+  await requirePoster(deps.db, userId, orgId);
+  const name = cleanSpaceName(input.name);
+  const color = checkColor(input.color) ?? "graphite";
+  const existing = await spaceRows(deps.db, orgId);
+  if (existing.some((s) => s.name.toLowerCase() === name.toLowerCase())) throw spaceNameTaken(name);
+  if (existing.length >= SPACES_MAX) {
+    throw new ValidationError(`A workspace holds at most ${SPACES_MAX} spaces`, "issue_space.too_many", {
+      max: SPACES_MAX,
+    });
+  }
+  // Two at once with one name: the unique index refuses the second.
+  const [row] = await deps.db.insert(issueSpaces).values({ orgId, name, color }).onConflictDoNothing().returning();
+  if (!row) throw spaceNameTaken(name);
+  await announce(deps, orgId);
+  return { ...spaceRef(row), open: 0 };
+}
+
+/** Renames, recolours, archives or brings back a space. Its boards and their tasks stay as they are. */
+export async function updateIssueSpace(
+  deps: ProjectDeps,
+  userId: string,
+  orgId: string,
+  spaceId: string,
+  patch: { name?: string; color?: string; archived?: boolean },
+): Promise<IssueSpaceRef> {
+  await requirePoster(deps.db, userId, orgId);
+  const [current] = await deps.db
+    .select()
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
+  if (!current) throw new NotFoundError("Space not found");
+  const set: Partial<typeof issueSpaces.$inferInsert> = {};
+  if (patch.name !== undefined) {
+    const name = cleanSpaceName(patch.name);
+    if (name !== current.name) {
+      const [other] = await deps.db.select({ id: issueSpaces.id }).from(issueSpaces).where(spaceByName(orgId, name));
+      if (other && other.id !== current.id) throw spaceNameTaken(name);
+      set.name = name;
+    }
+  }
+  const color = checkColor(patch.color);
+  if (color !== undefined) set.color = color;
+  if (patch.archived !== undefined) set.archivedAt = patch.archived ? (current.archivedAt ?? new Date()) : null;
+  if (Object.keys(set).length === 0) return spaceRef(current);
+  const [row] = await deps.db
+    .update(issueSpaces)
+    .set(set)
+    .where(eq(issueSpaces.id, current.id))
+    .returning()
+    // Two renames to one name at once: the unique index refuses the second.
+    .catch((error: unknown) => {
+      throw isUniqueViolation(error) ? spaceNameTaken(set.name ?? current.name) : error;
+    });
+  await announce(deps, orgId);
+  return spaceRef(row ?? current);
+}
+
+/** Deletes a space. Its boards stay, in no space, with their tasks (the boards' foreign key clears it). */
+export async function deleteIssueSpace(deps: ProjectDeps, userId: string, orgId: string, spaceId: string) {
+  await requirePoster(deps.db, userId, orgId);
+  const gone = await deps.db
+    .delete(issueSpaces)
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)))
+    .returning({ id: issueSpaces.id });
+  if (gone.length === 0) throw new NotFoundError("Space not found");
   await announce(deps, orgId);
 }
 

@@ -3686,12 +3686,27 @@ export type IssuePatch = Partial<
   criteria?: { id?: string; text: string }[];
 };
 
+/** A space (a company, a client) as the boards menu shows it: the group its boards sit in. */
+export interface IssueSpaceRef {
+  id: string;
+  name: string;
+  color: string;
+  archived: boolean;
+}
+
+/** A space in the boards menu, with the open tasks in its boards that I see. */
+export interface IssueSpace extends IssueSpaceRef {
+  open: number;
+}
+
 /** A task's project as its card shows it: a name and one of the roles' colors. Archived: offered to no new task. */
 export interface IssueProjectRef {
   id: string;
   name: string;
   color: string;
   archived: boolean;
+  /** The space it belongs to; null: a board outside every space. */
+  spaceId: string | null;
 }
 
 /** A project in the projects menu, with the open tasks in it that I see. */
@@ -3699,8 +3714,9 @@ export interface IssueProject extends IssueProjectRef {
   open: number;
 }
 
-/** The projects by name (archived last) and how many of my open tasks have none. */
+/** The spaces, the boards by name (archived last), and how many of my open tasks have none. */
 export interface IssueProjects {
+  spaces: IssueSpace[];
   projects: IssueProject[];
   unfiled: number;
 }
