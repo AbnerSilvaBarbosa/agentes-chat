@@ -24,6 +24,8 @@ import { NO_PROJECT, projectOfFilter, spaceOfFilter } from "@agenteschat/client/
 import { ISSUES_VIEW_DEFAULT, PRIORITY_ORDER, sortIssues } from "@agenteschat/client/lib/issues-view";
 import { can } from "@agenteschat/client/lib/permissions";
 import {
+  Breadcrumb,
+  type BreadcrumbItem,
   Button,
   Chip,
   ColorDot,
@@ -103,6 +105,7 @@ import {
   SpaceChip,
   SpaceDialog,
   SpaceList,
+  SpaceMark,
 } from "./IssueProjects";
 import { DisplayButton, IssueFilters, PRIORITY_ICON } from "./IssuesToolbar";
 import { type CardMove, type DropResult, type IssueDrag, useIssueDrag } from "./issue-drag";
@@ -247,6 +250,28 @@ export function IssuesPage() {
   const emptyProject = issues.isSuccess && all.length === 0 && !search && Boolean(projectParam);
   // A new task on a project's board starts in it. An archived project takes none, so its board offers none.
   const presetProject = project && !project.archived ? project.id : null;
+  // The way back up (ADR 0180): Tarefas, then the company when there is one, then the board when inside one.
+  const home = `/org/${org.id}/issues`;
+  const boardSpace = project?.spaceId ? projectsQuery.data?.spaces.find((sp) => sp.id === project.spaceId) : undefined;
+  const pathSpace = onCompanyPage ? space : boardSpace;
+  const pathItems: BreadcrumbItem[] | null =
+    onCompanyPage || project
+      ? [
+          { label: t("issues.title"), href: home, onSelect: () => setSpaceParam(undefined) },
+          ...(pathSpace
+            ? [
+                {
+                  label: pathSpace.name,
+                  mark: <SpaceMark space={pathSpace} />,
+                  ...(project
+                    ? { href: `${home}?space=${pathSpace.id}`, onSelect: () => setSpaceParam(pathSpace.id) }
+                    : {}),
+                },
+              ]
+            : []),
+          ...(project ? [{ label: project.name }] : []),
+        ]
+      : null;
   const look = useRightHandLook();
   const posts = can(org, "post");
   const adds = posts && !project?.archived;
@@ -284,6 +309,7 @@ export function IssuesPage() {
       <IssueDeleteProvider onDeleted={() => setOpenParam(null)}>
         <div className="page issues">
           <div className="issues__main">
+            {pathItems && <Breadcrumb label={t("issues.path")} items={pathItems} />}
             <PageHeader
               className="issues-head"
               title={

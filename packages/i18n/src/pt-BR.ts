@@ -7481,6 +7481,8 @@ export const ptBR = {
       boardOptions: "Opções do board {{name}}",
       empty: "Nenhuma tarefa neste board ainda.",
     },
+    /** The landmark of the path above a board or a company's page. */
+    path: "Caminho",
     allTasks: "Todas as tarefas",
     /** A empresa: a companhia, cliente ou linha de produto que agrupa boards. */
     spaces: {

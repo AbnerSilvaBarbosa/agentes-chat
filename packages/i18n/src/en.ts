@@ -7481,6 +7481,8 @@ export const en = {
       boardOptions: "Options for the board {{name}}",
       empty: "No tasks in this board yet.",
     },
+    /** The landmark of the path above a board or a company's page. */
+    path: "Path",
     allTasks: "All tasks",
     /** A space: the company, client or product line that groups boards. */
     spaces: {
