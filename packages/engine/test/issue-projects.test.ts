@@ -21,6 +21,7 @@ import {
   listIssues,
   openTasksBrief,
   PROJECTS_MAX,
+  projectByName,
   updateIssue,
   updateIssueProject,
   ValidationError,
@@ -469,5 +470,49 @@ describe("a board's own columns", () => {
       updateIssue(deps, person(f.owner.id), f.org.id, issue.id, { columnId: workspace[0]?.id ?? "" }),
     );
     expect((foreign as unknown as { message?: string })?.message).toContain("board");
+  });
+});
+
+describe("two companies, one board name", () => {
+  test('each company may have an "Entregas", and an agent\'s bare name says which', async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const acme = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa A" });
+    const beta = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa B" });
+    const a = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Entregas", spaceId: acme.id });
+    const b = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Entregas", spaceId: beta.id });
+    expect(a.name).toBe("Entregas");
+    expect(b.spaceId).toBe(beta.id);
+    // The same company twice, in any capitals, is still refused.
+    const twice = await rejection(
+      createIssueProject(deps, f.owner.id, f.org.id, { name: "entregas", spaceId: acme.id }),
+    );
+    expect(twice?.code).toBe("issue_project.name_taken");
+
+    // An agent naming only the board is told which companies have one.
+    const loose = await rejection(projectByName(deps, f.org.id, "Entregas", "new"));
+    expect(loose?.code).toBe("issue_project.ambiguous");
+    expect(loose?.message).toContain("Empresa A › Entregas");
+    expect(loose?.message).toContain("Empresa B › Entregas");
+    // With the company it is that one, and a new one is made there.
+    expect((await projectByName(deps, f.org.id, "Entregas", "task", beta.id)).id).toBe(b.id);
+    const made = await projectByName(deps, f.org.id, "Suporte", "new", beta.id);
+    expect(made.spaceId).toBe(beta.id);
+  });
+
+  test("moving a board to a company that already has its name is refused", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const acme = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa A" });
+    const beta = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Empresa B" });
+    await createIssueProject(deps, f.owner.id, f.org.id, { name: "Entregas", spaceId: acme.id });
+    const loose = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Entregas" });
+    expect(loose.spaceId).toBeNull();
+    const denied = await rejection(updateIssueProject(deps, f.owner.id, f.org.id, loose.id, { spaceId: acme.id }));
+    expect(denied?.code).toBe("issue_project.name_taken");
+    // Into the other company it goes, and then it may be renamed there freely.
+    await updateIssueProject(deps, f.owner.id, f.org.id, loose.id, { spaceId: beta.id });
+    const renamed = await updateIssueProject(deps, f.owner.id, f.org.id, loose.id, { name: "Entregas v2" });
+    expect(renamed.name).toBe("Entregas v2");
   });
 });

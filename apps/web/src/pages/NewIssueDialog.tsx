@@ -3,7 +3,7 @@ import { useIssueAction, useIssueProjects, useStartAgentOnTask } from "@agentesc
 import { errorText } from "@agenteschat/client/lib/errors";
 import { MAX_UPLOAD_MB } from "@agenteschat/client/lib/files";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
-import { NO_PROJECT, pickableProjects } from "@agenteschat/client/lib/issue-projects";
+import { boardLabels, NO_PROJECT, pickableProjects } from "@agenteschat/client/lib/issue-projects";
 import { type AudienceChoice, EVERYONE } from "@agenteschat/client/lib/who-sees";
 import {
   Button,
@@ -87,6 +87,7 @@ export function NewIssueDialog({
   const [space, setSpace] = useState<string | null>(null);
   const spaces = (boardData?.spaces ?? []).filter((sp) => !sp.archived);
   const projects = pickableProjects(boardData?.projects ?? []).filter((p) => !space || p.spaceId === space);
+  const label = boardLabels(boardData?.projects ?? [], boardData?.spaces);
   const chosenProject = projects.find((p) => p.id === project) ?? null;
   const chosenSpace = spaces.find((sp) => sp.id === space) ?? null;
   const pickSpace = (id: string | null) => {
@@ -299,7 +300,7 @@ export function NewIssueDialog({
             onCheckedChange={() => pickProject(p?.id ?? null)}
             leading={<ColorDot color={p?.color} />}
           >
-            {p?.name ?? t("issues.projects.none")}
+            {p ? label(p) : t("issues.projects.none")}
           </MenuCheckboxItem>
         ))}
         <MenuSeparator />

@@ -13202,7 +13202,8 @@ export const ptBR = {
     },
     issue: {
       assigneeOutside: "Essa pessoa não vê esta tarefa. Inclua ela em Quem vê primeiro.",
-      projectNameTaken: "Já existe um projeto com esse nome.",
+      projectNameTaken: "Esta empresa já tem um board com esse nome.",
+      boardAmbiguous: "Há mais de um board com esse nome: diga em qual empresa.",
       projectArchived: "Este projeto está arquivado e não recebe tarefas novas.",
       projectsFull: "Um workspace tem no máximo {{max}} projetos. Exclua um antes.",
       stageFull: "Uma etapa tem no máximo {{max}} colunas. Exclua uma das colunas dela antes.",

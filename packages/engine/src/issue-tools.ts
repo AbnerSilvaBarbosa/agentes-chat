@@ -301,8 +301,19 @@ async function chosenProject(deps: IssueDeps, ctx: ToolContext, input: Record<st
   const name = projectOf(input);
   if (!name) return undefined;
   if (name.toLowerCase() === "none") return null;
-  return (await projectByName(deps, ctx.orgId, name, input.new_project === true ? "new" : "task")).id;
+  // A company says which "Entregas" is meant: two companies may each have one (ADR 0178).
+  const company = str(input.company).trim();
+  const spaceId = company ? (await spaceByName(deps, ctx, company)).id : null;
+  return (await projectByName(deps, ctx.orgId, name, input.new_project === true ? "new" : "task", spaceId)).id;
 }
+
+/** Names a board together with the company it is in, for the tools that take a board (ADR 0178). */
+const companyField = {
+  type: "string",
+  maxLength: 80,
+  description:
+    'The company the board is in, by its name. Needed only when two boards of the workspace share the board name ("Entregas" in two companies).',
+};
 
 /** One issue's line with its assignee's name. */
 const lineOf = async (deps: IssueDeps, ctx: ToolContext, i: IssueView) =>
@@ -660,7 +671,15 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
                 projectOf(input).toLowerCase() === "none"
                   ? "none"
                   : projectOf(input)
-                    ? (await projectByName(deps, ctx.orgId, projectOf(input), "list")).id
+                    ? (
+                        await projectByName(
+                          deps,
+                          ctx.orgId,
+                          projectOf(input),
+                          "list",
+                          str(input.company).trim() ? (await spaceByName(deps, ctx, str(input.company))).id : null,
+                        )
+                      ).id
                     : undefined,
               spaceId: str(input.company).trim() ? (await spaceByName(deps, ctx, str(input.company))).id : undefined,
               limit: 30,
@@ -703,6 +722,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           priority: { enum: PRIORITIES },
           labels: { type: "array", items: { type: "string", maxLength: 40 }, maxItems: 10 },
           project: projectField("Left out: no board."),
+          company: companyField,
           column: columnField,
           new_project: newProjectField,
           assignee: assigneeField,
@@ -826,7 +846,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
             maxItems: 10,
             description: "Replaces the labels",
           },
-          project: projectField('"none" takes it out of its project.'),
+          project: projectField('"none" takes it out of its board.'),
+          company: companyField,
           new_project: newProjectField,
           due_date: {
             type: "string",

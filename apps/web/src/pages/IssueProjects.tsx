@@ -8,6 +8,7 @@ import {
 } from "@agenteschat/client";
 import {
   boardFilterRows,
+  boardLabels,
   NO_PROJECT,
   PROJECT_COLORS,
   PROJECT_NAME_MAX,
@@ -492,11 +493,14 @@ export const NEW_PROJECT = "new";
 export function useProjectOptions(current: IssueProjectRef | null | undefined, mayCreate: boolean) {
   const { t } = useTranslation();
   const { org } = useOrg();
-  const projects = useIssueProjects(org.id).data?.projects ?? (current ? [{ ...current, open: 0 }] : []);
+  const data = useIssueProjects(org.id).data;
+  const projects = data?.projects ?? (current ? [{ ...current, open: 0 }] : []);
+  // Two boards may share a name in different companies: the picker says which company each one is in (ADR 0178).
+  const label = boardLabels(projects, data?.spaces);
   return [
     ...pickableProjects(projects, current).map((p) => ({
       value: p.id,
-      label: p.name,
+      label: label(p),
       leading: <ColorDot color={p.color} />,
     })),
     { value: NO_PROJECT, label: t("issues.projects.none"), leading: <ColorDot /> },

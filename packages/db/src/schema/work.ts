@@ -127,8 +127,16 @@ export const issueProjects = pgTable(
     archivedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  // Agents name a project by its name, so two can't differ only by case.
-  (t) => [uniqueIndex("issue_projects_org_name").on(t.orgId, sql`lower(${t.name})`)],
+  // Two boards of one company can't differ only by case; two companies can each have their own "Entregas" (ADR 0178).
+  // `coalesce`: a board in no company is a group of its own, and a plain `space_id` in the index wouldn't tell two
+  // of those apart (NULLs are distinct in a unique index).
+  (t) => [
+    uniqueIndex("issue_projects_org_space_name").on(
+      t.orgId,
+      sql`coalesce(${t.spaceId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+      sql`lower(${t.name})`,
+    ),
+  ],
 );
 
 /**

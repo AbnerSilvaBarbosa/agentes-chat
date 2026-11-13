@@ -1,0 +1,2 @@
+DROP INDEX "issue_projects_org_name"; -- deploy-safe: a index só restringe; nenhuma versão o lê, e o índice novo nasce nesta mesma migration--> statement-breakpoint
+CREATE UNIQUE INDEX "issue_projects_org_space_name" ON "issue_projects" USING btree ("org_id",coalesce("space_id", '00000000-0000-0000-0000-000000000000'::uuid),lower("name"));

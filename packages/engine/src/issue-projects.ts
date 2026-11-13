@@ -1,5 +1,5 @@
 import type { PubSub } from "@agenteschat/adapters";
-import { and, asc, type Database, eq, inArray, schema, sql } from "@agenteschat/db";
+import { and, asc, type Database, eq, inArray, isNull, schema, sql } from "@agenteschat/db";
 import { ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "./errors";
 import { publishOrgEvent } from "./events";
 import { can, requireActiveMembership } from "./organizations";
@@ -80,10 +80,25 @@ function checkColor(color: string | undefined) {
   return color;
 }
 
-const nameTaken = (name: string) =>
-  new ValidationError(`A project named "${name}" already exists`, "issue_project.name_taken", { name });
+const nameTaken = (name: string, space?: string | null) =>
+  new ValidationError(
+    space
+      ? `This company already has a board named "${name}"`
+      : `A board named "${name}" already exists outside every company`,
+    "issue_project.name_taken",
+    { name },
+  );
 
-const byName = (orgId: string, name: string) =>
+/** Boards of one company (or of none) with this name, whatever its capitals: two companies may each have "Entregas". */
+const byName = (orgId: string, name: string, spaceId: string | null = null) =>
+  and(
+    eq(issueProjects.orgId, orgId),
+    spaceId ? eq(issueProjects.spaceId, spaceId) : isNull(issueProjects.spaceId),
+    sql`lower(${issueProjects.name}) = lower(${name})`,
+  );
+
+/** Every board with this name in the workspace, whatever its company: what an agent's bare name may mean. */
+const byNameAnywhere = (orgId: string, name: string) =>
   and(eq(issueProjects.orgId, orgId), sql`lower(${issueProjects.name}) = lower(${name})`);
 
 /** The org's projects by name, archived ones last. */
@@ -174,11 +189,14 @@ async function insertProject(
   const name = cleanName(input.name);
   const color = checkColor(input.color) ?? "graphite";
   const spaceId = await checkSpace(db, orgId, input.spaceId);
-  const existing = await db
-    .select({ id: issueProjects.id, name: issueProjects.name })
-    .from(issueProjects)
-    .where(eq(issueProjects.orgId, orgId));
-  if (existing.some((p) => p.name.toLowerCase() === name.toLowerCase())) throw nameTaken(name);
+  const [sameName, existing] = await Promise.all([
+    db
+      .select({ id: issueProjects.id })
+      .from(issueProjects)
+      .where(byName(orgId, name, spaceId ?? null)),
+    db.select({ id: issueProjects.id }).from(issueProjects).where(eq(issueProjects.orgId, orgId)),
+  ]);
+  if (sameName.length > 0) throw nameTaken(name, spaceId ?? null);
   if (existing.length >= PROJECTS_MAX) {
     throw new ValidationError(`A workspace holds at most ${PROJECTS_MAX} projects`, "issue_project.too_many", {
       max: PROJECTS_MAX,
@@ -227,19 +245,23 @@ export async function updateIssueProject(
     .where(and(eq(issueProjects.id, projectId), eq(issueProjects.orgId, orgId)));
   if (!current) throw new NotFoundError("Project not found");
   const set: Partial<typeof issueProjects.$inferInsert> = {};
+  // Moving a board between companies, or out of every company (`null`), is checked before a rename lands.
+  if (patch.spaceId !== undefined) set.spaceId = await checkSpace(deps.db, orgId, patch.spaceId);
+  const target = set.spaceId !== undefined ? (set.spaceId ?? null) : current.spaceId;
   if (patch.name !== undefined) {
     const name = cleanName(patch.name);
-    if (name !== current.name) {
-      const [other] = await deps.db.select({ id: issueProjects.id }).from(issueProjects).where(byName(orgId, name));
-      if (other && other.id !== current.id) throw nameTaken(name);
+    if (name !== current.name || target !== current.spaceId) {
+      const [other] = await deps.db
+        .select({ id: issueProjects.id })
+        .from(issueProjects)
+        .where(byName(orgId, name, target));
+      if (other && other.id !== current.id) throw nameTaken(name, target);
       set.name = name;
     }
   }
   const color = checkColor(patch.color);
   if (color !== undefined) set.color = color;
   if (patch.archived !== undefined) set.archivedAt = patch.archived ? (current.archivedAt ?? new Date()) : null;
-  // Moving a board between spaces, or out of every space (`null`).
-  if (patch.spaceId !== undefined) set.spaceId = await checkSpace(deps.db, orgId, patch.spaceId);
   if (Object.keys(set).length === 0) return projectRef(current);
   const [row] = await deps.db
     .update(issueProjects)
@@ -248,7 +270,7 @@ export async function updateIssueProject(
     .returning()
     // Two renames to one name at once: the unique index refuses the second.
     .catch((error: unknown) => {
-      throw isUniqueViolation(error) ? nameTaken(set.name ?? current.name) : error;
+      throw isUniqueViolation(error) ? nameTaken(set.name ?? current.name, target) : error;
     });
   await announce(deps, orgId);
   return projectRef(row ?? current);
@@ -376,9 +398,27 @@ export async function projectByName(
   orgId: string,
   name: string,
   mode: "task" | "new" | "list" = "task",
+  spaceId: string | null = null,
 ) {
   const wanted = cleanName(name);
-  const [found] = await deps.db.select().from(issueProjects).where(byName(orgId, wanted));
+  // Two companies may each have an "Entregas" (ADR 0178): with a company, that one; without, the only one or none.
+  const candidates = await deps.db
+    .select()
+    .from(issueProjects)
+    .where(spaceId ? byName(orgId, wanted, spaceId) : byNameAnywhere(orgId, wanted));
+  if (candidates.length > 1) {
+    const spaces = await spaceRows(deps.db, orgId);
+    const where = (p: ProjectRow) => {
+      const space = spaces.find((s) => s.id === p.spaceId);
+      return space ? `${space.name} › ${p.name}` : p.name;
+    };
+    throw new ValidationError(
+      `More than one board is named "${wanted}": ${candidates.map(where).join(", ")}. Say which company it is (company), or use the board's id.`,
+      "issue_project.ambiguous",
+      { name: wanted },
+    );
+  }
+  const [found] = candidates;
   if (found?.archivedAt && mode !== "list") {
     throw new ValidationError(
       `The project "${found.name}" is archived and takes no new task. A person brings it back from its board.`,
@@ -387,11 +427,17 @@ export async function projectByName(
   }
   if (found) return found;
   if (mode === "new") {
-    const row = await insertProject(deps.db, orgId, { name: wanted });
+    const row = await insertProject(deps.db, orgId, { name: wanted, spaceId: spaceId ?? null });
     await announce(deps, orgId);
     return row;
   }
-  const names = (await projectRows(deps.db, orgId)).filter((p) => !p.archivedAt).map((p) => `"${p.name}"`);
+  const spaces = await spaceRows(deps.db, orgId);
+  const names = (await projectRows(deps.db, orgId))
+    .filter((p) => !p.archivedAt)
+    .map((p) => {
+      const space = spaces.find((s) => s.id === p.spaceId);
+      return space ? `"${p.name}" (${space.name})` : `"${p.name}"`;
+    });
   const message = names.length
     ? `There is no project named "${wanted}". The projects are: ${names.join(", ")}. Use one of them, or set new_project only when the person asked for a new project.`
     : `There is no project named "${wanted}", and no projects yet. Set new_project only when the person asked for a new project.`;

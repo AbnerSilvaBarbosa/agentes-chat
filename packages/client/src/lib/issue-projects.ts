@@ -84,3 +84,20 @@ export function boardFilterRows<P extends IssueProjectRef>(
   );
   return out;
 }
+
+/**
+ * How a board is written where the company isn't already the heading: its own name, and its company's before it when
+ * two boards of the workspace share that name (ADR 0178: two companies may each have an "Entregas").
+ */
+export function boardLabels(
+  projects: IssueProjectRef[],
+  spaces: IssueSpaceRef[] | undefined,
+): (project: IssueProjectRef) => string {
+  const seen = new Map<string, number>();
+  for (const p of projects) seen.set(p.name.toLowerCase(), (seen.get(p.name.toLowerCase()) ?? 0) + 1);
+  return (project) => {
+    if ((seen.get(project.name.toLowerCase()) ?? 0) < 2) return project.name;
+    const space = spaces?.find((s) => s.id === project.spaceId);
+    return space ? `${space.name} › ${project.name}` : project.name;
+  };
+}
