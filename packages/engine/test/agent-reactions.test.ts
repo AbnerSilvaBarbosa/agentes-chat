@@ -325,6 +325,132 @@ describe("react to someone else's message (`to`)", () => {
   });
 });
 
+describe("react in another channel (`channel`)", () => {
+  /** "go eng|caio|Fechei_o|" reacts 👍 in #eng: `channel|to|quote|message_id`, underscores standing for spaces. */
+  const goes = (req: ModelRequest) => {
+    const last = lastText(req);
+    if (last.includes("tool_result")) return { chunks: [] };
+    const m = [...last.matchAll(/go ([^|"\\]*)\|([^|"\\]*)\|([^|"\\]*)\|([^|"\\]*)["\\]/g)].at(-1);
+    if (!m) return { chunks: [] };
+    const [, channel, to, quote, id] = m;
+    const input: Record<string, string> = { emoji: "👍" };
+    if (channel) input.channel = channel;
+    if (to) input.to = to;
+    if (quote) input.quote = quote.replaceAll("_", " ");
+    if (id) input.message_id = id;
+    return { chunks: [], toolUses: [{ name: "react", input }] };
+  };
+  const toolResult = () =>
+    f.provider.calls.map((c) => lastText(c.request as ModelRequest)).find((t) => t.includes("tool_result")) ?? "";
+  const caio = () => createAgent(f.db, f.owner.id, f.org.id, { name: "Caio", handle: "caio" }, NEW_AGENT_DEFAULTS);
+  const saidBy = (agentId: string, channelId: string, body: string) =>
+    insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId,
+      author: { type: "agent", agentId, runId: null, hop: 1, stretchId: null },
+      body,
+    });
+  const privateChannel = async (name: string, members: { userId?: string; agentId?: string }[]) => {
+    const [row] = await f.db
+      .insert(schema.channels)
+      .values({ orgId: f.org.id, name, visibility: "private", createdByUserId: f.owner.id })
+      .returning();
+    if (!row) throw new Error("no channel");
+    for (const m of members)
+      await f.db.insert(schema.channelMembers).values({ orgId: f.org.id, channelId: row.id, ...m });
+    return row;
+  };
+  const run = async (line: string) => {
+    await post(line);
+    await drainOutbox(f.db, f.handlers);
+  };
+
+  test("reacts to the named author's latest message in another channel the person is in, and says where", async () => {
+    f = await setup({ react: true, reply: goes });
+    const eng = await createChannel(f.db, f.owner.id, f.org.id, { name: "eng" });
+    const c = await caio();
+    await saidBy(c.id, eng.id, "Primeiro rascunho");
+    const latest = await saidBy(c.id, eng.id, "Fechei o relatório de vendas de outubro");
+    const here = await saidBy(c.id, f.general.id, "Algo neste canal");
+    await run("@dev go eng|caio||");
+
+    expect(await listReactions(f.db, f.org.id, latest.id)).toEqual([
+      { reaction: "+1", count: 1, userIds: [], agentIds: [f.agent.id] },
+    ]);
+    expect(await listReactions(f.db, f.org.id, here.id)).toEqual([]);
+    expect(toolResult()).toContain("in #eng");
+    expect(toolResult()).toContain("Tell the person where");
+  });
+
+  test("`quote` picks an older message there, and a message_id works with the channel named", async () => {
+    f = await setup({ react: true, reply: goes });
+    const eng = await createChannel(f.db, f.owner.id, f.org.id, { name: "eng" });
+    const c = await caio();
+    const older = await saidBy(c.id, eng.id, "Primeiro rascunho do plano");
+    await saidBy(c.id, eng.id, "Fechei o relatório");
+    await run("@dev go eng|caio|Primeiro_rascunho|");
+    expect(await listReactions(f.db, f.org.id, older.id)).toEqual([
+      { reaction: "+1", count: 1, userIds: [], agentIds: [f.agent.id] },
+    ]);
+    const byId = await saidBy(c.id, eng.id, "Para reagir por id");
+    await run(`@dev go eng|||${byId.id}`);
+    expect(await listReactions(f.db, f.org.id, byId.id)).toEqual([
+      { reaction: "+1", count: 1, userIds: [], agentIds: [f.agent.id] },
+    ]);
+  });
+
+  test("a channel with no message named reacts to nothing and says what to give", async () => {
+    f = await setup({ react: true, reply: goes });
+    const eng = await createChannel(f.db, f.owner.id, f.org.id, { name: "eng" });
+    const c = await caio();
+    const message = await saidBy(c.id, eng.id, "Fechei o relatório");
+    await run("@dev go eng|||");
+    expect(await listReactions(f.db, f.org.id, message.id)).toEqual([]);
+    expect(toolResult()).toContain("Say which message in #eng");
+  });
+
+  test("a private channel the person who asked is not in is not found, and nothing is reacted to", async () => {
+    f = await setup({ react: true, reply: goes });
+    const c = await caio();
+    const secret = await privateChannel("segredo", [{ agentId: f.agent.id }]);
+    const message = await saidBy(c.id, secret.id, "Plano reservado");
+    await run("@dev go segredo|caio||");
+    expect(await listReactions(f.db, f.org.id, message.id)).toEqual([]);
+    expect(toolResult()).toContain("No channel #segredo that the person who asked can post in.");
+  });
+
+  test("a private channel the person is in but the agent is not is refused", async () => {
+    f = await setup({ react: true, reply: goes });
+    const c = await caio();
+    const secret = await privateChannel("reservado", [{ userId: f.owner.id }, { agentId: c.id }]);
+    const message = await saidBy(c.id, secret.id, "Plano da equipe");
+    await run("@dev go reservado|caio||");
+    expect(await listReactions(f.db, f.org.id, message.id)).toEqual([]);
+    expect(toolResult()).toContain("You are not in #reservado (private)");
+  });
+
+  test("the channel the run is already in behaves as no channel: the usual wording", async () => {
+    f = await setup({ react: true, reply: goes });
+    const c = await caio();
+    const latest = await saidBy(c.id, f.general.id, "Fechei o relatório de vendas");
+    await run("@dev go general|caio||");
+    expect(await listReactions(f.db, f.org.id, latest.id)).toEqual([
+      { reaction: "+1", count: 1, userIds: [], agentIds: [f.agent.id] },
+    ]);
+    expect(toolResult()).toContain("End your turn now without any text.");
+  });
+
+  test("a message_id of another channel is still refused when the channel is not named", async () => {
+    f = await setup({ react: true, reply: goes });
+    const eng = await createChannel(f.db, f.owner.id, f.org.id, { name: "eng" });
+    const c = await caio();
+    const elsewhere = await saidBy(c.id, eng.id, "Em outro canal");
+    await run(`@dev go |||${elsewhere.id}`);
+    expect(await listReactions(f.db, f.org.id, elsewhere.id)).toEqual([]);
+    expect(toolResult()).toContain("No such message in this conversation.");
+  });
+});
+
 test("reaction reads and deletes require access to the message's channel", async () => {
   f = await setup();
   const outsider = await addMember(f.db, f.org.id, "member", "reaction-outsider");

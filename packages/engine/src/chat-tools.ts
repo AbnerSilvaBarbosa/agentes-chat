@@ -155,6 +155,54 @@ const SEND_DM_PERSONAL = {
 };
 
 /**
+ * The channel `raw` names, when the run may act there: where the person who asked can post (ADR 0134), where the
+ * routine's creator can, or, with nobody behind the run, one the agent is in. Not in it is "not found": a private
+ * channel is never revealed. Posting and reacting in another channel share this one rule.
+ */
+async function reachableChannel(ctx: ToolContext, raw: string) {
+  if (await answersAgentsOnly(ctx.db, ctx.orgId, ctx.runId))
+    return { refusal: { content: AGENTS_ONLY, isError: true } };
+  const requester = await personBehindCall(ctx);
+  // A routine posts where its creator can post, as itself: never with their files.
+  const routine = requester ? null : await actingRoutineOfCall(ctx);
+  const creator = routine?.creatorUserId ?? null;
+  const name = raw.trim().replace(/^#/, "").toLowerCase();
+  const { channels, channelMembers } = schema;
+  const [found] = await ctx.db
+    .select({ id: channels.id, name: channels.name, visibility: channels.visibility, dmKey: channels.dmKey })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.orgId, ctx.orgId),
+        eq(channels.name, name),
+        eq(channels.kind, "channel"),
+        isNull(channels.archivedAt),
+      ),
+    );
+  // A routine's room is never a place to post in (nor named to anyone).
+  const channel = found && !isRoutineRoomKey(found.dmKey) ? found : undefined;
+  const members = channel
+    ? await ctx.db
+        .select({ userId: channelMembers.userId, agentId: channelMembers.agentId })
+        .from(channelMembers)
+        .where(eq(channelMembers.channelId, channel.id))
+    : [];
+  // Not in it = not found: never reveal private channels. Nobody behind the run: the agent's own channels.
+  // Whoever is behind it must be able to send there (ADR 0134): the agent never posts for someone who can't.
+  const poster = creator ?? requester;
+  if (
+    !channel ||
+    !(poster
+      ? await personCanPost(ctx.db, ctx.orgId, poster, channel.id)
+      : members.some((m) => m.agentId === ctx.agentId))
+  ) {
+    const who = creator ? "this routine's creator can post" : requester ? "the person who asked can post" : "you are";
+    return { refusal: { content: `No channel #${name} that ${who} in.`, isError: true } };
+  }
+  return { requester, routine, creator, name, channel, members };
+}
+
+/**
  * `post_message`: "manda no #geral" from a DM. Posts a new message (with
  * files) in another channel, on behalf of the person who asked: they must be
  * in that channel, and the agent too unless it is public. With nobody behind
@@ -198,48 +246,9 @@ export function createChatToolSource(deps: {
       }),
       async execute(input, ctx) {
         try {
-          if (await answersAgentsOnly(ctx.db, ctx.orgId, ctx.runId)) return { content: AGENTS_ONLY, isError: true };
-          const requester = await personBehindCall(ctx);
-          // A routine posts where its creator can post, as itself: never with their files.
-          const routine = requester ? null : await actingRoutineOfCall(ctx);
-          const creator = routine?.creatorUserId ?? null;
-          const name = str(input.channel).trim().replace(/^#/, "").toLowerCase();
-          const { channels, channelMembers } = schema;
-          const [found] = await ctx.db
-            .select({ id: channels.id, name: channels.name, visibility: channels.visibility, dmKey: channels.dmKey })
-            .from(channels)
-            .where(
-              and(
-                eq(channels.orgId, ctx.orgId),
-                eq(channels.name, name),
-                eq(channels.kind, "channel"),
-                isNull(channels.archivedAt),
-              ),
-            );
-          // A routine's room is never a place to post in (nor named to anyone).
-          const channel = found && !isRoutineRoomKey(found.dmKey) ? found : undefined;
-          const members = channel
-            ? await ctx.db
-                .select({ userId: channelMembers.userId, agentId: channelMembers.agentId })
-                .from(channelMembers)
-                .where(eq(channelMembers.channelId, channel.id))
-            : [];
-          // Not in it = not found: never reveal private channels. Nobody behind the run: the agent's own channels.
-          // Whoever is behind it must be able to send there (ADR 0134): the agent never posts for someone who can't.
-          const poster = creator ?? requester;
-          if (
-            !channel ||
-            !(poster
-              ? await personCanPost(ctx.db, ctx.orgId, poster, channel.id)
-              : members.some((m) => m.agentId === ctx.agentId))
-          ) {
-            const who = creator
-              ? "this routine's creator can post"
-              : requester
-                ? "the person who asked can post"
-                : "you are";
-            return { content: `No channel #${name} that ${who} in.`, isError: true };
-          }
+          const reach = await reachableChannel(ctx, str(input.channel));
+          if (reach.refusal) return reach.refusal;
+          const { requester, routine, creator, channel, members } = reach;
           const moving = input.move_here === true;
           const [run] = await ctx.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, ctx.runId));
           const here = channel.id === ctx.channelId;
@@ -521,9 +530,10 @@ const REACT_LOOKBACK = 50;
  * The run's conversation, newest first, with who wrote each message as the agent sees them: its thread when the run
  * is in one (`threadRootId` is the root), else the channel's main timeline. `id`: that one message only.
  */
-function conversationMessages(ctx: ToolContext, id?: string) {
+function conversationMessages(ctx: ToolContext, id?: string, otherChannelId?: string) {
   const m = schema.messages;
-  const inThread = ctx.threadRootId !== ctx.triggerMessageId;
+  // Another channel is read at its top level: the run has no thread there.
+  const inThread = !otherChannelId && ctx.threadRootId !== ctx.triggerMessageId;
   return ctx.db
     .select({
       id: m.id,
@@ -546,7 +556,7 @@ function conversationMessages(ctx: ToolContext, id?: string) {
     .where(
       and(
         eq(m.orgId, ctx.orgId),
-        eq(m.channelId, ctx.channelId),
+        eq(m.channelId, otherChannelId ?? ctx.channelId),
         isNull(m.deletedAt),
         id
           ? eq(m.id, id)
@@ -599,12 +609,13 @@ export function createReactToolSource(deps: { pubsub?: PubSub }): ToolSource {
   const tool: ToolDefinition = {
     name: REACT_TOOL,
     description:
-      'React with one emoji instead of replying, when a message only acknowledges or thanks ("valeu", "ok, pode seguir"), or when asked to react. Reacts to the message you answer; for another one, `to` its author ("@caio", "Ana"), plus `quote` (a few of its words) if not their latest. Then end with no text. Never react and also reply.',
+      'React with one emoji instead of replying, when a message only acknowledges or thanks ("valeu", "ok, pode seguir"), or when asked to react. Reacts to the message you answer; for another one, `to` its author ("@caio", "Ana"), plus `quote` (a few of its words) if not their latest. In another channel ("reage na mensagem dela no #geral"), add `channel` with its name and `to`, `quote` or `message_id` to pick the message: you may react wherever the person who asked can post. Then end with no text, or with one line saying where you reacted when it was in another channel. Never react and also reply.',
     scope: "",
     inputSchema: {
       type: "object",
       properties: {
         emoji: { type: "string", minLength: 1, maxLength: 16 },
+        channel: { type: "string", maxLength: 100 },
         to: { type: "string", maxLength: 100 },
         quote: { type: "string", maxLength: 200 },
         message_id: { type: "string", minLength: 36, maxLength: 36 },
@@ -620,33 +631,61 @@ export function createReactToolSource(deps: { pubsub?: PubSub }): ToolSource {
         const to = str(input.to).trim();
         const quote = plainName(str(input.quote)).replace(/\s+/g, " ");
         const byId = str(input.message_id);
+        // Another channel: where the person who asked can post (the same rule as `post_message`), and the agent is in
+        // when it is private. The message there is named, never "the one being answered".
+        let elsewhere: { id: string; name: string } | undefined;
+        if (str(input.channel).trim()) {
+          const reach = await reachableChannel(ctx, str(input.channel));
+          if (reach.refusal) return reach.refusal;
+          const { channel, members } = reach;
+          if (
+            channel.visibility !== "public" &&
+            !members.some((m) => m.agentId === ctx.agentId) &&
+            !(await isRightHandId(ctx.db, ctx.orgId, ctx.agentId))
+          ) {
+            return {
+              content: `You are not in #${channel.name} (private). Ask someone to add you to it, then try again.`,
+              isError: true,
+            };
+          }
+          if (channel.id !== ctx.channelId) {
+            if (!to && !quote && !byId) {
+              return {
+                content: `Say which message in #${channel.name}: \`to\` its author, \`quote\` a few of its words, or \`message_id\`.`,
+                isError: true,
+              };
+            }
+            elsewhere = { id: channel.id, name: channel.name };
+          }
+        }
+        const where = elsewhere ? `#${elsewhere.name}` : "this conversation";
         let target: ConversationMessage | undefined;
         if ((to || quote) && !byId) {
-          const recent = (await conversationMessages(ctx)).filter(
+          const recent = (await conversationMessages(ctx, undefined, elsewhere?.id)).filter(
             (m) => m.authorAgentId !== ctx.agentId && !m.meta.notice,
           );
           const quoted = quote ? recent.filter((m) => plainName(m.body).replace(/\s+/g, " ").includes(quote)) : recent;
           if (quote && !quoted.length)
             return {
-              content: `No message here has "${str(input.quote).trim()}": nothing was reacted to. Quote a few words exactly as the message has them.`,
+              content: `No message ${elsewhere ? `in ${where}` : "here"} has "${str(input.quote).trim()}": nothing was reacted to. Quote a few words exactly as the message has them.`,
               isError: true,
             };
           const theirs = to ? writtenBy(quoted, to) : quoted.slice(0, 1);
           const authors = new Map(theirs.map((m) => [m.authorAgentId ?? m.authorUserId, m]));
           if (authors.size > 1)
             return {
-              content: `${to} names more than one author here: ${[...authors.values()].map(authorOf).join(", ")}. Nothing was reacted to: give the @handle.`,
+              content: `${to} names more than one author ${elsewhere ? `in ${where}` : "here"}: ${[...authors.values()].map(authorOf).join(", ")}. Nothing was reacted to: give the @handle.`,
               isError: true,
             };
           target = theirs[0];
           if (!target)
             return {
-              content: `No message from ${to}${quote ? " with those words" : ""} in this conversation: nothing was reacted to. Give their @handle or name as the conversation shows it, or message_id.`,
+              content: `No message from ${to}${quote ? " with those words" : ""} in ${where}: nothing was reacted to. Give their @handle or name as ${elsewhere ? "that channel" : "the conversation"} shows it, or message_id.`,
               isError: true,
             };
         } else {
-          [target] = await conversationMessages(ctx, byId || ctx.triggerMessageId);
-          if (!target) return { content: "No such message in this conversation.", isError: true };
+          [target] = await conversationMessages(ctx, byId || ctx.triggerMessageId, elsewhere?.id);
+          if (!target) return { content: `No such message in ${where}.`, isError: true };
         }
         await addAgentReaction(
           ctx.db,
@@ -655,7 +694,9 @@ export function createReactToolSource(deps: { pubsub?: PubSub }): ToolSource {
         );
         const which = target.id === ctx.triggerMessageId ? "the message you are answering, " : "";
         return {
-          content: `Reacted ${str(input.emoji).trim()} to ${which}${quoteOf(target)}. End your turn now without any text.`,
+          content: elsewhere
+            ? `Reacted ${str(input.emoji).trim()} to ${quoteOf(target)} in #${elsewhere.name}. Tell the person where, in one short line.`
+            : `Reacted ${str(input.emoji).trim()} to ${which}${quoteOf(target)}. End your turn now without any text.`,
           data: { reacted: { messageId: target.id, reaction } },
         };
       } catch (error) {
