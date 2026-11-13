@@ -523,6 +523,91 @@ export async function saveColumnTemplate(
   return templateRef(row);
 }
 
+/** The longest a status set's name may be: shorter than the 60 an older save cut to, so the screen can show it whole. */
+export const TEMPLATE_NAME_MAX = 40;
+
+/** A set's name as typed: 1 to 40 characters. Existing longer names are never rewritten, only refused when new. */
+function templateName(name: string) {
+  const n = name.trim();
+  if (!n || n.length > TEMPLATE_NAME_MAX) {
+    throw new ValidationError(`A set's name is 1 to ${TEMPLATE_NAME_MAX} characters`, "issue_template.name_invalid", {
+      max: TEMPLATE_NAME_MAX,
+    });
+  }
+  return n;
+}
+
+/** A set's columns as given: each named (1 to 40 characters) and in a stage of the board, at least one. */
+function templateColumns(columns: { name: string; stage: IssueStatus }[]) {
+  if (columns.length === 0) {
+    throw new ValidationError("A set needs at least one column", "issue_template.empty");
+  }
+  return columns.map((c) => {
+    if (!BOARD_STAGES.includes(c.stage)) throw new ValidationError("invalid stage");
+    return { name: cleanName(c.name), stage: c.stage };
+  });
+}
+
+const takenName = (name: string) =>
+  new ValidationError(`There is already a template named "${name}"`, "issue_template.name_taken", { name });
+
+/** Makes a status set from a name and its columns, in the order the board will show them (ADR 0177). */
+export async function createColumnTemplate(
+  deps: ColumnDeps,
+  userId: string,
+  orgId: string,
+  input: { name: string; columns: { name: string; stage: IssueStatus }[] },
+): Promise<ColumnTemplateView> {
+  await requirePoster(deps.db, userId, orgId);
+  const name = templateName(input.name);
+  const columns = templateColumns(input.columns);
+  // The seeded names exist before a new set can take one.
+  await columnTemplates(deps.db, orgId);
+  const [row] = await deps.db
+    .insert(issueColumnTemplates)
+    .values({ orgId, name, columns })
+    .onConflictDoNothing()
+    .returning();
+  if (!row) throw takenName(name);
+  return templateRef(row);
+}
+
+/**
+ * Renames a status set and/or replaces its columns (add, rename, reorder, move of stage and delete are all a new
+ * list). The boards made from it keep their own copy untouched.
+ */
+export async function updateColumnTemplate(
+  deps: ColumnDeps,
+  userId: string,
+  orgId: string,
+  templateId: string,
+  patch: { name?: string; columns?: { name: string; stage: IssueStatus }[] },
+): Promise<ColumnTemplateView> {
+  await requirePoster(deps.db, userId, orgId);
+  const set: Partial<typeof issueColumnTemplates.$inferInsert> = {};
+  if (patch.name !== undefined) set.name = templateName(patch.name);
+  if (patch.columns !== undefined) set.columns = templateColumns(patch.columns);
+  const [current] = await deps.db
+    .select()
+    .from(issueColumnTemplates)
+    .where(and(eq(issueColumnTemplates.id, templateId), eq(issueColumnTemplates.orgId, orgId)));
+  if (!current) throw new NotFoundError("Template not found");
+  if (Object.keys(set).length === 0) return templateRef(current);
+  if (set.name) {
+    const wanted = set.name.toLowerCase();
+    // The seeded names count too, so a rename never takes one the workspace is about to start with.
+    const others = (await columnTemplates(deps.db, orgId)).filter((t) => t.id !== templateId);
+    if (others.some((t) => t.name.toLowerCase() === wanted)) throw takenName(set.name);
+  }
+  const [row] = await deps.db
+    .update(issueColumnTemplates)
+    .set(set)
+    .where(and(eq(issueColumnTemplates.id, templateId), eq(issueColumnTemplates.orgId, orgId)))
+    .returning();
+  if (!row) throw new NotFoundError("Template not found");
+  return templateRef(row);
+}
+
 /** Deletes a template. The boards made from it keep their columns. */
 export async function deleteColumnTemplate(deps: ColumnDeps, userId: string, orgId: string, templateId: string) {
   await requirePoster(deps.db, userId, orgId);
