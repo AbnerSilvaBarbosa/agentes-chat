@@ -25,6 +25,17 @@ export interface CompanyDashboard {
   assignees: { type: "agent" | "person" | "removed"; id: string; name: string; open: number; done: number }[];
   /** Open tasks with no assignee (the screen's last row). */
   unassigned: number;
+  /** From a task's creation to its last conclusion, over the tasks concluded in the period. */
+  leadTime: SpanStats;
+  /** From the first time a task became Em andamento to its last conclusion; a task that never was is out of it. */
+  workTime: SpanStats;
+}
+
+/** How long tasks took: how many were measured, the median and the average in milliseconds (null: none). */
+export interface SpanStats {
+  count: number;
+  medianMs: number | null;
+  averageMs: number | null;
 }
 
 const OPEN = sql`status in ('todo', 'in_progress', 'in_review')`;
@@ -80,7 +91,7 @@ export async function companyDashboard(
     rowsOf<T>(await db.execute(sql`with ${visibleTasks(userId, orgId, spaceId)}, ${CONCLUDED} ${select}`));
   const doneInPeriod = sql`done_at >= ${since}::timestamptz`;
 
-  const [[stages], people] = await Promise.all([
+  const [[stages], people, [times]] = await Promise.all([
     over<{
       todo: number;
       in_progress: number;
@@ -110,6 +121,19 @@ export async function companyDashboard(
       where c.assignee_id is not null
       group by c.assignee_type, c.assignee_id, ag.id, ag.name, u.id, u.name
       having count(*) filter (where ${OPEN}) > 0 or count(*) filter (where ${doneInPeriod}) > 0`),
+    over<{
+      lead_count: number;
+      lead_median: number | null;
+      lead_average: number | null;
+      work_count: number;
+      work_median: number | null;
+      work_average: number | null;
+    }>(sql`select count(lead)::int as lead_count, percentile_cont(0.5) within group (order by lead) as lead_median,
+        avg(lead)::float8 as lead_average, count(work)::int as work_count,
+        percentile_cont(0.5) within group (order by work) as work_median, avg(work)::float8 as work_average
+      from (select greatest(0, extract(epoch from done_at - created_at) * 1000) as lead,
+          case when first_start is not null then greatest(0, extract(epoch from done_at - first_start) * 1000) end as work
+        from c where ${doneInPeriod}) m`),
   ]);
   const { unassigned = 0, ...counts } = stages ?? { todo: 0, in_progress: 0, in_review: 0, done: 0 };
   const assignees = people
@@ -121,5 +145,17 @@ export async function companyDashboard(
       done: p.done,
     }))
     .sort((a, b) => b.open - a.open || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-  return { days: period, stages: counts, assignees, unassigned };
+  const span = (count: number | undefined, median: number | null | undefined, average: number | null | undefined) => ({
+    count: count ?? 0,
+    medianMs: median == null ? null : Math.round(median),
+    averageMs: average == null ? null : Math.round(average),
+  });
+  return {
+    days: period,
+    stages: counts,
+    assignees,
+    unassigned,
+    leadTime: span(times?.lead_count, times?.lead_median, times?.lead_average),
+    workTime: span(times?.work_count, times?.work_median, times?.work_average),
+  };
 }

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { schema } from "@agenteschat/db";
-import { companyDashboard, createOrganization, NotFoundError, normalizeDays } from "../src";
+import {
+  companyDashboard,
+  createIssue,
+  createIssueColumn,
+  createOrganization,
+  NotFoundError,
+  normalizeDays,
+  updateIssue,
+} from "../src";
 import { addMember, addUser, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
@@ -159,7 +167,7 @@ describe("companyDashboard assignees", () => {
     const { task, read } = await scene();
     const ana = await addMember(f.db, f.org.id, "member", "Ana");
     const caio = await addMember(f.db, f.org.id, "member", "Caio");
-    // The fixture agent is "Ada"; Ana and Ada tie on two, Caio has three.
+    // The fixture agent is "Dev"; Ana and Dev tie on two, Caio has three.
     for (const [who, n] of [
       [as("person", caio.id), 3],
       [as("person", ana.id), 2],
@@ -184,5 +192,91 @@ describe("companyDashboard assignees", () => {
     await task({ status: "todo", ...as("agent", gone) });
     await task({ status: "done", moves: [["done", 2]], ...as("agent", gone) });
     expect((await read()).assignees).toEqual([{ type: "removed", id: gone, name: "", open: 1, done: 1 }]);
+  });
+});
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+describe("companyDashboard times", () => {
+  /** A task made `made` days ago, started `start` days ago (null: never), concluded `end` days ago. */
+  const finished = (made: number, start: number | null, end: number) => ({
+    status: "done" as const,
+    createdAt: ago(made),
+    moves: [...(start === null ? [] : [["in_progress", start] as [Status, number]]), ["done", end] as [Status, number]],
+  });
+
+  test("lead time is measured from creation to conclusion", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task(finished(10, 9, 8)); // 2 days
+    await task(finished(10, 9, 6)); // 4 days
+    await task(finished(10, 9, 0)); // 10 days
+    const d = await read();
+    expect(d.leadTime).toEqual({ count: 3, medianMs: 4 * DAY, averageMs: (16 * DAY) / 3 });
+  });
+
+  test("work time is measured from the first Em andamento", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task(finished(20, 10, 8)); // 2 days of work
+    await task(finished(20, 10, 6)); // 4 days
+    const d = await read();
+    expect(d.workTime).toEqual({ count: 2, medianMs: 3 * DAY, averageMs: 3 * DAY });
+    // Concluded before the period's start, the first is not measured.
+    expect((await read(7)).workTime).toEqual({ count: 1, medianMs: 4 * DAY, averageMs: 4 * DAY });
+  });
+
+  test("keeps a task that never started out of the work time", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task(finished(10, null, 5)); // lead 5 days
+    await task(finished(10, 9, 5)); // lead 5 days, work 4
+    const d = await read();
+    expect(d.leadTime.count).toBe(2);
+    expect(d.workTime).toEqual({ count: 1, medianMs: 4 * DAY, averageMs: 4 * DAY });
+  });
+
+  test("measures a reopened task to its last conclusion", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({
+      status: "done",
+      createdAt: ago(20),
+      moves: [
+        ["in_progress", 15],
+        ["done", 12],
+        ["in_progress", 5],
+        ["done", 2],
+      ],
+    });
+    const d = await read();
+    expect(d.leadTime.medianMs).toBe(18 * DAY);
+    expect(d.workTime.medianMs).toBe(13 * DAY);
+  });
+
+  test("counts a task concluded by a column move like one concluded by a status change", async () => {
+    f = await setup();
+    const { board, spaceId } = await scene();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const ana = { type: "person" as const, userId: f.owner.id };
+    const columns = await createIssueColumn(deps, f.owner.id, f.org.id, { name: "Entregue", stage: "done" });
+    const entregue = columns.find((c) => c.name === "Entregue")?.id as string;
+    const a = await createIssue(deps, ana, f.org.id, { title: "By column", projectId: board?.id });
+    const b = await createIssue(deps, ana, f.org.id, { title: "By status", projectId: board?.id });
+    await updateIssue(deps, ana, f.org.id, a.id, { columnId: entregue });
+    await updateIssue(deps, ana, f.org.id, b.id, { status: "done" });
+    const d = await companyDashboard(f.db, f.owner.id, f.org.id, spaceId, 7);
+    expect(d.stages.done).toBe(2);
+    expect(d.leadTime.count).toBe(2);
+  });
+
+  test("gives null times when no task was concluded", async () => {
+    f = await setup();
+    const { task, read } = await scene();
+    await task({ status: "todo" });
+    const d = await read();
+    expect(d.leadTime).toEqual({ count: 0, medianMs: null, averageMs: null });
+    expect(d.workTime).toEqual({ count: 0, medianMs: null, averageMs: null });
   });
 });
