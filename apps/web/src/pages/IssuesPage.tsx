@@ -614,7 +614,11 @@ export function IssuesPage() {
             onClose={() => setCreating(false)}
           />
           {projectDialog === "new" && (
-            <ProjectDialog onClose={() => setProjectDialog(null)} onDone={(p) => setProjectParam(p.id)} />
+            <ProjectDialog
+              lockedSpace={onCompanyPage ? space?.id : undefined}
+              onClose={() => setProjectDialog(null)}
+              onDone={(p) => setProjectParam(p.id)}
+            />
           )}
           {projectDialog === "edit" && project && (
             <ProjectDialog project={project} onClose={() => setProjectDialog(null)} />

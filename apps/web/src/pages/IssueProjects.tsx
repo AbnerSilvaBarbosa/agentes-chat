@@ -262,11 +262,14 @@ export function DeleteSpaceDialog({
  */
 export function ProjectDialog({
   project,
+  lockedSpace,
   onClose,
   onDone,
 }: {
   /** The project to edit. None: a new one. */
   project?: IssueProjectRef;
+  /** A new board opened from a company's page is made in that company: the dialog asks nothing about it. */
+  lockedSpace?: string;
   onClose: () => void;
   onDone?: (project: IssueProjectRef) => void;
 }) {
@@ -280,11 +283,14 @@ export function ProjectDialog({
   const spaces = data?.spaces ?? [];
   const [name, setName] = useState(project?.name ?? "");
   const [picked, setPicked] = useState<string | null>(project?.color ?? null);
-  const [spaceId, setSpaceId] = useState<string>(project?.spaceId ?? NO_SPACE);
+  const [spaceId, setSpaceId] = useState<string>(project?.spaceId ?? lockedSpace ?? NO_SPACE);
   // A new board starts from a set of columns (ADR 0177); editing one keeps the columns it has.
   const [template, setTemplate] = useState<string>(NO_TEMPLATE);
   const color = picked ?? freeColor(projects);
+  // An archived company takes no new board; the one a board is already in stays in its own picker.
   const pickableSpaces = spaces.filter((s) => !s.archived || s.id === project?.spaceId);
+  // The workspace's own columns first, then the status sets by name.
+  const sets = [...templates].sort((a, b) => a.name.localeCompare(b.name));
   const save = () => {
     const value = name.trim();
     if (!value || action.isPending) return;
@@ -355,27 +361,29 @@ export function ProjectDialog({
                   onValueChange={setTemplate}
                   options={[
                     { value: NO_TEMPLATE, label: t("issues.columns.templateWorkspace") },
-                    ...templates.map((tpl) => ({ value: tpl.id, label: tpl.name })),
+                    ...sets.map((tpl) => ({ value: tpl.id, label: tpl.name })),
                   ]}
                 />
               </Field>
             )}
-            <Field label={t("issues.spaces.label")} id="issue-project-space">
-              <Select
-                id="issue-project-space"
-                aria-label={t("issues.spaces.label")}
-                value={spaceId}
-                onValueChange={setSpaceId}
-                options={[
-                  { value: NO_SPACE, label: t("issues.spaces.none"), leading: <ColorDot /> },
-                  ...pickableSpaces.map((s) => ({
-                    value: s.id,
-                    label: s.name,
-                    leading: <SpaceMark space={s} />,
-                  })),
-                ]}
-              />
-            </Field>
+            {!(lockedSpace && !project) && (
+              <Field label={t("issues.spaces.label")} id="issue-project-space">
+                <Select
+                  id="issue-project-space"
+                  aria-label={t("issues.spaces.label")}
+                  value={spaceId}
+                  onValueChange={setSpaceId}
+                  options={[
+                    { value: NO_SPACE, label: t("issues.spaces.none"), leading: <ColorDot /> },
+                    ...pickableSpaces.map((s) => ({
+                      value: s.id,
+                      label: s.name,
+                      leading: <SpaceMark space={s} />,
+                    })),
+                  ]}
+                />
+              </Field>
+            )}
           </DialogBody>
         </Locked>
         <DialogFooter>
