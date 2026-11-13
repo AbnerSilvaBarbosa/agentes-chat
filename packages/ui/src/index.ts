@@ -99,6 +99,7 @@ export {
   type BrainPortraitProps,
   type BrainPortraitState,
 } from "./components/Brain";
+export { Breadcrumb, type BreadcrumbItem, type BreadcrumbProps } from "./components/Breadcrumb";
 export { Button, type ButtonProps, type ButtonVariant, SwapLabel } from "./components/Button";
 export { CardHorizon, horizonCrest, horizonHeight, horizonTones } from "./components/CardHorizon";
 export { type CardCut, CardMore, useCardCut } from "./components/CardMore";

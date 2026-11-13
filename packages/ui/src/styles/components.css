@@ -9317,6 +9317,52 @@ html:not([data-pointer]) .ac-recur__day:focus-visible {
     --page-x: 16px;
   }
 }
+/* The path above a page's title (Breadcrumb): its items on one flowing line, a link muted until pointed at, the last
+   item the page's own place, in ink. A long name wraps inside its item. */
+.ac-breadcrumb {
+  min-width: 0;
+}
+.ac-breadcrumb__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 20px;
+}
+.ac-breadcrumb__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ac-breadcrumb__link,
+.ac-breadcrumb__here,
+.ac-breadcrumb__text {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+.ac-breadcrumb__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 400;
+}
+.ac-breadcrumb__here {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ac-breadcrumb__sep {
+  color: var(--faint);
+}
 /*
  * Every inner page's header (PageHeader): the title, 28px on a line as tall as the page's buttons (so they centre on
  * it), the page's line under it (always one line) or its count beside it, the buttons at the end of the title's line,
