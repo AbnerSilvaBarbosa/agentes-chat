@@ -1807,6 +1807,13 @@
       "when": 1794685700000,
       "tag": "0259_board-name-per-company",
       "breakpoints": true
+    },
+    {
+      "idx": 260,
+      "version": "7",
+      "when": 1794685800000,
+      "tag": "0260_tarefas-space-image",
+      "breakpoints": true
     }
   ]
 }

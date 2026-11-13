@@ -98,6 +98,8 @@ export const issueSpaces = pgTable(
     name: text().notNull(),
     /** One of the roles' colors (`ROLE_COLORS`). */
     color: text().notNull().default("graphite"),
+    /** File name in the platform bucket (`<hash>.png|jpg|webp`); null: the color shows. */
+    image: text(),
     archivedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
