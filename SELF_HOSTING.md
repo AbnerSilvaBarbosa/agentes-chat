@@ -1701,6 +1701,22 @@ S3_SECRET_ACCESS_KEY=...
 S3_BACKUP_BUCKET=agentes-backups
 ```
 
+**Encrypted dumps (optional).** A dump leaves the server as `pg_dump` wrote it unless
+`BACKUP_AGE_RECIPIENT` holds an [age](https://age-encryption.org) public key (`age1…`): then each dump
+is encrypted to that key before it is uploaded, as `agentes-<stamp>.dump.age`, and the bucket's key
+alone can't read it. Only the public key sits on the server, so create the pair somewhere else
+(`age-keygen -o key.txt`, which prints the public key and keeps the private one in `key.txt`) and keep
+the private key apart from the server and from the bucket: a dump whose key is lost can't be restored.
+Add the public key to `.env` and run `docker compose up -d`:
+
+```sh
+BACKUP_AGE_RECIPIENT=age1...
+```
+
+Restoring needs `age` on the machine that restores (`apk add age`, `apt install age` or
+`brew install age`) and that private key. Switching either way is safe: `list` and the retention cover
+both names, and the dumps already in the bucket stay as they are.
+
 Add `backup` to `COMPOSE_PROFILES` too, comma-separated: `COMPOSE_PROFILES=tailscale,backup` on
 Tailscale (the setup's default), `https,backup` with Caddy, or `backup` alone. Running the setup
 again keeps it. Run `docker compose up -d`: the first dump runs right away, unless the bucket has one
@@ -1734,7 +1750,15 @@ start the line with `cd /path/to/compose/dir && umask 077;` and write `\%F`).
 
 **Restore** with the app stopped, so nothing writes in between, into an emptied database: tables that
 a newer version added aren't in an older dump and would keep it from replacing the rest. A dump in
-the bucket comes down to the server first, under a name from `list`:
+the bucket comes down to the server first, under a name from `list`. An encrypted one (`.dump.age`)
+is decrypted with the private key, which the server doesn't have:
+
+```sh
+(umask 077 && docker compose run --rm -T backup fetch agentes-20261020-030000.dump.age > agentes-2026-10-20.dump.age)
+age -d -i key.txt agentes-2026-10-20.dump.age > agentes-2026-10-20.dump
+```
+
+A dump without `.age` is ready as it comes down:
 
 ```sh
 (umask 077 && docker compose run --rm -T backup fetch agentes-20261020-030000.dump > agentes-2026-10-20.dump)
