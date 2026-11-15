@@ -49,7 +49,7 @@ async function readmit(db: Executor, orgId: string, channelId: string, userIds: 
  * Removal takes someone out of their DMs and a DM can't be joined, so without this a person invited back would find
  * every old DM closed to them for good.
  */
-async function reopenDm(
+export async function reopenDm(
   db: Executor,
   orgId: string,
   dm: { id: string; dmKey: string | null; archivedAt: Date | null },

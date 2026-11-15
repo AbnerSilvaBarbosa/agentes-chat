@@ -9,11 +9,15 @@ import {
   getOrgSettings,
   isPoChatKey,
   listPoCompanies,
+  openPoChat,
   parsePoChatKey,
   poAgentOf,
   poChatKey,
+  scheduleDeletion,
+  setAgentAudience,
   updateIssueSpace,
   updateOrgSettings,
+  ValidationError,
 } from "../src";
 import { addMember, addUser, type Fixture, setup } from "./fixtures";
 
@@ -148,5 +152,100 @@ describe("the workspace picks its PO", () => {
     const bia = await addMember(f.db, f.org.id, "member", "bia");
     await expect(updateOrgSettings(f.db, bia.id, f.org.id, { poAgentId: f.agent.id })).rejects.toThrow();
     expect((await getOrgSettings(f.db, f.owner.id, f.org.id)).poAgentId).toBeNull();
+  });
+});
+
+describe("opening a PO chat", () => {
+  const deps = () => ({ db: f.db, pubsub: f.pubsub });
+  const members = (channelId: string) =>
+    f.db
+      .select()
+      .from(schema.channelMembers)
+      .where(eq(schema.channelMembers.channelId, channelId))
+      .then((rows) => rows.map((r) => r.userId ?? `agent:${r.agentId}`).sort());
+
+  test("openPoChat refuses without a PO agent", async () => {
+    f = await setup();
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const refusal = await openPoChat(f.db, f.owner.id, f.org.id, acme.id).then(
+      () => undefined,
+      (e: unknown) => e as ValidationError,
+    );
+    expect(refusal).toBeInstanceOf(ValidationError);
+    expect(refusal?.code).toBe("po.none");
+    expect(await f.db.select().from(schema.channels).where(eq(schema.channels.kind, "dm"))).toEqual([]);
+  });
+
+  test("each company has its own PO conversation and history", async () => {
+    f = await setup();
+    await setPo(f.agent.id);
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const beta = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Beta Ltda" });
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+
+    const first = await openPoChat(f.db, f.owner.id, f.org.id, acme.id);
+    expect(first.agentId).toBe(f.agent.id);
+    expect(first.space).toMatchObject({ id: acme.id, name: "Acme Corp" });
+    const [channel] = await f.db.select().from(schema.channels).where(eq(schema.channels.id, first.channelId));
+    expect(channel).toMatchObject({
+      kind: "dm",
+      visibility: "private",
+      dmKey: `a:${f.agent.id}|s:${acme.id}|u:${f.owner.id}`,
+    });
+    expect(await members(first.channelId)).toEqual([f.owner.id, `agent:${f.agent.id}`].sort());
+
+    // The same company again: the same conversation. Another company, or another person: its own.
+    expect((await openPoChat(f.db, f.owner.id, f.org.id, acme.id)).channelId).toBe(first.channelId);
+    const other = await openPoChat(f.db, f.owner.id, f.org.id, beta.id);
+    expect(other.channelId).not.toBe(first.channelId);
+    const theirs = await openPoChat(f.db, bia.id, f.org.id, acme.id);
+    expect(theirs.channelId).not.toBe(first.channelId);
+    expect(await members(theirs.channelId)).toEqual([bia.id, `agent:${f.agent.id}`].sort());
+
+    // Each one is listed for its company once it exists.
+    const listed = await listPoCompanies(f.db, f.owner.id, f.org.id);
+    expect(listed.companies.map((c) => [c.name, c.channelId])).toEqual([
+      ["Acme Corp", first.channelId],
+      ["Beta Ltda", other.channelId],
+    ]);
+  });
+
+  test("a company of another workspace, an archived one and a person the PO's audience refuses are refused", async () => {
+    f = await setup();
+    await setPo(f.agent.id);
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const old = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Antiga SA" });
+    await updateIssueSpace(deps(), f.owner.id, f.org.id, old.id, { archived: true });
+    await expect(openPoChat(f.db, f.owner.id, f.org.id, crypto.randomUUID())).rejects.toThrow("Company not found");
+    await expect(openPoChat(f.db, f.owner.id, f.org.id, old.id)).rejects.toThrow("archived");
+
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await f.db.update(schema.agents).set({ ownerUserId: f.owner.id }).where(eq(schema.agents.id, f.agent.id));
+    await setAgentAudience(f.db, f.owner.id, f.org.id, f.agent.id, { mode: "people", userIds: [], roleIds: [] });
+    await expect(openPoChat(f.db, bia.id, f.org.id, acme.id)).rejects.toThrow();
+    expect(
+      await f.db
+        .select()
+        .from(schema.channels)
+        .where(eq(schema.channels.dmKey, poChatKey(f.agent.id, acme.id, bia.id))),
+    ).toEqual([]);
+    // The owner, in the audience always, opens it.
+    expect((await openPoChat(f.db, f.owner.id, f.org.id, acme.id)).channelId).toBeString();
+  });
+
+  test("an archived chat is reopened, and a workspace being deleted opens only the chats it has", async () => {
+    f = await setup();
+    await setPo(f.agent.id);
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const beta = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Beta Ltda" });
+    const first = await openPoChat(f.db, f.owner.id, f.org.id, acme.id);
+    await f.db.update(schema.channels).set({ archivedAt: new Date() }).where(eq(schema.channels.id, first.channelId));
+    expect((await openPoChat(f.db, f.owner.id, f.org.id, acme.id)).channelId).toBe(first.channelId);
+    const [reopened] = await f.db.select().from(schema.channels).where(eq(schema.channels.id, first.channelId));
+    expect(reopened?.archivedAt).toBeNull();
+
+    await scheduleDeletion({ db: f.db }, f.owner.id, f.org.id, "owner");
+    expect((await openPoChat(f.db, f.owner.id, f.org.id, acme.id)).channelId).toBe(first.channelId);
+    await expect(openPoChat(f.db, f.owner.id, f.org.id, beta.id)).rejects.toThrow();
   });
 });

@@ -1,9 +1,17 @@
+import type { PubSub } from "@agenteschat/adapters";
 import { and, type Database, eq, inArray, isNull, schema, sql } from "@agenteschat/db";
 import type { Agent } from "./agents";
-import { keyOf } from "./dms";
-import { type IssueSpaceRef, listIssueProjects } from "./issue-projects";
+import { audienceError, canTalkTo, speakerOf } from "./audience";
+import { caches } from "./cache";
+import { sha256 } from "./crypto";
+import { keyOf, reopenDm } from "./dms";
+import { NotFoundError, ValidationError } from "./errors";
+import { publishUserEvent } from "./events";
+import { type IssueSpaceRef, listIssueProjects, spaceRef } from "./issue-projects";
+import { can, requirePermission } from "./organizations";
+import { closedRefusal } from "./standing";
 
-const { agents, channels, organizationSettings } = schema;
+const { agents, channelMembers, channels, issueSpaces, organizationSettings } = schema;
 
 /**
  * A PO chat is the DM between a person and the workspace's PO about one company (ADR 0185): a DM whose key carries a
@@ -80,4 +88,73 @@ export async function listPoCompanies(
     agentId: po.id,
     companies: live.map((s, i) => ({ ...s, channelId: byKey.get(keys[i] as string) ?? null })),
   };
+}
+
+/**
+ * Opens the person's PO chat for one company (ADR 0185): their DM with the PO, made the first time and the same one
+ * after, its key ending in the company. It follows `openDm`: the person's right to post, the PO's audience, a
+ * workspace being deleted opens only what it has, an archived chat comes back.
+ */
+export async function openPoChat(
+  db: Database,
+  actorId: string,
+  orgId: string,
+  spaceId: string,
+  options: { pubsub?: PubSub } = {},
+): Promise<{ channelId: string; agentId: string; space: IssueSpaceRef }> {
+  const membership = await requirePermission(db, actorId, orgId, "post");
+  const po = await poAgentOf(db, orgId);
+  if (!po) throw new ValidationError("This workspace has no PO agent", "po.none");
+  const [space] = await db
+    .select()
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
+  if (!space) throw new NotFoundError("Company not found");
+  if (space.archivedAt) throw new ValidationError("That company is archived", "issue_space.archived");
+
+  const dmKey = poChatKey(po.id, space.id, actorId);
+  const existing = async () =>
+    (
+      await db
+        .select()
+        .from(channels)
+        .where(and(eq(channels.orgId, orgId), eq(channels.dmKey, dmKey)))
+    )[0];
+  const found = await existing();
+  const answer = (channelId: string) => ({ channelId, agentId: po.id, space: spaceRef(space) });
+  const closed = closedRefusal(membership.standing);
+  if (closed) {
+    if (!found) throw closed;
+    return answer(found.id);
+  }
+  // A new chat with a PO this person can't talk to isn't started (unless they manage agents); an old one stays readable.
+  if (!found && !canTalkTo(po, actorId, speakerOf(membership)) && !can(membership, "manage_agents"))
+    throw await audienceError(db, po);
+  if (found) await reopenDm(db, orgId, found);
+  const created = found
+    ? null
+    : await db.transaction(async (tx) => {
+        const [channel] = await tx
+          .insert(channels)
+          .values({
+            orgId,
+            name: `dm-${sha256(`${orgId}|${dmKey}`).slice(0, 20)}`,
+            visibility: "private",
+            kind: "dm",
+            dmKey,
+            createdByUserId: actorId,
+          })
+          .onConflictDoNothing()
+          .returning();
+        if (!channel) return null;
+        await tx.insert(channelMembers).values({ orgId, channelId: channel.id, userId: actorId });
+        await tx.insert(channelMembers).values({ orgId, channelId: channel.id, agentId: po.id });
+        return channel;
+      });
+  if (created) caches.scopes.deletePrefix(`${orgId}:${po.id}:visible`);
+  const channel = found ?? created ?? (await existing()); // a concurrent open won the race
+  if (!channel) throw new Error("could not open the conversation");
+  if (created || found?.archivedAt)
+    await publishUserEvent(options.pubsub, orgId, actorId, { type: "channels.changed" });
+  return answer(channel.id);
 }
