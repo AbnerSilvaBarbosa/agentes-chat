@@ -4588,6 +4588,20 @@ export const ptBR = {
       send: "Enviar",
     },
     waiting: { title: "Esperando você" },
+    /** O bloco da fábrica no Início (ADR 0184): um painel por empresa e as tarefas que esperam uma pessoa. */
+    factory: {
+      title: "Fábrica",
+      waitingTitle: "Esperando seu teste",
+      waitingFor: "há {{span}}",
+      seeAll: "Ver tudo",
+      doneLabel: "Concluídas em 7 dias",
+      lateLabel_one: "{{count}} atrasada",
+      lateLabel_other: "{{count}} atrasadas",
+      waitingLabel_one: "{{count}} esperando",
+      waitingLabel_other: "{{count}} esperando",
+      openPanel: "Abrir o painel de {{name}}",
+      moreCompanies: "Ver as {{count}} empresas",
+    },
     working: {
       title: "Trabalhando agora",
       none: "Nenhum agente trabalhando agora.",
@@ -7407,6 +7421,8 @@ export const ptBR = {
       done: "Tarefa #{{number}} excluída.",
     },
     assigneeFilter: "Responsável",
+    waitingFilter: "Esperando uma pessoa",
+    waitingFilterClear: "Remover o filtro Esperando uma pessoa",
     priorityFilter: "Prioridade",
     title: "Tarefas",
     summary: "{{open}} em aberto · {{agents}} com agentes",
@@ -7596,6 +7612,8 @@ export const ptBR = {
       moveRight: "Mover para a direita",
       delete: "Excluir coluna",
       onlyOne: "Cada etapa precisa de pelo menos uma coluna.",
+      waits: "Espera uma pessoa",
+      waitsHint: "As tarefas desta coluna aparecem no Início como esperando alguém agir sobre elas.",
       entry: {
         todo: "Tarefas novas entram aqui.",
         in_progress: "Entram aqui quando um agente começa.",

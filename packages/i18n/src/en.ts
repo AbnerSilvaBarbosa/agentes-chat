@@ -4685,6 +4685,20 @@ export const en = {
       send: "Send",
     },
     waiting: { title: "Waiting on you" },
+    /** The factory block on Home (ADR 0184): one panel per company and the tasks waiting for a person. */
+    factory: {
+      title: "Factory",
+      waitingTitle: "Waiting for your test",
+      waitingFor: "for {{span}}",
+      seeAll: "See all",
+      doneLabel: "Done in 7 days",
+      lateLabel_one: "{{count}} late",
+      lateLabel_other: "{{count}} late",
+      waitingLabel_one: "{{count}} waiting",
+      waitingLabel_other: "{{count}} waiting",
+      openPanel: "Open the {{name}} dashboard",
+      moreCompanies: "See all {{count}} companies",
+    },
     working: {
       title: "Working now",
       none: "No agent is working right now.",
@@ -7408,6 +7422,8 @@ export const en = {
       done: "Task #{{number}} deleted.",
     },
     assigneeFilter: "Assignee",
+    waitingFilter: "Waiting for a person",
+    waitingFilterClear: "Clear the Waiting for a person filter",
     priorityFilter: "Priority",
     title: "Tasks",
     summary: "{{open}} open · {{agents}} with agents",
@@ -7597,6 +7613,8 @@ export const en = {
       moveRight: "Move right",
       delete: "Delete column",
       onlyOne: "Each stage needs at least one column.",
+      waits: "Waits for a person",
+      waitsHint: "Tasks in this column show up on Home as waiting for someone to act on them.",
       entry: {
         todo: "New tasks land here.",
         in_progress: "Tasks land here when an agent starts.",
