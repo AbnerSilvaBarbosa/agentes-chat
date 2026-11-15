@@ -187,14 +187,25 @@ describe("Editar", () => {
 
 describe("worst case data", () => {
   test("a long title and thirty criteria stay inside the card, whole", async () => {
-    const long =
-      "Reestruturação completa do atendimento ao cliente da clínica com triagem e retorno automático ".repeat(3);
-    const criteria = Array.from({ length: 30 }, (_, i) => `Critério ${i + 1} ${"muito longo ".repeat(6)}`.trim());
-    await scene({ title: long.trim(), criteria });
+    // The worst case the limits allow, also what the geometry check lays out at 1280 and 390 (`capture.ts` saves
+    // both states: the card and its edit form): a 300-character title, thirty 500-character criteria, a 20,000-character
+    // summary ending in an unbroken address.
+    const long = `${"Reestruturação completa do atendimento ao cliente da clínica com triagem e retorno ".repeat(4)}`
+      .trim()
+      .slice(0, 300);
+    const criteria = Array.from({ length: 30 }, (_, i) =>
+      `Critério ${i + 1} ${"muito longo ".repeat(45)}`.slice(0, 500),
+    );
+    const unbroken = `https://exemplo.com.br/${"caminho-sem-quebra-".repeat(40)}fim`;
+    const summary = `${"Resumo longo do card. ".repeat(900)}${unbroken}`.slice(-20_000);
+    await scene({ title: long, criteria, summary });
     const card = row();
-    expect(card.textContent).toContain(long.trim());
+    expect(card.textContent).toContain(long);
+    expect(card.textContent).toContain(unbroken.slice(-60));
     expect(card.querySelectorAll(".po-card__criteria li")).toHaveLength(30);
     expect(card.closest(".rq-open")).toBe(card);
+    await click(button("Editar"));
+    expect(row().querySelectorAll("input, textarea").length).toBeGreaterThanOrEqual(32);
   });
 });
 
