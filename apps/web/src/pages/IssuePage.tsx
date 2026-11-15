@@ -984,6 +984,12 @@ function PropsLine({ issue: i }: { issue: Issue }) {
           {t("issues.pr", { number: pr.number })}
         </a>
       ))}
+      {i.specPage && (
+        <Link to="/org/$orgId/wiki/$slug" params={{ orgId: org.id, slug: i.specPage.slug }} className="issue-link">
+          <Icon name="book" size={14} />
+          {i.specPage.title ? t("poCard.specTitled", { title: i.specPage.title }) : t("poCard.spec")}
+        </Link>
+      )}
       {i.labels.map((l) => (
         <span key={l} className="ac-chip issue-label">
           {l}

@@ -3,7 +3,7 @@ import { useCardProposal, useIssueProjects } from "@agenteschat/client";
 import type { CardProposalCard } from "@agenteschat/client/lib/action-cards";
 import { errorText } from "@agenteschat/client/lib/errors";
 import { Alert, Button, EventPillAction, Field, FormStack, Icon, Input, Select, Textarea } from "@agenteschat/ui";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useActors } from "@/components/actors";
@@ -18,6 +18,39 @@ function CardLink({ number }: { number: number }) {
     <Link to="/org/$orgId/issues/$number" params={{ orgId: org.id, number: String(number) }} className="ac-link">
       #{number}
     </Link>
+  );
+}
+
+/** Why a spec did not finish: the codes the server writes are said in words, any other text is the run's own. */
+const SPEC_REASONS = {
+  po_missing: "poCard.specReason.po_missing",
+  card_gone: "poCard.specReason.card_gone",
+  no_spec_page: "poCard.specReason.no_spec_page",
+  run_missing: "poCard.specReason.run_missing",
+  stopped: "poCard.specReason.stopped",
+  failed: "poCard.specReason.failed",
+} as const;
+
+/** How the spec of a confirmed card stands: it follows the card's snapshot (`card.proposal.updated`), never polls. */
+function SpecLine({ spec }: { spec: NonNullable<CardProposalView["spec"]> }) {
+  const { t } = useTranslation();
+  if (spec.state === "queued") return <>{t("poCard.specQueued")}</>;
+  if (spec.state === "running") return <>{t("poCard.specRunning")}</>;
+  if (spec.state === "done") return <>{t("poCard.specDone")}</>;
+  const known = spec.error ? SPEC_REASONS[spec.error as keyof typeof SPEC_REASONS] : SPEC_REASONS.stopped;
+  const reason = known ? t(known) : spec.error;
+  return <>{t("poCard.specFailed", { reason })}</>;
+}
+
+/** "Ver spec": the wiki page the PO wrote. */
+function SpecOpen({ slug }: { slug: string }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const navigate = useNavigate();
+  return (
+    <EventPillAction onClick={() => void navigate({ to: "/org/$orgId/wiki/$slug", params: { orgId: org.id, slug } })}>
+      {t("poCard.specOpen")}
+    </EventPillAction>
   );
 }
 
@@ -38,7 +71,12 @@ export function CardProposalCardView({ message, card }: { message: Message; card
   const [refusal, setRefusal] = useState<string | null>(null);
   if (p.status !== "pending") {
     return (
-      <RequestDone done={p.status === "confirmed"} label={label}>
+      <RequestDone
+        done={p.status === "confirmed"}
+        label={label}
+        action={p.spec?.state === "done" && p.spec.page ? <SpecOpen slug={p.spec.page.slug} /> : undefined}
+        note={p.status === "confirmed" && p.spec ? <SpecLine spec={p.spec} /> : undefined}
+      >
         <b>{p.title}</b> ·{" "}
         {p.status === "confirmed" && p.issue ? (
           <>

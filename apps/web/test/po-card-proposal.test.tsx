@@ -68,9 +68,9 @@ async function scene(patch: Partial<CardProposalView> = {}, tweak?: (api: Return
     // Ids are random: the card names the board by the one made here.
     if (id === "b-prod") card.project = { id: board.id, name };
   }
-  await renderApp(`/org/${ORG_ID}/po/s-acme`, { api });
+  const app = await renderApp(`/org/${ORG_ID}/po/s-acme`, { api });
   await settle(8);
-  return state;
+  return Object.assign(state, { app });
 }
 
 const row = () => document.querySelector(".rq-open, .rq-done") as HTMLElement;
@@ -195,5 +195,89 @@ describe("worst case data", () => {
     expect(card.textContent).toContain(long.trim());
     expect(card.querySelectorAll(".po-card__criteria li")).toHaveLength(30);
     expect(card.closest(".rq-open")).toBe(card);
+  });
+});
+
+describe("the spec's state on a confirmed card", () => {
+  const confirmed = (spec: CardProposalView["spec"]) =>
+    proposal({ status: "confirmed", issue: { id: "i1", number: 7 }, spec });
+  const page = { slug: "specs/acme/pagar-com-pix", title: "Pagar com Pix" };
+
+  test("queued says it is in progress and waiting, running says in progress", async () => {
+    await scene(confirmed({ state: "queued", page: null, error: null }));
+    expect(row().textContent).toContain("Spec em andamento, na fila");
+    cleanup();
+    await scene(confirmed({ state: "running", page: null, error: null }));
+    expect(row().textContent).toContain("Spec em andamento");
+    expect(row().textContent).not.toContain("na fila");
+  });
+
+  test("done says ready and Ver spec opens the wiki page of the spec", async () => {
+    const { app } = await scene(confirmed({ state: "done", page, error: null }));
+    expect(row().textContent).toContain("Spec pronta");
+    await click(button("Ver spec"));
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/wiki/specs%2Facme%2Fpagar-com-pix`);
+  });
+
+  test("a failed or stopped spec says why, and offers no page", async () => {
+    await scene(confirmed({ state: "failed", page: null, error: "no_spec_page" }));
+    expect(row().textContent).toContain("Spec não concluída: a execução terminou sem salvar a spec na wiki");
+    expect(within(row()).queryByRole("button", { name: "Ver spec" })).toBeNull();
+    cleanup();
+    await scene(confirmed({ state: "stopped", page: null, error: "stopped" }));
+    expect(row().textContent).toContain("Spec não concluída: foi interrompida");
+    cleanup();
+    await scene(confirmed({ state: "failed", page: null, error: "Rate limit reached" }));
+    expect(row().textContent).toContain("Spec não concluída: Rate limit reached");
+  });
+
+  test("the line follows card.proposal.updated without a reload", async () => {
+    const { app } = await scene(confirmed({ state: "running", page: null, error: null }));
+    expect(row().textContent).toContain("Spec em andamento");
+    await act(async () =>
+      app.sockets.last().push({
+        type: "event",
+        channelId: CHANNEL,
+        event: {
+          type: "card.proposal.updated",
+          channelId: CHANNEL,
+          threadId: null,
+          messageId: "m-card",
+          proposal: confirmed({ state: "done", page, error: null }),
+        },
+      }),
+    );
+    await settle(4);
+    expect(row().textContent).toContain("Spec pronta");
+    expect(button("Ver spec")).toBeTruthy();
+  });
+});
+
+describe("the card's page", () => {
+  const withSpec = async (specPage: { id: string; slug: string; title: string | null } | null) => {
+    const state = seedState();
+    const api = createFakeApi(state);
+    const [first] = await api.issues.list(ORG_ID, {});
+    if (!first) throw new Error("no card");
+    // A short title: the page's own title wrapping at 320 is another screen's concern.
+    await api.issues.update(ORG_ID, first.id, { title: "Pix", specPage } as never);
+    await renderApp(`/org/${ORG_ID}/issues/${first.number}`, { api });
+    await settle(8);
+  };
+
+  test("links the spec's wiki page when specPage is set", async () => {
+    await withSpec({ id: "w1", slug: "specs/acme/pagar-com-pix", title: "Pagar com Pix" });
+    const link = screen().getByRole("link", { name: /Spec: Pagar com Pix/ });
+    expect(link.getAttribute("href")).toContain("/wiki/specs%2Facme%2Fpagar-com-pix");
+  });
+
+  test("a restricted page is still linked, by its bare name", async () => {
+    await withSpec({ id: "w1", slug: "specs/acme/x", title: null });
+    expect(screen().getByRole("link", { name: "Spec" }).getAttribute("href")).toContain("/wiki/specs%2Facme%2Fx");
+  });
+
+  test("shows no such link when there is no specPage", async () => {
+    await withSpec(null);
+    expect(screen().queryByRole("link", { name: /^Spec/ })).toBeNull();
   });
 });
