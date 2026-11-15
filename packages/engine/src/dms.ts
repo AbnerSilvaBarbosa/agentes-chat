@@ -17,7 +17,8 @@ const { channels, channelMembers, channelReads, messages, agents, users, organiz
 
 export type DmTarget = { userId: string } | { agentId: string };
 
-const keyOf = (participants: string[]) => [...new Set(participants)].sort().join("|");
+/** A DM's key: its participants (`u:<user>`, `a:<agent>`, and a PO chat's `s:<company>`), sorted. */
+export const keyOf = (participants: string[]) => [...new Set(participants)].sort().join("|");
 
 const namedPeople = (dmKey: string | null) =>
   (dmKey ?? "").split("|").flatMap((p) => (p.startsWith("u:") ? [p.slice(2)] : []));
