@@ -4,6 +4,7 @@ import { systemText } from "@agenteschat/providers";
 import {
   applyColumnTemplate,
   buildRunContext,
+  confirmCardProposal,
   createIssue,
   createIssueColumn,
   createIssueProject,
@@ -19,6 +20,7 @@ import {
   listIssues,
   onConsultedRunFinished,
   openPoChat,
+  proposeCard,
   pumpSpecs,
   reapSpecs,
   SPEC_RUNS_PER_COMPANY,
@@ -849,5 +851,185 @@ describe("the tick settles specs nobody heard end", () => {
     await setRun(rows[0]?.now?.specRunId, { status: "failed", error: "x" });
     expect(await reapSpecs(c.deps)).toBe(1);
     expect((await c.state(rows[3]?.row.id as string))?.specState).toBe("running");
+  });
+});
+
+describe("confirming a card starts its spec", () => {
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+
+  /** The PO proposes `title` in the owner's chat of the company (a run of the PO, answering the owner's message). */
+  async function propose(c: Awaited<ReturnType<typeof specCompany>>, title: string) {
+    const trigger = await insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId: c.chat.channelId,
+      author: { type: "person", userId: f.owner.id },
+      body: `Precisamos de: ${title}`,
+    });
+    const [run] = await f.db
+      .insert(schema.agentRuns)
+      .values({
+        orgId: f.org.id,
+        agentId: f.agent.id,
+        channelId: c.chat.channelId,
+        threadRootId: trigger.id,
+        triggerMessageId: trigger.id,
+        trigger: "mention",
+        hop: 1,
+        status: "running",
+      })
+      .returning();
+    if (!run) throw new Error("no run");
+    return proposeCard(
+      c.deps,
+      {
+        orgId: f.org.id,
+        agentId: f.agent.id,
+        runId: run.id,
+        channelId: c.chat.channelId,
+        threadRootId: trigger.id,
+        triggerMessageId: trigger.id,
+      },
+      { title, board: c.project.name },
+    );
+  }
+  const confirm = (c: Awaited<ReturnType<typeof specCompany>>, id: string) =>
+    confirmCardProposal(c.deps, f.owner.id, f.org.id, id);
+  const snapshot = async (id: string) => {
+    const [row] = await f.db.select().from(schema.poCardProposals).where(eq(schema.poCardProposals.id, id));
+    const [message] = await f.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.id, row?.messageId as string));
+    return ((message?.meta ?? {}) as { cardProposal?: { spec: unknown } }).cardProposal?.spec;
+  };
+
+  test("confirming starts the PO's run in the card's conversation within the request", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const view = await propose(c, "Tela de login");
+    const confirmed = await confirm(c, view.id);
+    // The request has returned: the run exists, in the card's own conversation, and the card shows it.
+    expect(confirmed.status).toBe("confirmed");
+    expect(confirmed.spec).toEqual({ state: "running", page: null, error: null });
+    const [row] = await f.db.select().from(schema.poCardProposals).where(eq(schema.poCardProposals.id, view.id));
+    expect(row?.specState).toBe("running");
+    const [run] = await f.db
+      .select()
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.id, row?.specRunId as string));
+    const [card] = await f.db
+      .select()
+      .from(schema.issues)
+      .where(eq(schema.issues.id, confirmed.issue?.id as string));
+    expect(run).toMatchObject({ agentId: f.agent.id, channelId: card?.conversationChannelId, issueId: card?.id });
+    expect(card?.columnId).toBe(c.specify.id);
+    expect(card?.assigneeId).toBeNull();
+  });
+
+  test("the card snapshot follows the spec state", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const proposals = [];
+    for (const t of ["A", "B", "C", "D"]) proposals.push(await propose(c, t));
+    for (const p of proposals) await confirm(c, p.id);
+    // Three run and the fourth waits: the message of the card in the chat says so.
+    expect(await snapshot(proposals[0]?.id as string)).toMatchObject({ state: "running" });
+    expect(await snapshot(proposals[3]?.id as string)).toEqual({ state: "queued", page: null, error: null });
+
+    const runOf = async (id: string) => {
+      const [row] = await f.db.select().from(schema.poCardProposals).where(eq(schema.poCardProposals.id, id));
+      const [run] = await f.db
+        .select()
+        .from(schema.agentRuns)
+        .where(eq(schema.agentRuns.id, row?.specRunId as string));
+      if (!run || !row?.issueId) throw new Error("no run");
+      return { run, issueId: row.issueId };
+    };
+    // One finishes with its page attached, one fails: the snapshots carry the page and the reason.
+    const a = await runOf(proposals[0]?.id as string);
+    const page = await createWikiPage({ db: f.db, pubsub: f.pubsub, search: f.context }, owner(), f.org.id, {
+      title: "Spec A",
+      body: "# Spec",
+      folder: "Specs/Acme",
+    });
+    await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, a.issueId, { specPageId: page.id });
+    await onConsultedRunFinished({ db: f.db, pubsub: f.pubsub }, a.run, "done");
+    const b = await runOf(proposals[1]?.id as string);
+    await onConsultedRunFinished({ db: f.db, pubsub: f.pubsub }, b.run, "failed", "provider_down");
+    expect(await snapshot(proposals[0]?.id as string)).toEqual({
+      state: "done",
+      page: { slug: page.slug, title: "Spec A" },
+      error: null,
+    });
+    expect(await snapshot(proposals[1]?.id as string)).toEqual({ state: "failed", page: null, error: "provider_down" });
+    // The fourth took a freed slot and its snapshot followed.
+    expect(await snapshot(proposals[3]?.id as string)).toMatchObject({ state: "running" });
+  });
+
+  test("five confirmed cards end with five specs, never more than three at once", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const proposals = [];
+    for (const t of ["Um", "Dois", "Tres", "Quatro", "Cinco"]) proposals.push(await propose(c, t));
+    const running = async () =>
+      (
+        await f.db
+          .select()
+          .from(schema.poCardProposals)
+          .where(and(eq(schema.poCardProposals.spaceId, c.company.id), eq(schema.poCardProposals.specState, "running")))
+      ).length;
+    let most = 0;
+    for (const p of proposals) {
+      await confirm(c, p.id);
+      most = Math.max(most, await running());
+    }
+    expect(most).toBe(3);
+    // Each run writes its spec and ends, one after another, until none is left.
+    const wiki = { db: f.db, pubsub: f.pubsub, search: f.context };
+    for (let guard = 0; guard < 10 && (await running()) > 0; guard++) {
+      const [row] = await f.db
+        .select()
+        .from(schema.poCardProposals)
+        .where(and(eq(schema.poCardProposals.spaceId, c.company.id), eq(schema.poCardProposals.specState, "running")))
+        .orderBy(asc(schema.poCardProposals.specQueuedAt));
+      if (!row?.issueId) throw new Error("no running row");
+      const page = await createWikiPage(wiki, owner(), f.org.id, {
+        title: `Spec ${row.title}`,
+        body: "# Spec",
+        folder: "Specs/Acme",
+      });
+      await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, row.issueId, { specPageId: page.id });
+      const [run] = await f.db
+        .select()
+        .from(schema.agentRuns)
+        .where(eq(schema.agentRuns.id, row.specRunId as string));
+      await onConsultedRunFinished({ db: f.db, pubsub: f.pubsub }, run as { id: string; orgId: string }, "done");
+      most = Math.max(most, await running());
+    }
+    expect(most).toBe(3);
+    const rows = await f.db.select().from(schema.poCardProposals);
+    expect(rows.map((r) => r.specState)).toEqual(["done", "done", "done", "done", "done"]);
+    const cards = await f.db.select().from(schema.issues);
+    expect(cards).toHaveLength(5);
+    expect(cards.every((i) => i.columnId === c.prioritized?.id && i.specPageId)).toBe(true);
+  });
+
+  test("a confirm with no PO still creates the card and its spec ends failed", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const view = await propose(c, "Sem PO");
+    await f.db
+      .update(schema.organizationSettings)
+      .set({ poAgentId: null })
+      .where(eq(schema.organizationSettings.orgId, f.org.id));
+    const confirmed = await confirm(c, view.id);
+    expect(confirmed.issue).not.toBeNull();
+    expect(await snapshot(view.id)).toEqual({ state: "failed", page: null, error: "po_missing" });
+    expect(
+      await f.db
+        .select()
+        .from(schema.agentRuns)
+        .where(eq(schema.agentRuns.issueId, confirmed.issue?.id as string)),
+    ).toHaveLength(0);
   });
 });

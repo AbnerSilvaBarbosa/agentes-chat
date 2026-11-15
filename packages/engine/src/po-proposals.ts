@@ -1,5 +1,5 @@
 import type { PubSub } from "@agenteschat/adapters";
-import { and, type Database, type Executor, eq, lt, or, schema, sql } from "@agenteschat/db";
+import { and, type Database, type Executor, eq, isNull, lt, or, schema, sql } from "@agenteschat/db";
 import { ForbiddenError, NotFoundError, ValidationError } from "./errors";
 import { publishChannelEvent, publishMessageCreated } from "./events";
 import { projectByName } from "./issue-projects";
@@ -8,11 +8,12 @@ import { insertMessage, messageView } from "./messages";
 import { requireActiveMembership } from "./organizations";
 import { poScopeOf } from "./po-chat";
 import { specColumns } from "./po-columns";
+import { pumpSpecs } from "./po-specs";
 import { bodyCode } from "./run-tools";
 import { replyThreadOf } from "./runs";
 import { taskSeenSql } from "./task-access";
 
-const { issues, issueProjects, messages, poCardProposals } = schema;
+const { issues, issueProjects, messages, poCardProposals, wikiPages } = schema;
 
 export type ProposalRow = typeof poCardProposals.$inferSelect;
 
@@ -64,6 +65,17 @@ export function cleanProposal(input: { title: string; summary?: string; criteria
   return { title, summary, criteria };
 }
 
+/** The wiki page a card links as its spec; none when unlinked, trashed or limited to some people (never its title). */
+async function specPageOf(db: Executor, issueId: string | null) {
+  if (!issueId) return null;
+  const [page] = await db
+    .select({ slug: wikiPages.slug, title: wikiPages.title })
+    .from(issues)
+    .innerJoin(wikiPages, eq(wikiPages.id, issues.specPageId))
+    .where(and(eq(issues.id, issueId), isNull(wikiPages.deletedAt), eq(wikiPages.restricted, false)));
+  return page ?? null;
+}
+
 /** The proposal as the chat shows it: the board's and the duplicate's names and the card's number are read now. */
 export async function cardProposalView(db: Executor, row: ProposalRow): Promise<CardProposalView> {
   const [project] = await db
@@ -93,7 +105,11 @@ export async function cardProposalView(db: Executor, row: ProposalRow): Promise<
     issue: created ? { id: created.id, number: created.number } : null,
     // The state follows the spec run (queued, running, done...); the page joins when a spec is attached.
     spec: row.specState
-      ? { state: row.specState as NonNullable<CardProposalView["spec"]>["state"], page: null, error: row.specError }
+      ? {
+          state: row.specState as NonNullable<CardProposalView["spec"]>["state"],
+          page: await specPageOf(db, row.issueId),
+          error: row.specError,
+        }
       : null,
   };
 }
@@ -292,9 +308,10 @@ export async function confirmCardProposal(
       projectId: claimed.projectId,
       columnId: specify.id,
     });
+    // Confirmed and queued for its spec in one write: the spec starts at once when the company has a slot.
     [done] = await db
       .update(poCardProposals)
-      .set({ status: "confirmed", issueId: issue.id })
+      .set({ status: "confirmed", issueId: issue.id, specState: "queued", specQueuedAt: sql`now()`, specError: null })
       .where(and(eq(poCardProposals.id, id), eq(poCardProposals.status, "creating")))
       .returning();
   } catch (error) {
@@ -307,8 +324,12 @@ export async function confirmCardProposal(
     if (back) await syncProposalCard(deps, back).catch(() => undefined);
     throw error;
   }
-  // The card exists: a failure to show it is not a refusal of the confirm.
-  return syncProposalCard(deps, done ?? (await ownProposal(db, userId, orgId, id)));
+  // The card exists: a failure to show it, or to start its spec now, is not a refusal of the confirm (the tick starts it).
+  const confirmed = await syncProposalCard(deps, done ?? (await ownProposal(db, userId, orgId, id)));
+  const started = await pumpSpecs(deps, claimed.spaceId).catch(() => 0);
+  if (started === 0) return confirmed;
+  const [latest] = await db.select().from(poCardProposals).where(eq(poCardProposals.id, id));
+  return latest ? cardProposalView(db, latest) : confirmed;
 }
 
 /** The person who asked discards the proposal: nothing is created. A decided proposal is refused. */
