@@ -5,7 +5,17 @@ setupDom();
 
 import { type CardProposalView, keys, type Message, type PoCompany } from "@agenteschat/client";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
-import { ADA_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedDm, seedState } from "./fake-api";
+import {
+  ADA_ID,
+  ATLAS_ID,
+  createFakeApi,
+  ENG_ID,
+  type FakeState,
+  ORG_ID,
+  seedDm,
+  seedState,
+  withRightHand,
+} from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
 const header = () => document.querySelector(".channel__header") as HTMLElement;
@@ -295,5 +305,71 @@ describe("a search hit in a PO chat", () => {
     expect(within(panel).getByText(/chat do PO da Acme/)).toBeTruthy();
     expect(within(panel).queryByText(/chat da Beta/)).toBeNull();
     expect(within(panel).queryByText(/na DM/)).toBeNull();
+  });
+});
+
+describe("the PO in Configurações › Tarefas", () => {
+  const settingsAt = async (state: FakeState) => {
+    await renderApp(`/org/${ORG_ID}/settings/tasks`, { api: createFakeApi(state) });
+    await settle(8);
+    return state;
+  };
+  const box = () => screen().getByRole("combobox", { name: "PO" });
+  const saved = (state: FakeState) =>
+    state.calls
+      .filter((c) => c.method === "orgs.updateSettings")
+      .map((c) => (c.args[1] as { poAgentId?: unknown }).poAgentId);
+  const eligible = () => {
+    const state = withRightHand(seedState());
+    state.agents.push({
+      ...(state.agents[0] as (typeof state.agents)[number]),
+      id: "gone",
+      name: "Antiga",
+      handle: "antiga",
+      former: "archived",
+    });
+    return state;
+  };
+
+  test("offers Nenhum and the agents that are neither archived nor the right hand, with their faces", async () => {
+    await settingsAt(eligible());
+    expect(box().textContent).toContain("Nenhum");
+    box().focus();
+    await act(async () => fireEvent.keyDown(box(), { key: "Enter" }));
+    const options = screen().getAllByRole("option");
+    const names = options.map((o) => o.textContent);
+    expect(names[0]).toBe("Nenhum");
+    expect(names).toContain("Ada");
+    expect(names).not.toContain("Lodi");
+    expect(names).not.toContain("Antiga");
+    expect(options.find((o) => o.textContent === "Ada")?.querySelector(".ac-avatar")).toBeTruthy();
+  });
+
+  test("picking an agent saves it at once, and Nenhum clears it", async () => {
+    const state = await settingsAt(eligible());
+    await pick(box(), "Atlas");
+    expect(saved(state)).toEqual([ATLAS_ID]);
+    expect(box().textContent).toContain("Atlas");
+    await pick(box(), "Nenhum");
+    expect(saved(state)).toEqual([ATLAS_ID, null]);
+    expect(box().textContent).toContain("Nenhum");
+  });
+
+  test("the hint is one sentence behind the ⓘ", async () => {
+    await settingsAt(eligible());
+    expect(screen().getByRole("button", { name: "Sobre PO" })).toBeTruthy();
+  });
+
+  test("a person who may not configure reads the PO as plain text", async () => {
+    const state = seedState({ poAgentId: ADA_ID });
+    const org = state.me?.organizations[0];
+    if (org) {
+      org.role = "member";
+      org.permissions = ["read"];
+    }
+    await settingsAt(state);
+    expect(screen().queryByRole("combobox", { name: "PO" })).toBeNull();
+    expect(screen().getByText("Ada", { selector: "p" })).toBeTruthy();
+    expect(saved(state)).toEqual([]);
   });
 });
