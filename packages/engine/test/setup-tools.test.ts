@@ -822,6 +822,37 @@ describe("create_channel with a category", () => {
     expect(made).toHaveLength(1);
   });
 
+  test("parallel calls keep the caps: five new categories make three, the rest are refused", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria cinco canais em cinco categorias");
+    const outs = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) => call(f, ctx, "create_channel", { name: `canal-${i}`, category: `K${i}` })),
+    );
+    expect(outs.filter((o) => o.isError === undefined)).toHaveLength(MAX_CATEGORIES_PER_RUN);
+    const refused = outs.filter((o) => o.isError);
+    expect(refused).toHaveLength(2);
+    for (const o of refused)
+      expect(o.content).toBe(`You already created ${MAX_CATEGORIES_PER_RUN} categories in this turn.`);
+    expect(await categoriesOf(f)).toHaveLength(3);
+    expect(await receiptsOf(f, ctx)).toHaveLength(3);
+    const parallelTools = await Promise.all(
+      [1, 2, 3].map((i) => call(f, ctx, "create_channel_category", { name: `T${i}` })),
+    );
+    expect(parallelTools.every((o) => o.isError)).toBe(true);
+    expect(await categoriesOf(f)).toHaveLength(3);
+  });
+
+  test("parallel calls keep the caps: twelve channels make ten", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria doze canais");
+    const outs = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => call(f, ctx, "create_channel", { name: `c-${i}` })),
+    );
+    expect(outs.filter((o) => o.isError === undefined)).toHaveLength(MAX_CHANNELS_PER_RUN);
+    expect(outs.filter((o) => o.isError)).toHaveLength(2);
+    expect(await receiptsOf(f, ctx)).toHaveLength(MAX_CHANNELS_PER_RUN);
+  });
+
   test("sends the layout broadcast after the channel is placed", async () => {
     f = await setup();
     await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora" });

@@ -1,5 +1,5 @@
 import { holdEvents, type PubSub } from "@agenteschat/adapters";
-import { and, count, eq, inArray, isNull, or, schema, sql } from "@agenteschat/db";
+import { and, count, type Database, eq, inArray, isNull, or, schema, sql } from "@agenteschat/db";
 import { isKnownProvider, PROVIDERS } from "@agenteschat/providers";
 import { actWithUndo, publishMessageActions } from "./agent-actions";
 import {
@@ -294,8 +294,8 @@ export async function whoActs(ctx: ToolContext, userId: string | null, permissio
 }
 
 /** Categories this run made so far, by `create_channel_category` or by `create_channel` with a new `category`. */
-async function categoriesMadeInRun(ctx: ToolContext) {
-  const [made] = await ctx.db
+async function categoriesMadeInRun(ctx: ToolContext, db: Database = ctx.db) {
+  const [made] = await db
     .select({ n: count() })
     .from(agentActions)
     .where(
@@ -322,8 +322,38 @@ const NO_CATEGORY_RIGHT: ToolOutput = {
 
 /** A card with no place (`cardPlace`): nobody would see it. */
 export const NOBODY_READS: ToolOutput = { content: NO_PERSON_READS, isError: true };
+/** A per-run cap met inside the write's transaction, after the run's lock: said as the plain refusal. */
+class CapReached extends Error {}
+
+/**
+ * One call of a run at a time past this point: parallel calls would each count the receipts before any of
+ * them wrote its own, and all pass the cap. The lock lasts to the end of the transaction that writes the receipt.
+ */
+async function holdRunCaps(db: Database, ctx: ToolContext, caps: { channel?: boolean; category?: boolean }) {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtext(${`setup-caps:${ctx.runId}`}))`);
+  if (caps.channel) {
+    const [made] = await db
+      .select({ n: count() })
+      .from(agentActions)
+      .where(
+        and(
+          eq(agentActions.orgId, ctx.orgId),
+          eq(agentActions.runId, ctx.runId),
+          eq(agentActions.kind, "channel.created"),
+        ),
+      );
+    if ((made?.n ?? 0) >= MAX_CHANNELS_PER_RUN) {
+      throw new CapReached(`You already created ${MAX_CHANNELS_PER_RUN} channels in this turn.`);
+    }
+  }
+  if (caps.category && (await categoriesMadeInRun(ctx, db)) >= MAX_CATEGORIES_PER_RUN) {
+    throw new CapReached(`You already created ${MAX_CATEGORIES_PER_RUN} categories in this turn.`);
+  }
+}
+
 const failed = (error: unknown): ToolOutput => ({
-  content: `Failed: ${error instanceof Error ? error.message : String(error)}`,
+  content:
+    error instanceof CapReached ? error.message : `Failed: ${error instanceof Error ? error.message : String(error)}`,
   isError: true,
 });
 const noAgents = async (ctx: ToolContext, missing: string[]): Promise<ToolOutput> => ({
@@ -568,6 +598,11 @@ export function createSetupToolSource(deps: {
             async (db) => {
               madeCategory = false;
               let into = placeIn;
+              if (ctx.runId) {
+                // A parallel call of the run may have made this category while we waited for the lock.
+                const already = newCategory ? await findCategoryByName(db, ctx.orgId, newCategory) : null;
+                await holdRunCaps(db, ctx, { channel: true, category: Boolean(newCategory) && !already });
+              }
               if (newCategory) {
                 try {
                   const made = await createChannelCategory(db, requester, ctx.orgId, { name: newCategory }, events);
@@ -691,14 +726,16 @@ export function createSetupToolSource(deps: {
           const events = holdEvents(deps.pubsub);
           const category = await actWithUndo(
             ctx,
-            (db) =>
-              createChannelCategory(
+            async (db) => {
+              if (ctx.runId) await holdRunCaps(db, ctx, { category: true });
+              return createChannelCategory(
                 db,
                 requester,
                 ctx.orgId,
                 { name: str(input.name), channelIds: taken.map((c) => c.id) },
                 events,
-              ),
+              );
+            },
             (made) => ({
               kind: "channel_category.created",
               target: { type: "channel_category", id: made.id, title: made.name },
