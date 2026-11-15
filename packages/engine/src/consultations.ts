@@ -33,6 +33,7 @@ import { getMessage, insertMessage, type Message, type MessageView, withMessageD
 import type { Notice } from "./notices";
 import { notifyAgentUnreached } from "./notification-producers";
 import { runReadOutsideById } from "./outside";
+import { settleSpecRun } from "./po-specs";
 import { actingRoutineOfCall, personBehindCall, routineCreatorOf } from "./requester";
 import { isRoutineRoomKey } from "./routine-brief";
 import { deliverNoticeToRun, resumeRunWithResult } from "./run-resume";
@@ -1304,6 +1305,8 @@ export async function onConsultedRunFinished(
   }
   const closed = await settleOwed(deps, run, status, error);
   if (!closed && status === "done") await noteReply(deps, run).catch(() => {});
+  // A PO's spec run (ADR 0185): the card moves or stays, whoever else was waiting on this run.
+  await settleSpecRun(deps, run, status, error).catch(() => {});
   return closed ?? [];
 }
 

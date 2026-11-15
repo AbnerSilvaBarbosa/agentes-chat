@@ -16311,6 +16311,11 @@ export const en = {
       file_saved: "File saved.",
       card_proposal: "Card proposal: {{title}}",
       card_spec_start: "Write the spec of card #{{number}} and save it in the wiki.",
+      card_spec_ready: 'The spec of card #{{number}} "{{title}}" is ready: [[{{page}}]].',
+      card_spec_ready_stays:
+        'The spec of card #{{number}} "{{title}}" is ready: [[{{page}}]]. The board has no column to move it to.',
+      card_spec_failed:
+        'The spec of card #{{number}} "{{title}}" did not finish: {{reason}}. The card stays where it is.',
       issue_work_start: "Please do task #{{number}}.",
       issue_taken: "Took task #{{number}}.",
       done: "Done.",

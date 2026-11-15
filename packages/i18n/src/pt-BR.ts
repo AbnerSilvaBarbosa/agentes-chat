@@ -16299,6 +16299,10 @@ export const ptBR = {
       file_saved: "Arquivo salvo.",
       card_proposal: "Proposta de card: {{title}}",
       card_spec_start: "Escreva a spec do card #{{number}} e salve na wiki.",
+      card_spec_ready: 'A spec do card #{{number}} "{{title}}" está pronta: [[{{page}}]].',
+      card_spec_ready_stays:
+        'A spec do card #{{number}} "{{title}}" está pronta: [[{{page}}]]. O board não tem coluna para mover o card.',
+      card_spec_failed: 'A spec do card #{{number}} "{{title}}" não terminou: {{reason}}. O card continua onde está.',
       issue_work_start: "Pode fazer a tarefa #{{number}}.",
       issue_taken: "Peguei a tarefa #{{number}}.",
       done: "Pronto.",

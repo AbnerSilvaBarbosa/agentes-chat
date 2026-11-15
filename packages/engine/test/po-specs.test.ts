@@ -17,6 +17,7 @@ import {
   listColumnTemplates,
   listIssueActivity,
   listIssues,
+  onConsultedRunFinished,
   openPoChat,
   pumpSpecs,
   SPEC_RUNS_PER_COMPANY,
@@ -204,7 +205,7 @@ describe("a card links its spec page", () => {
 });
 
 /** A workspace whose PO is the fixture's agent and a company with one board; its cards are confirmed and queued by hand. */
-async function specCompany(name = "Acme") {
+async function specCompany(name = "Acme", columns: "none" | "pipeline" | "no-priorizado" = "none") {
   const deps = { db: f.db, pubsub: f.pubsub };
   await f.db
     .insert(schema.organizationSettings)
@@ -216,7 +217,14 @@ async function specCompany(name = "Acme") {
     spaceId: company.id,
   });
   const chat = await openPoChat(f.db, f.owner.id, f.org.id, company.id);
-  const { specify } = await specColumns(f.db, f.org.id, project.id);
+  const addColumn = (columnName: string, stage: "todo" | "in_progress") =>
+    createIssueColumn(deps, f.owner.id, f.org.id, { name: columnName, stage, projectId: project.id });
+  if (columns !== "none") {
+    await addColumn("Especificar", "todo");
+    if (columns === "pipeline") await addColumn("Priorizado", "todo");
+    await addColumn("Ready for dev", columns === "pipeline" ? "in_progress" : "todo");
+  }
+  const { specify, prioritized } = await specColumns(f.db, f.org.id, project.id);
   let n = 0;
   /** A confirmed card whose spec waits in the queue since `queuedAt` (minutes after a fixed start). */
   const queue = async (title: string, queuedAt = n++) => {
@@ -246,7 +254,7 @@ async function specCompany(name = "Acme") {
   };
   const state = async (id: string) =>
     (await f.db.select().from(schema.poCardProposals).where(eq(schema.poCardProposals.id, id)))[0];
-  return { deps, company, project, chat, specify, queue, state };
+  return { deps, company, project, chat, specify, prioritized, queue, state };
 }
 
 describe("a spec run starts in the card's conversation, three at a time per company", () => {
@@ -595,5 +603,191 @@ describe("attach_spec registers a card's spec", () => {
     expect(withCriteriaSection(text, ["novo"])).toBe("Intro\n\n## Critérios de aceite\n\n- novo\n\n## Notas\n\nfica");
     expect(withCriteriaSection(text, [])).toBe("Intro\n\n## Notas\n\nfica");
     expect(withCriteriaSection("", ["a"])).toBe("## Critérios de aceite\n\n- a");
+  });
+});
+
+describe("a finished spec run moves its card", () => {
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+  const wikiDeps = () => ({ db: f.db, pubsub: f.pubsub, search: f.context });
+
+  /** Queues `titles`, starts what the cap allows and returns each card with its run. */
+  async function started(c: Awaited<ReturnType<typeof specCompany>>, titles: string[]) {
+    const queued = [];
+    for (const t of titles) queued.push(await c.queue(t));
+    await pumpSpecs(c.deps, c.company.id);
+    return Promise.all(
+      queued.map(async ({ issue, row }) => {
+        const now = await c.state(row.id);
+        const [run] = now?.specRunId
+          ? await f.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, now.specRunId))
+          : [];
+        return { issue, row, run };
+      }),
+    );
+  }
+  const attach = async (issueId: string, title: string) => {
+    const page = await createWikiPage(wikiDeps(), owner(), f.org.id, { title, body: "# Spec", folder: "Specs/Acme" });
+    await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, issueId, { specPageId: page.id });
+    return page;
+  };
+  const end = (
+    run: { id: string; orgId: string } | undefined,
+    status: "done" | "failed" | "canceled",
+    error?: string,
+  ) => {
+    if (!run) throw new Error("no run");
+    return onConsultedRunFinished({ db: f.db, pubsub: f.pubsub }, run, status, error);
+  };
+  const card = async (id: string) => (await f.db.select().from(schema.issues).where(eq(schema.issues.id, id)))[0];
+  /** What the PO said about the spec: in the card's conversation and in the proposal's chat. */
+  const reports = async (issueId: string, chatId: string, proposalId?: string) => {
+    const c = await card(issueId);
+    const all = await f.db.select().from(schema.messages);
+    const spec = all.filter((m) => (m.meta as Record<string, unknown>)?.cardSpecReport);
+    return {
+      comments: spec.filter((m) => m.channelId === c?.conversationChannelId),
+      chat: spec.filter(
+        (m) =>
+          m.channelId === chatId &&
+          (!proposalId ||
+            (m.meta as { cardSpecReport?: { proposalId?: string } }).cardSpecReport?.proposalId === proposalId),
+      ),
+    };
+  };
+
+  test("a finished run moves the card to Priorizado, comments the link and tells the PO chat", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [one] = await started(c, ["Tela de login"]);
+    if (!one) throw new Error("none");
+    const page = await attach(one.issue.id, "Spec do login");
+    await end(one.run, "done");
+    expect((await c.state(one.row.id))?.specState).toBe("done");
+    const after = await card(one.issue.id);
+    expect(c.prioritized?.name).toBe("Priorizado");
+    expect(after?.columnId).toBe(c.prioritized?.id);
+    const said = await reports(one.issue.id, c.chat.channelId);
+    expect(said.comments).toHaveLength(1);
+    expect(said.comments[0]?.body).toContain(`[[${page.title}]]`);
+    expect(said.comments[0]?.meta).toMatchObject({ bodyCode: "card_spec_ready" });
+    expect(said.comments[0]?.authorAgentId).toBe(f.agent.id);
+    expect(said.chat).toHaveLength(1);
+    expect(said.chat[0]?.body).toContain(`card #${one.issue.number}`);
+    expect(said.chat[0]?.body).toContain("is ready");
+  });
+
+  test("a failed or stopped run leaves the card in Especificar with a comment and tells the chat", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [failed, stopped, paged] = await started(c, ["Falha", "Parada", "Com página"]);
+    if (!failed || !stopped || !paged) throw new Error("none");
+    await attach(paged.issue.id, "Spec que não conta");
+    await end(failed.run, "failed", "provider_down");
+    await end(stopped.run, "canceled", "stopped by a person");
+    // A run that ends done has to have attached a page: the page is gone with the link, so it is a failure.
+    await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, paged.issue.id, { specPageId: null });
+    await end(paged.run, "done");
+    const rows = await Promise.all([failed, stopped, paged].map((x) => c.state(x.row.id)));
+    expect(rows.map((r) => [r?.specState, r?.specError])).toEqual([
+      ["failed", "provider_down"],
+      ["stopped", "stopped by a person"],
+      ["failed", "no_spec_page"],
+    ]);
+    for (const x of [failed, stopped, paged]) {
+      expect((await card(x.issue.id))?.columnId).toBe(c.specify.id);
+      const said = await reports(x.issue.id, c.chat.channelId, x.row.id);
+      expect(said.comments).toHaveLength(1);
+      expect(said.comments[0]?.meta).toMatchObject({ bodyCode: "card_spec_failed" });
+      expect(said.chat).toHaveLength(1);
+    }
+    const first = await reports(failed.issue.id, c.chat.channelId, failed.row.id);
+    expect(first.comments[0]?.body).toContain("provider_down");
+    expect(first.chat[0]?.body).toContain("did not finish");
+  });
+
+  test("a run that ends without a page is a failed spec", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [one] = await started(c, ["Sem página"]);
+    if (!one) throw new Error("none");
+    await end(one.run, "done");
+    expect(await c.state(one.row.id)).toMatchObject({ specState: "failed", specError: "no_spec_page" });
+    expect((await card(one.issue.id))?.columnId).toBe(c.specify.id);
+  });
+
+  test("holds the fourth spec run until one ends, in order", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [a, b, , d, e] = await started(c, ["A", "B", "C", "D", "E"]);
+    if (!a || !b || !d || !e) throw new Error("none");
+    expect((await Promise.all([a, b, d, e].map((x) => c.state(x.row.id)))).map((r) => r?.specState)).toEqual([
+      "running",
+      "running",
+      "queued",
+      "queued",
+    ]);
+    // One ends: the fourth, not the fifth, takes its place; then the next end lets the fifth in.
+    await end(b.run, "failed", "boom");
+    expect((await c.state(d.row.id))?.specState).toBe("running");
+    expect((await c.state(e.row.id))?.specState).toBe("queued");
+    await end(a.run, "failed", "boom");
+    expect((await c.state(e.row.id))?.specState).toBe("running");
+    const running = await f.db
+      .select()
+      .from(schema.poCardProposals)
+      .where(and(eq(schema.poCardProposals.spaceId, c.company.id), eq(schema.poCardProposals.specState, "running")));
+    expect(running).toHaveLength(3);
+  });
+
+  test("never moves a card to Ready for dev", async () => {
+    f = await setup();
+    // With a Priorizado column: that is where it goes.
+    const withP = await specCompany("Acme", "pipeline");
+    const [x] = await started(withP, ["Com Priorizado"]);
+    if (!x) throw new Error("none");
+    await attach(x.issue.id, "Spec X");
+    await end(x.run, "done");
+    const [ready] = await f.db.select().from(schema.issueColumns).where(eq(schema.issueColumns.name, "Ready for dev"));
+    expect((await card(x.issue.id))?.columnId).not.toBe(ready?.id);
+    expect((await card(x.issue.id))?.columnId).toBe(withP.prioritized?.id);
+    await f.close();
+
+    // Without one, and with Ready for dev as the next to-do column: the card stays and the report says so.
+    f = await setup();
+    const without = await specCompany("Beta", "no-priorizado");
+    const [y] = await started(without, ["Sem Priorizado"]);
+    if (!y) throw new Error("none");
+    await attach(y.issue.id, "Spec Y");
+    await end(y.run, "done");
+    expect((await without.state(y.row.id))?.specState).toBe("done");
+    expect((await card(y.issue.id))?.columnId).toBe(without.specify.id);
+    const said = await reports(y.issue.id, without.chat.channelId);
+    expect(said.chat[0]?.meta).toMatchObject({ bodyCode: "card_spec_ready_stays" });
+  });
+
+  test("a spec run reports into its own company's chat after the person opened another", async () => {
+    f = await setup();
+    const a = await specCompany("Acme", "pipeline");
+    const b = await specCompany("Beta", "pipeline");
+    const [one] = await started(a, ["Da Acme"]);
+    if (!one) throw new Error("none");
+    // The person is now in Beta's chat.
+    await attach(one.issue.id, "Spec da Acme");
+    await end(one.run, "done");
+    const said = await reports(one.issue.id, a.chat.channelId);
+    expect(said.chat).toHaveLength(1);
+    const inBeta = await f.db.select().from(schema.messages).where(eq(schema.messages.channelId, b.chat.channelId));
+    expect(inBeta.filter((m) => (m.meta as Record<string, unknown>)?.cardSpecReport)).toHaveLength(0);
+  });
+
+  test("two settles of one run report once", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [one] = await started(c, ["Duas vezes"]);
+    if (!one) throw new Error("none");
+    await Promise.all([end(one.run, "failed", "boom"), end(one.run, "failed", "boom"), end(one.run, "canceled")]);
+    const said = await reports(one.issue.id, c.chat.channelId);
+    expect(said.comments).toHaveLength(1);
+    expect(said.chat).toHaveLength(1);
   });
 });

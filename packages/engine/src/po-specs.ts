@@ -1,14 +1,18 @@
 import type { PubSub } from "@agenteschat/adapters";
 import { and, asc, type Database, eq, schema, sql } from "@agenteschat/db";
 import { publishChannelEvent, publishMessageCreated } from "./events";
-import { insertMessage, messageView } from "./messages";
+import { updateIssue } from "./issues";
+import { insertMessage, type MessageView, messageView } from "./messages";
 import { enqueueRunJob } from "./mission-runs";
+import { enqueue } from "./outbox";
 import { poAgentOf } from "./po-chat";
+import { specColumns } from "./po-columns";
 import { type ProposalRow, syncProposalCard } from "./po-proposals";
 import { specBrief } from "./po-spec-brief";
 import { bodyCode } from "./run-tools";
 import { admitTaskAgents } from "./task-access";
 import { ensureTaskConversation } from "./task-conversation";
+import { withWikiLinks } from "./wiki-links";
 
 const { agentRuns, poCardProposals } = schema;
 
@@ -157,9 +161,28 @@ export async function pumpSpecs(deps: SpecDeps, spaceId: string): Promise<number
   return started;
 }
 
+/** Why a spec did not finish, as the card's comment and the PO chat say it (`specError` holds the code or the run's error). */
+export function specReasonText(code: string | null): string {
+  switch (code) {
+    case "po_missing":
+      return "the workspace has no PO to write it";
+    case "card_gone":
+      return "the card is gone";
+    case "no_spec_page":
+      return "the run ended without saving the spec in the wiki";
+    case "run_missing":
+      return "its run is gone";
+    case null:
+    case "":
+      return "it stopped";
+    default:
+      return code;
+  }
+}
+
 /**
- * Ends a spec that never got a run (no PO, the card gone): written in the proposal and shown on the card in the
- * chat. The settle of a run that did start is `settleSpecRun`.
+ * Ends a spec that never got a run (no PO, the card gone): written in the proposal, the card and the PO chat told. The
+ * settle of a run that did start is `settleSpecRun`.
  */
 async function endSpec(deps: SpecDeps, row: ProposalRow, state: "failed" | "stopped", reason: string) {
   const [ended] = await deps.db
@@ -167,7 +190,153 @@ async function endSpec(deps: SpecDeps, row: ProposalRow, state: "failed" | "stop
     .set({ specState: state, specError: reason.slice(0, 300) })
     .where(and(eq(poCardProposals.id, row.id), eq(poCardProposals.specState, "queued")))
     .returning();
-  if (ended) await syncProposalCard(deps, ended).catch(() => undefined);
+  if (ended) await reportSpec(deps, ended, state);
+}
+
+/** A line of the PO in a conversation, notified like any message (`notifications.message` also refreshes the card's count). */
+async function say(
+  deps: SpecDeps,
+  row: ProposalRow,
+  at: { channelId: string; threadId: string | null },
+  body: string,
+  code: string,
+  params: Record<string, string>,
+) {
+  const message = await deps.db.transaction(async (tx) => {
+    const posted = await insertMessage(tx, {
+      orgId: row.orgId,
+      channelId: at.channelId,
+      threadId: at.threadId,
+      author: { type: "agent", agentId: row.agentId, runId: null, hop: 1, stretchId: null },
+      body,
+      meta: { cardSpecReport: { proposalId: row.id }, ...bodyCode(code, params) },
+    });
+    await enqueue(tx, {
+      orgId: row.orgId,
+      kind: "notifications.message",
+      payload: { messageId: posted.id },
+      dedupeKey: `notifications.message:${posted.id}`,
+      maxAttempts: 4,
+    });
+    return posted;
+  });
+  if (deps.pubsub) {
+    const [view] = (await withWikiLinks(deps.db, row.orgId, [messageView(message)])) as [MessageView];
+    await publishMessageCreated(deps.pubsub, view);
+  }
+}
+
+/**
+ * What follows a spec's end, in order and each on its own so one failure never hides the next: the card moves (spec
+ * done), the card's conversation gets the comment, the PO chat of the proposal's company hears it, the chat's card
+ * shows the state, and the next queued spec starts. The report goes to the proposal's own chat, whichever company the
+ * person has open now.
+ */
+async function reportSpec(deps: SpecDeps, row: ProposalRow, state: "done" | "failed" | "stopped") {
+  const { db } = deps;
+  const attempt = (step: Promise<unknown>) => step.catch(() => undefined);
+  const [issue] = row.issueId ? await db.select().from(schema.issues).where(eq(schema.issues.id, row.issueId)) : [];
+  const [page] = issue?.specPageId
+    ? await db
+        .select({ title: schema.wikiPages.title })
+        .from(schema.wikiPages)
+        .where(eq(schema.wikiPages.id, issue.specPageId))
+    : [];
+  const number = String(issue?.number ?? "");
+  const title = issue?.title ?? row.title;
+  let stays = false;
+  if (state === "done" && issue) {
+    // Where it goes is the board's "Priorizado" (else the next to-do column); a card a person already moved stays.
+    await attempt(
+      (async () => {
+        const { specify, prioritized } = await specColumns(db, row.orgId, row.projectId);
+        if (!prioritized) stays = true;
+        else if (issue.columnId === specify.id || (issue.columnId === null && issue.status === specify.stage))
+          await updateIssue(
+            deps,
+            { type: "agent", agentId: row.agentId, channelId: row.channelId },
+            row.orgId,
+            issue.id,
+            { columnId: prioritized.id },
+          );
+      })(),
+    );
+  }
+  const reason = specReasonText(row.specError);
+  const [code, params, english] =
+    state === "done"
+      ? ([
+          stays ? "card_spec_ready_stays" : "card_spec_ready",
+          { number, title, page: page?.title ?? "" },
+          `The spec of card #${number} "${title}" is ready: [[${page?.title ?? ""}]].${stays ? " The board has no column to move it to." : ""}`,
+        ] as const)
+      : ([
+          "card_spec_failed",
+          { number, title, reason },
+          `The spec of card #${number} "${title}" did not finish: ${reason}. The card stays where it is.`,
+        ] as const);
+  if (issue)
+    await attempt(
+      (async () => {
+        const conversation = await ensureTaskConversation(db, issue.id);
+        await say(
+          deps,
+          row,
+          { channelId: conversation.channelId, threadId: conversation.rootId },
+          english,
+          code,
+          params,
+        );
+      })(),
+    );
+  await attempt(say(deps, row, { channelId: row.channelId, threadId: null }, english, code, params));
+  await attempt(syncProposalCard(deps, row));
+  await attempt(pumpSpecs(deps, row.spaceId));
+}
+
+/**
+ * A run that works on a card's spec ended (`onConsultedRunFinished`, `onConsultedRunStopped`, the restart's recovery,
+ * and the tick for one nobody heard): `done` with the spec page attached is a finished spec; any other ending, or a
+ * `done` with no page, is a failed one (`canceled` is a stopped one). One conditional update settles it, so two
+ * settles of one run report once. Then the card moves or stays, says why, and the next queued spec starts.
+ */
+export async function settleSpecRun(
+  deps: SpecDeps,
+  run: { id: string; orgId: string },
+  status: "done" | "failed" | "canceled",
+  error?: string,
+): Promise<void> {
+  const { db } = deps;
+  const [proposal] = await db
+    .select()
+    .from(poCardProposals)
+    .where(
+      and(
+        eq(poCardProposals.specRunId, run.id),
+        eq(poCardProposals.orgId, run.orgId),
+        eq(poCardProposals.specState, "running"),
+      ),
+    );
+  if (!proposal) return;
+  const [card] = proposal.issueId
+    ? await db
+        .select({ specPageId: schema.issues.specPageId })
+        .from(schema.issues)
+        .where(eq(schema.issues.id, proposal.issueId))
+    : [];
+  const state = status === "done" && card?.specPageId ? "done" : status === "canceled" ? "stopped" : "failed";
+  const reason =
+    state === "done"
+      ? null
+      : status === "done"
+        ? "no_spec_page"
+        : (error ?? (status === "canceled" ? "stopped" : "failed"));
+  const [settled] = await db
+    .update(poCardProposals)
+    .set({ specState: state, specError: reason ? reason.slice(0, 300) : null })
+    .where(and(eq(poCardProposals.id, proposal.id), eq(poCardProposals.specState, "running")))
+    .returning();
+  if (settled) await reportSpec(deps, settled, state);
 }
 
 /**
