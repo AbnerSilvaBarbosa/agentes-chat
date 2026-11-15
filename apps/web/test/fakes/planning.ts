@@ -762,12 +762,12 @@ export function createMockPlanning(
         }
         return { channelId: i.conversation.channelId, rootId: i.conversation.rootId };
       },
-      columns: async (orgId, projectId) =>
-        clone(
-          projectId
-            ? (await columnsOf(orgId)).columns.filter((c) => c.projectId === projectId || c.projectId === null)
-            : (await columnsOf(orgId)).columns.filter((c) => c.projectId === null),
-        ),
+      columns: async (orgId, projectId) => {
+        const all = (await columnsOf(orgId)).columns;
+        // A board shows its own columns when it has them, else the workspace's (as the server does).
+        const own = projectId ? all.filter((c) => c.projectId === projectId) : [];
+        return clone(own.length > 0 ? own : all.filter((c) => c.projectId === null));
+      },
       addColumn: async (orgId, input) => {
         record("issues.addColumn", input);
         const s = await columnsOf(orgId);

@@ -9,7 +9,19 @@ import {
 } from "@agenteschat/client";
 import { mayAsk } from "@agenteschat/client/lib/audience";
 import { errorText } from "@agenteschat/client/lib/errors";
-import { Button, Dialog, DialogBody, DialogFooter, Field, Input, Menu, MenuItem, Select } from "@agenteschat/ui";
+import {
+  Button,
+  Dialog,
+  DialogBody,
+  DialogFooter,
+  Field,
+  InfoHint,
+  Input,
+  Menu,
+  MenuItem,
+  Select,
+  Switch,
+} from "@agenteschat/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrg } from "@/components/org-context";
@@ -23,6 +35,8 @@ export interface EditorColumn {
   id: string;
   name: string;
   stage: IssueStatus;
+  /** A task sitting here waits for a person (ADR 0184). */
+  waits?: boolean;
 }
 
 /**
@@ -40,6 +54,7 @@ export function ColumnEditor({
   onMove,
   onAdd,
   onDelete,
+  onWaits,
 }: {
   /** In board order: by stage, then position. */
   columns: EditorColumn[];
@@ -57,6 +72,10 @@ export function ColumnEditor({
   onAdd: (stage: IssueStatus, name: string, afterId: string | null) => unknown;
   /** `moveTo`: another column of its stage, for the board to send its tasks to. */
   onDelete: (id: string, moveTo: string | null) => void;
+  /**
+   * The switch "Espera uma pessoa" on each column (ADR 0184). Without it, or read only, the rows show no switch.
+   */
+  onWaits?: (id: string, on: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [adding, setAdding] = useState<IssueStatus | null>(null);
@@ -99,6 +118,22 @@ export function ColumnEditor({
                     onValueChange={(next) => onStage(c.id, next as IssueStatus)}
                     options={CONFIGURABLE_STAGES.map((s) => ({ value: s, label: t(`issues.status.${s}`) }))}
                   />
+                  {onWaits && (
+                    <div className="board-columns__waits">
+                      <Switch
+                        id={`column-waits-${c.id}`}
+                        checked={c.waits === true}
+                        onCheckedChange={(on) => onWaits(c.id, on)}
+                        disabled={busy}
+                      />
+                      <span className="ac-hintline">
+                        <label htmlFor={`column-waits-${c.id}`}>{t("issues.columns.waits")}</label>
+                        <InfoHint name={t("common.about", { label: t("issues.columns.waits") })}>
+                          {t("issues.columns.waitsHint")}
+                        </InfoHint>
+                      </span>
+                    </div>
+                  )}
                   <div className="board-columns__moves">
                     <Button
                       size="sm"
@@ -327,15 +362,21 @@ export function BoardColumnsDialog({
       title={t("issues.columns.configTitle")}
       description={t("issues.columns.configBody")}
       closeLabel={t("common.close")}
-      width={620}
+      width={760}
     >
       <DialogBody>
         <ColumnEditor
-          columns={columns.map((c) => ({ id: c.id, name: nameOf(c), stage: c.stage }))}
+          columns={columns.map((c) => ({
+            id: c.id,
+            name: nameOf(c),
+            stage: c.stage,
+            waits: c.waitsForPerson,
+          }))}
           busy={action.isPending}
           onRename={(id, name) => action.mutate({ type: "update", columnId: id, name: name.slice(0, 40) })}
           onStage={(id, stage) => action.mutate({ type: "update", columnId: id, stage })}
           onMove={(id, index) => action.mutate({ type: "update", columnId: id, index })}
+          onWaits={(id, on) => action.mutate({ type: "update", columnId: id, waitsForPerson: on })}
           onAdd={(stage, name, afterId) => action.mutateAsync({ type: "add", name, stage, afterId })}
           onDelete={(id, moveTo) => {
             if (moveTo) action.mutate({ type: "delete", columnId: id, moveTo });
