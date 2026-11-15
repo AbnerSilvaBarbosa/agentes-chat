@@ -1,5 +1,5 @@
 import type { DmTarget } from "@agenteschat/client";
-import { addDm } from "@agenteschat/client";
+import { addDm, useOpenPoChat } from "@agenteschat/client";
 import { audienceNotice, canTalk, seesDetails } from "@agenteschat/client/lib/audience";
 import { greetingSuggestions } from "@agenteschat/client/lib/chat";
 import { isGone } from "@agenteschat/client/lib/errors";
@@ -28,8 +28,19 @@ import { useDirectory } from "@/hooks/useDirectory";
 import { rightHandSeen } from "@/lib/storage";
 import { ChannelPage, ChannelSkeleton, type DmSideControl } from "./ChannelPage";
 
-/** A direct message with an agent or a person: the channel layout with its own header and empty state. */
-export function DmPage({ target, focusMessageId }: { target: DmTarget; focusMessageId?: string }) {
+/**
+ * A direct message with an agent or a person: the channel layout with its own header and empty state. With `po`, the
+ * person's chat with that agent about one company (ADR 0185): opened for the company, each company its own history.
+ */
+export function DmPage({
+  target,
+  focusMessageId,
+  po,
+}: {
+  target: DmTarget;
+  focusMessageId?: string;
+  po?: { spaceId: string };
+}) {
   const { t } = useTranslation();
   const { org, me } = useOrg();
   const api = useApi();
@@ -37,9 +48,12 @@ export function DmPage({ target, focusMessageId }: { target: DmTarget; focusMess
   const dir = useDirectory(org.id);
   const kind = "agentId" in target ? "agent" : "person";
   const id = "agentId" in target ? target.agentId : target.userId;
+  const openPo = useOpenPoChat(org.id);
   const dm = useQuery({
-    queryKey: ["org", org.id, "dm", kind, id],
+    queryKey: po ? ["org", org.id, "dm", kind, id, po.spaceId] : ["org", org.id, "dm", kind, id],
     queryFn: async () => {
+      // A PO chat is no row of the DM list: it opens through the company's own route.
+      if (po) return { channelId: (await openPo.mutateAsync(po.spaceId)).channelId };
       const res = await api.dms.open(org.id, target);
       // A DM opened for the first time is in the DM list from its own answer: its search holds to it.
       if (res.dm) addDm(qc, org.id, res.dm);

@@ -3286,6 +3286,7 @@ export const ptBR = {
     emptyAgent: "Peça para lembrar, esquecer ou trabalhar de outro jeito.",
     opening: "Abrindo a conversa…",
     title: "Mensagem direta com {{name}}",
+    poNone: "Nenhum PO para conversar sobre essa empresa.",
   },
   memoryCard: {
     remembered: "{{name}} lembrou",

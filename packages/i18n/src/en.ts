@@ -3363,6 +3363,7 @@ export const en = {
     emptyAgent_female: "Ask her to remember, forget or work differently.",
     opening: "Opening the conversation…",
     title: "Direct message with {{name}}",
+    poNone: "No PO to talk to about this company.",
   },
   memoryCard: {
     remembered: "{{name}} remembered",

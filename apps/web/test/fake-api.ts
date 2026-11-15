@@ -340,7 +340,7 @@ export interface FakeState {
   media?: Partial<Pick<OrgSettings, MediaSetting>>;
   /** The workspace's PO (ADR 0185): the agent its PO chats are with. */
   poAgentId?: string | null;
-  /** The companies a PO chat opens for (`po.overview`), live and archived; with no PO the overview lists none. */
+  /** The companies a PO chat opens for (`po.overview`), the overview lists the live ones, and none without a PO. */
   poCompanies?: PoCompany[];
   /** The PO's card proposals by id: what `po.confirmProposal` and `po.dismissProposal` decide. */
   cardProposals?: Record<string, CardProposalView>;
@@ -3530,7 +3530,9 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
       overview: async (orgId) => {
         log("po.overview", orgId);
         const agentId = state.poAgentId ?? null;
-        return agentId ? { agentId, companies: structuredClone(state.poCompanies ?? []) } : { agentId, companies: [] };
+        return agentId
+          ? { agentId, companies: structuredClone((state.poCompanies ?? []).filter((c) => !c.archived)) }
+          : { agentId, companies: [] };
       },
       openChat: async (orgId, spaceId) => {
         log("po.openChat", orgId, spaceId);
