@@ -71,16 +71,28 @@
   min-width: 0;
   height: 100%;
   box-sizing: border-box;
-  color: inherit;
-  text-decoration: none;
   transition: background 0.12s;
 }
 .fh-panel:hover {
   background: color-mix(in srgb, var(--sunken) 45%, var(--surface-raised));
 }
-html:not([data-pointer]) .fh-panel:focus-visible {
+/* The link is the panel's body and grows, so the PO button of every panel in a row lands on the same line. */
+.fh-panel__link {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: var(--space-3);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+html:not([data-pointer]) .fh-panel__link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+.fh-panel__talk {
+  display: flex;
+  justify-content: flex-start;
 }
 .fh-panel__name {
   display: flex;

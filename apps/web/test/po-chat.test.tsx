@@ -3,8 +3,9 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 
 setupDom();
 
-import { type CardProposalView, keys, type Message, type PoCompany } from "@agenteschat/client";
+import { type CardProposalView, type FactoryCompany, keys, type Message, type PoCompany } from "@agenteschat/client";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
+import { FactoryPanels } from "@/components/factory/FactoryPanels";
 import {
   ADA_ID,
   ATLAS_ID,
@@ -16,7 +17,7 @@ import {
   seedState,
   withRightHand,
 } from "./fake-api";
-import { renderApp, screen, settle } from "./render";
+import { renderApp, renderPage, screen, settle } from "./render";
 
 const header = () => document.querySelector(".channel__header") as HTMLElement;
 
@@ -371,5 +372,62 @@ describe("the PO in Configurações › Tarefas", () => {
     expect(screen().queryByRole("combobox", { name: "PO" })).toBeNull();
     expect(screen().getByText("Ada", { selector: "p" })).toBeTruthy();
     expect(saved(state)).toEqual([]);
+  });
+});
+
+describe("Conversar com o PO on a company's panel on Início", () => {
+  const TALK = "Conversar com o PO";
+  const panel = (id: string, name: string): FactoryCompany => ({
+    id,
+    name,
+    color: "teal",
+    image: null,
+    stages: { todo: 1, in_progress: 0, in_review: 0, done: 0 },
+    late: 0,
+    waiting: 0,
+  });
+
+  async function showPanels(companies: FactoryCompany[], patch: Partial<FakeState> = {}) {
+    const state = seedState({
+      poAgentId: ADA_ID,
+      poCompanies: companies.map((c) => company(c.id, c.name)),
+      ...patch,
+    });
+    const app = await renderPage(
+      <FactoryPanels home={{ companies, companiesTotal: companies.length, waiting: { total: 0, items: [] } }} />,
+      { api: createFakeApi(state), org: true },
+    );
+    await settle(8);
+    return app;
+  }
+
+  test("each panel offers it when the workspace has a PO, and it opens that company's PO chat", async () => {
+    const app = await showPanels([panel("s-acme", "Acme"), panel("s-beta", "Beta")]);
+    const buttons = screen().getAllByRole("button", { name: TALK });
+    expect(buttons).toHaveLength(2);
+    // The second panel's button opens the second company's chat, not the first's.
+    await act(async () => fireEvent.click(buttons[1] as HTMLElement));
+    await settle(8);
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/po/s-beta`);
+  });
+
+  test("the panel still opens the company's Painel and the button is not inside that link", async () => {
+    await showPanels([panel("s-acme", "Acme")]);
+    const link = screen().getByRole("link", { name: "Abrir o painel de Acme" });
+    expect(new URL(link.getAttribute("href") ?? "", "http://x").searchParams.get("tab")).toBe("painel");
+    expect(within(link).queryByRole("button")).toBeNull();
+  });
+
+  test("with no PO the panel is as before: no button", async () => {
+    await showPanels([panel("s-acme", "Acme")], { poAgentId: null });
+    expect(screen().queryAllByRole("button", { name: TALK })).toHaveLength(0);
+    expect(screen().getByRole("link", { name: "Abrir o painel de Acme" })).toBeTruthy();
+  });
+
+  test("a company the PO overview does not list (archived) gets no button", async () => {
+    await showPanels([panel("s-acme", "Acme"), panel("s-old", "Old")], {
+      poCompanies: [company("s-acme", "Acme")],
+    });
+    expect(screen().getAllByRole("button", { name: TALK })).toHaveLength(1);
   });
 });

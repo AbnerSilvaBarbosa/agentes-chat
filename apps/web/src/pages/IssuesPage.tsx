@@ -59,9 +59,9 @@ import { useFilterCopy } from "@/components/filters";
 import { GitHubMark } from "@/components/GitHubMark";
 import { ErrorState, LoadingCards, LoadingList } from "@/components/Loading";
 import { useOrg } from "@/components/org-context";
+import { TalkToPo } from "@/components/po/TalkToPo";
 import { CardSky } from "@/components/Sky";
 import { TaskMentions, useTaskLive } from "@/components/TaskConversation";
-import { useDirectory } from "@/hooks/useDirectory";
 import { useRightHandLook } from "@/hooks/useRightHandLook";
 import { copyText } from "@/lib/context-menu";
 import { entityMenu } from "@/lib/entity-menu";
@@ -243,23 +243,6 @@ function useTabParam(): ["boards" | "painel", (value: "boards" | "painel") => vo
       }) as never,
     });
   return [value === "painel" ? "painel" : "boards", set];
-}
-
-/** "Conversar com o PO": opens the PO's chat about this company (ADR 0185), the PO's face before the words. */
-function TalkToPo({ agentId, spaceId }: { agentId: string; spaceId: string }) {
-  const { t } = useTranslation();
-  const { org } = useOrg();
-  const navigate = useNavigate();
-  const name = useDirectory(org.id).agentById.get(agentId)?.name ?? "";
-  return (
-    <Button
-      variant="ghost"
-      onClick={() => void navigate({ to: "/org/$orgId/po/$spaceId", params: { orgId: org.id, spaceId } })}
-    >
-      <AgentAvatar agentId={agentId} name={name} size="xs" />
-      {t("issues.spaces.talkToPo")}
-    </Button>
-  );
 }
 
 /**
