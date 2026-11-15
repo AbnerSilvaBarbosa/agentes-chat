@@ -827,6 +827,9 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       // An agent's event proposal was confirmed or dismissed: its card says so.
       if (event.type === "calendar.proposal.updated")
         cacheMessageMeta(qc, orgId, event.channelId, event.messageId, () => ({ calendarProposal: event.proposal }));
+      // A PO's card proposal was decided, or its spec moved on (ADR 0185): its card, whole.
+      if (event.type === "card.proposal.updated")
+        cacheMessageMeta(qc, orgId, event.channelId, event.messageId, () => ({ cardProposal: event.proposal }));
       if (event.type === "card.delegate") cacheCardDelegate(qc, orgId, event, event.delegate);
       // A right hand's card of a workspace change was applied, dismissed or sent on: the whole card.
       if (event.type === "action_card.updated") cacheActionCard(qc, orgId, event, event.card);

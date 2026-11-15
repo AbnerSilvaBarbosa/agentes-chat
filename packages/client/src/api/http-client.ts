@@ -68,6 +68,7 @@ import type {
   BrowserProfile,
   CalendarEvent,
   CalendarRange,
+  CardProposalView,
   Channel,
   ChannelCard,
   ChannelCategory,
@@ -194,7 +195,9 @@ import type {
   PersonUsage,
   PhoneDevice,
   PhoneSignIn,
+  PoChat,
   Poll,
+  PoOverview,
   Proposal,
   ReactionCount,
   Reminder,
@@ -1816,6 +1819,14 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
       prefs: (orgId) => request<NoticePrefs>(`${org(orgId)}/notification-prefs`),
       setPref: (orgId, category, on) =>
         request<NoticePrefs>(`${org(orgId)}/notification-prefs`, { method: "PUT", json: { category, on } }),
+    },
+    po: {
+      overview: (orgId) => request<PoOverview>(`${org(orgId)}/po`),
+      openChat: (orgId, spaceId) => request<PoChat>(`${org(orgId)}/po/chats`, { json: { spaceId } }),
+      confirmProposal: (orgId, id, edits) =>
+        request<CardProposalView>(`${org(orgId)}/card-proposals/${enc(id)}/confirm`, { json: edits ?? {} }),
+      dismissProposal: (orgId, id) =>
+        request<CardProposalView>(`${org(orgId)}/card-proposals/${enc(id)}/dismiss`, { json: {} }),
     },
     calendar: {
       range: (orgId, from, to) => request<CalendarRange>(`${org(orgId)}/calendar`, { query: { from, to } }),

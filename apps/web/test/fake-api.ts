@@ -22,6 +22,7 @@ import type {
   AuthConfig,
   Availability,
   BrainMachine,
+  CardProposalView,
   Channel,
   ChannelCategory,
   ChannelMember,
@@ -75,6 +76,7 @@ import type {
   PersonLimits,
   PersonUsage,
   PlanAccountUsage,
+  PoCompany,
   Proposal,
   ReactionCount,
   RightHandApprovals,
@@ -338,6 +340,10 @@ export interface FakeState {
   media?: Partial<Pick<OrgSettings, MediaSetting>>;
   /** The workspace's PO (ADR 0185): the agent its PO chats are with. */
   poAgentId?: string | null;
+  /** The companies a PO chat opens for (`po.overview`), live and archived; with no PO the overview lists none. */
+  poCompanies?: PoCompany[];
+  /** The PO's card proposals by id: what `po.confirmProposal` and `po.dismissProposal` decide. */
+  cardProposals?: Record<string, CardProposalView>;
   /** What `gifs.search` finds (trending and any search alike, by title); unset: `FAKE_GIFS`. */
   gifResults?: Gif[];
   /** Make `gifs.search` fail with this error (`gifs.off`…). */
@@ -3517,6 +3523,63 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
       },
       revert: async (orgId, id) => {
         log("memory.revert", orgId, id);
+      },
+    },
+    // The PO chat (ADR 0185): a chat per company that is no row of the DM list, and the proposals its PO makes.
+    po: {
+      overview: async (orgId) => {
+        log("po.overview", orgId);
+        const agentId = state.poAgentId ?? null;
+        return agentId ? { agentId, companies: structuredClone(state.poCompanies ?? []) } : { agentId, companies: [] };
+      },
+      openChat: async (orgId, spaceId) => {
+        log("po.openChat", orgId, spaceId);
+        const agentId = state.poAgentId ?? null;
+        if (!agentId) throw new ApiError(422, "po.none", "This workspace has no PO agent");
+        const space = state.poCompanies?.find((c) => c.id === spaceId);
+        if (!space) throw new ApiError(404, "not_found", "Company not found");
+        if (space.archived) throw new ApiError(400, "issue_space.archived", "That company is archived");
+        const channelId = space.channelId ?? `po-chat-${spaceId}`;
+        space.channelId = channelId;
+        state.channelMembers[channelId] ??= [
+          { type: "person", id: state.me?.user.id ?? "" },
+          { type: "agent", id: agentId },
+        ];
+        const { id: sid, name, color, image, archived } = space;
+        return { channelId, agentId, space: { id: sid, name, color, image, archived } };
+      },
+      confirmProposal: async (orgId, id, edits) => {
+        log("po.confirmProposal", orgId, id, edits);
+        const proposals = state.cardProposals ?? {};
+        state.cardProposals = proposals;
+        const p = proposals[id];
+        if (!p) throw new ApiError(404, "not_found", "Proposal not found");
+        if (p.status !== "pending")
+          throw new ApiError(400, "card_proposal.decided", "This proposal was already decided");
+        const project = edits?.projectId ? { id: edits.projectId, name: p.project.name } : p.project;
+        const done: CardProposalView = {
+          ...p,
+          title: edits?.title ?? p.title,
+          summary: edits?.summary ?? p.summary,
+          criteria: edits?.criteria ?? p.criteria,
+          project,
+          status: "confirmed",
+          issue: { id: `issue-${id}`, number: 1 },
+        };
+        proposals[id] = done;
+        return structuredClone(done);
+      },
+      dismissProposal: async (orgId, id) => {
+        log("po.dismissProposal", orgId, id);
+        const proposals = state.cardProposals ?? {};
+        state.cardProposals = proposals;
+        const p = proposals[id];
+        if (!p) throw new ApiError(404, "not_found", "Proposal not found");
+        if (p.status !== "pending")
+          throw new ApiError(400, "card_proposal.decided", "This proposal was already decided");
+        const done: CardProposalView = { ...p, status: "dismissed" };
+        proposals[id] = done;
+        return structuredClone(done);
       },
     },
     dms: {

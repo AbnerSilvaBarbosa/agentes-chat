@@ -121,6 +121,8 @@ export const keys = {
   /** A chat card's rows (under `proposals`: deciding any refreshes it too). */
   cardProposals: (orgId: string, ids: string[]) => ["org", orgId, "proposals", "card", ids.join(",")] as const,
   dms: (orgId: string) => ["org", orgId, "dms"] as const,
+  /** The workspace's PO and its companies (ADR 0185). */
+  po: (orgId: string) => ["org", orgId, "po"] as const,
   dmReads: (orgId: string, channelId: string) => ["org", orgId, "dmReads", channelId] as const,
   storage: (orgId: string) => ["org", orgId, "storage"] as const,
   artifacts: (orgId: string) => ["org", orgId, "artifacts"] as const,

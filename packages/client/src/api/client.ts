@@ -93,6 +93,8 @@ import type {
   CalendarEventInput,
   CalendarEventPatch,
   CalendarRange,
+  CardProposalEdits,
+  CardProposalView,
   Channel,
   ChannelCard,
   ChannelCategory,
@@ -250,7 +252,9 @@ import type {
   PhoneDevice,
   PhoneDeviceInput,
   PhoneSignIn,
+  PoChat,
   Poll,
+  PoOverview,
   PostMedia,
   Proposal,
   PushDeviceInput,
@@ -1692,6 +1696,15 @@ export interface ApiClient {
     /** What reaches my devices as a notification in this workspace (ADR 0071 §8). */
     prefs(orgId: string): Promise<NoticePrefs>;
     setPref(orgId: string, category: NoticeCategory, on: boolean): Promise<NoticePrefs>;
+  };
+  po: {
+    /** The workspace's PO and the companies a PO chat opens for (ADR 0185); no PO: no agent and no companies. */
+    overview(orgId: string): Promise<PoOverview>;
+    /** Opens (the first time, makes) my PO chat for a company. 422 `po.none` without a PO. */
+    openChat(orgId: string, spaceId: string): Promise<PoChat>;
+    /** Creates the proposed card as me; the fields may be edited first. 400 `card_proposal.decided` once decided. */
+    confirmProposal(orgId: string, id: string, edits?: CardProposalEdits): Promise<CardProposalView>;
+    dismissProposal(orgId: string, id: string): Promise<CardProposalView>;
   };
   calendar: {
     /** Events, routine runs, reminders, issue deadlines and proposals between `from` and `to` (ISO). */

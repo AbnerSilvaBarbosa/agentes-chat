@@ -98,6 +98,8 @@ import type {
   CalendarEventPatch,
   CalendarProposal,
   CardDelegate,
+  CardProposalEdits,
+  CardProposalView,
   Channel,
   ChannelEvent,
   ChannelInput,
@@ -4750,6 +4752,44 @@ export function useCalendarProposal(orgId: string, where: { channelId: string; m
     onSuccess: (proposal) => {
       cacheMessageMeta(qc, orgId, where.channelId, where.messageId, () => ({ calendarProposal: proposal }));
       void qc.invalidateQueries({ queryKey: keys.calendar(orgId) });
+    },
+  });
+}
+
+/** The workspace's PO and the companies its chat opens for (ADR 0185): `agentId` null means none. */
+export function usePoOverview(orgId: string) {
+  const api = useApi();
+  return useQuery({ queryKey: keys.po(orgId), queryFn: () => api.po.overview(orgId) });
+}
+
+/** Opens (the first time, makes) the person's PO chat for a company; the overview learns its channel. */
+export function useOpenPoChat(orgId: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (spaceId: string) => api.po.openChat(orgId, spaceId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.po(orgId) }),
+  });
+}
+
+/**
+ * A PO's card proposal in its chat: Criar (with the fields as edited) creates the card, Descartar drops it. The card
+ * shows the answer at once, whole as the server returns it; others see it through `card.proposal.updated`.
+ */
+export function useCardProposal(orgId: string, where: { channelId: string; messageId: string }) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      action: { id: string; decision: "confirm"; edits?: CardProposalEdits } | { id: string; decision: "dismiss" },
+    ): Promise<CardProposalView> =>
+      action.decision === "confirm"
+        ? api.po.confirmProposal(orgId, action.id, action.edits)
+        : api.po.dismissProposal(orgId, action.id),
+    onSuccess: (proposal) => {
+      cacheMessageMeta(qc, orgId, where.channelId, where.messageId, () => ({ cardProposal: proposal }));
+      // A confirmed proposal made a card: the boards' counts and the lists follow it.
+      void qc.invalidateQueries({ queryKey: keys.issues(orgId) });
     },
   });
 }
