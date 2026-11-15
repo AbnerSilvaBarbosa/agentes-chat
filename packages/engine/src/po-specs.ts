@@ -257,12 +257,13 @@ async function reportSpec(deps: SpecDeps, row: ProposalRow, state: "done" | "fai
   const title = issue?.title ?? row.title;
   let stays = false;
   if (state === "done" && issue) {
-    // Where it goes is the board's "Priorizado" (else the next to-do column); a card a person already moved stays.
+    // Where it goes is the board's "Priorizado" (else the next to-do column), only from "Especificar": a card a person
+    // moved, or that sits in no column, stays where it is.
     await attempt(
       (async () => {
         const { specify, prioritized } = await specColumns(db, row.orgId, row.projectId);
         if (!prioritized) stays = true;
-        else if (issue.columnId === specify.id || (issue.columnId === null && issue.status === specify.stage))
+        else if (issue.columnId === specify.id)
           await updateIssue(
             deps,
             { type: "agent", agentId: row.agentId, channelId: row.channelId },

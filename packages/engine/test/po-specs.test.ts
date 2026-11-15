@@ -770,6 +770,31 @@ describe("a finished spec run moves its card", () => {
     expect((await c.state(a.row.id))?.specState).toBe("failed");
   });
 
+  test("a card a person already moved, or that sits in no column, stays where it is", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [moved, orphan, normal] = await started(c, ["Movido", "Sem coluna", "Normal"]);
+    if (!moved?.run || !orphan?.run || !normal?.run) throw new Error("none");
+    const [ready] = await f.db.select().from(schema.issueColumns).where(eq(schema.issueColumns.name, "Ready for dev"));
+    for (const x of [moved, orphan, normal]) await attach(x.issue.id, `Spec ${x.issue.title}`);
+
+    // A person drags the card to another column while the run works; another card loses its column.
+    await updateIssue(c.deps, { type: "person", userId: f.owner.id }, f.org.id, moved.issue.id, {
+      columnId: ready?.id ?? "",
+    });
+    await f.db.update(schema.issues).set({ columnId: null }).where(eq(schema.issues.id, orphan.issue.id));
+    for (const x of [moved, orphan, normal]) await end(x.run, "done");
+
+    expect((await card(moved.issue.id))?.columnId).toBe(ready?.id);
+    expect((await card(orphan.issue.id))?.columnId).toBeNull();
+    // The one still in Especificar moves, as always.
+    expect((await card(normal.issue.id))?.columnId).toBe(c.prioritized?.id);
+    // The spec is still reported as ready for the card that stayed.
+    expect((await c.state(moved.row.id))?.specState).toBe("done");
+    const said = (await f.db.select().from(schema.messages)).filter((m) => m.body.includes('"Movido" is ready'));
+    expect(said.length).toBeGreaterThan(0);
+  });
+
   test("never moves a card to Ready for dev", async () => {
     f = await setup();
     // With a Priorizado column: that is where it goes.
