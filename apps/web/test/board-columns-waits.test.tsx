@@ -8,8 +8,9 @@ import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { useOrg } from "@/components/org-context";
 import { BoardColumnsDialog, ColumnEditor, type EditorColumn } from "@/pages/BoardColumns";
-import { createFakeApi, seedState } from "./fake-api";
-import { renderPage, screen, settle } from "./render";
+import { createFakeApi, ORG_ID, seedState } from "./fake-api";
+import { pick } from "./new-agent-flow";
+import { renderApp, renderPage, screen, settle } from "./render";
 
 afterEach(() => cleanup());
 
@@ -127,5 +128,123 @@ describe("ColumnEditor's switch", () => {
     await editor({ onWaits: undefined });
     expect(screen().queryByRole("switch")).toBeNull();
     expect(screen().getAllByRole("textbox", { name: "Nome da coluna" })).toHaveLength(3);
+  });
+});
+
+describe("the status-set editor in Configurações › Tarefas", () => {
+  type State = ReturnType<typeof seedState>;
+  const go = async (state: State = seedState()) => {
+    await renderApp(`/org/${ORG_ID}/settings/tasks`, { api: createFakeApi(state) });
+    await settle(6);
+    return state;
+  };
+  const set = "Desenvolvimento";
+  const stage = (name: string) => within(screen().getByRole("region", { name: set })).getByRole("region", { name });
+  const sw = (name: string) => within(stage(name)).getByRole("switch", { name: "Espera uma pessoa" });
+  const names = (name: string) =>
+    within(stage(name))
+      .getAllByRole("textbox", { name: "Nome da coluna" })
+      .map((i) => (i as HTMLInputElement).value);
+  const saved = (state: State) =>
+    state.calls.filter((c) => c.method === "issues.updateColumnTemplate").at(-1)?.args[1] as {
+      columns: { name: string; stage: string; waitsForPerson?: boolean }[];
+    };
+
+  test("flagging a column saves the set with waitsForPerson on that column only", async () => {
+    const state = await go();
+    expect(sw("Em revisão").getAttribute("aria-checked")).toBe("false");
+    await click(sw("Em revisão"));
+    await settle(4);
+    expect(sw("Em revisão").getAttribute("aria-checked")).toBe("true");
+    expect(saved(state).columns.filter((c) => c.waitsForPerson)).toEqual([
+      { name: "QA", stage: "in_review", waitsForPerson: true },
+    ]);
+    // Switching it off saves the set with no flag.
+    await click(sw("Em revisão"));
+    await settle(4);
+    expect(saved(state).columns.some((c) => c.waitsForPerson)).toBe(false);
+  });
+
+  test("a status set's editor keeps a flag through a rename", async () => {
+    const state = await go();
+    await click(sw("Em revisão"));
+    await settle(4);
+    const field = within(stage("Em revisão")).getByRole("textbox", { name: "Nome da coluna" });
+    await act(async () => fireEvent.change(field, { target: { value: "QA humano" } }));
+    await act(async () => fireEvent.blur(field));
+    await settle(4);
+    expect(names("Em revisão")).toEqual(["QA humano"]);
+    expect(saved(state).columns.find((c) => c.name === "QA humano")).toEqual({
+      name: "QA humano",
+      stage: "in_review",
+      waitsForPerson: true,
+    });
+    expect(sw("Em revisão").getAttribute("aria-checked")).toBe("true");
+  });
+
+  test("a flagged column keeps its flag when its stage changes, and a column added starts unflagged", async () => {
+    const state = await go();
+    await click(sw("Em revisão"));
+    await settle(4);
+    await pick(within(stage("Em revisão")).getByRole("combobox", { name: "Etapa" }), "Em andamento");
+    await settle(4);
+    expect(saved(state).columns.find((c) => c.name === "QA")).toEqual({
+      name: "QA",
+      stage: "in_progress",
+      waitsForPerson: true,
+    });
+    expect(names("Em andamento")).toEqual(["Ready for dev", "QA"]);
+    // The moved column is the second of its new stage and still on.
+    expect(
+      within(stage("Em andamento"))
+        .getAllByRole("switch")
+        .map((s) => s.getAttribute("aria-checked")),
+    ).toEqual(["false", "true"]);
+
+    await click(within(stage("Feito")).getByRole("button", { name: "Adicionar coluna" }));
+    const form = stage("Feito").querySelector("form") as HTMLFormElement;
+    await act(async () =>
+      fireEvent.change(within(form).getByRole("textbox", { name: "Nome da coluna" }), {
+        target: { value: "Arquivado" },
+      }),
+    );
+    await act(async () => fireEvent.submit(form));
+    await settle(4);
+    expect(saved(state).columns.find((c) => c.name === "Arquivado")).toEqual({ name: "Arquivado", stage: "done" });
+  });
+
+  test("moving a flagged column inside its stage keeps its flag", async () => {
+    const state = await go();
+    await click(within(stage("A fazer")).getByRole("button", { name: "Adicionar coluna" }));
+    const form = stage("A fazer").querySelector("form") as HTMLFormElement;
+    await act(async () =>
+      fireEvent.change(within(form).getByRole("textbox", { name: "Nome da coluna" }), { target: { value: "Triagem" } }),
+    );
+    await act(async () => fireEvent.submit(form));
+    await settle(4);
+    expect(names("A fazer")).toEqual(["Backlog", "Triagem"]);
+    await click(within(stage("A fazer")).getAllByRole("switch")[0] as HTMLElement);
+    await settle(4);
+    await click(within(stage("A fazer")).getAllByRole("button", { name: "Mover para a direita" })[0] as HTMLElement);
+    await settle(4);
+    expect(names("A fazer")).toEqual(["Triagem", "Backlog"]);
+    expect(
+      within(stage("A fazer"))
+        .getAllByRole("switch")
+        .map((s) => s.getAttribute("aria-checked")),
+    ).toEqual(["false", "true"]);
+    expect(saved(state).columns.find((c) => c.name === "Backlog")?.waitsForPerson).toBe(true);
+  });
+
+  test("a set the person may not edit shows no switch", async () => {
+    const state = seedState();
+    const org = state.me?.organizations[0];
+    if (org) {
+      org.role = "member";
+      org.permissions = ["read"];
+    }
+    await go(state);
+    expect(screen().getByRole("region", { name: set })).toBeTruthy();
+    expect(screen().queryByRole("switch")).toBeNull();
   });
 });

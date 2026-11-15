@@ -107,6 +107,7 @@ function SetCard({
     id: `${i}:${c.stage}:${c.name}`,
     name: c.name,
     stage: c.stage,
+    waits: c.waitsForPerson === true,
   }));
   const at = (id: string) => Number.parseInt(id, 10);
   const edit = (change: (list: SetColumn[]) => SetColumn[]) => onSave(byStage(change([...columns])));
@@ -153,6 +154,16 @@ function SetCard({
         }
         onAdd={(stage: IssueStatus, name) => onSave(byStage([...columns, { name, stage }]))}
         onDelete={(id) => edit((list) => list.filter((_, i) => i !== at(id)))}
+        onWaits={(id, on) =>
+          edit((list) =>
+            list.map((c, i) => {
+              if (i !== at(id)) return c;
+              // A set keeps the flag only as `true`: switching it off takes the key away.
+              const { waitsForPerson: _was, ...rest } = c;
+              return on ? { ...rest, waitsForPerson: true } : rest;
+            }),
+          )
+        }
       />
     </Card>
   );
