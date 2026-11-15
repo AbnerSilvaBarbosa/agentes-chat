@@ -18,6 +18,7 @@ import {
 import { users } from "./auth";
 import { channels } from "./chat";
 import { organizations } from "./tenancy";
+import { wikiPages } from "./wiki";
 
 export const issueStatusEnum = pgEnum("issue_status", ["todo", "in_progress", "in_review", "done", "canceled"]);
 export const issuePriorityEnum = pgEnum("issue_priority", ["low", "normal", "high"]);
@@ -208,6 +209,8 @@ export const issues = pgTable(
      */
     conversationChannelId: uuid().references((): AnyPgColumn => channels.id, { onDelete: "set null" }),
     conversationRootId: uuid(),
+    /** The wiki page holding its spec (ADR 0185); a link that survives a rename, cleared when the page goes. */
+    specPageId: uuid().references((): AnyPgColumn => wikiPages.id, { onDelete: "set null" }),
     createdByType: text().notNull(),
     createdById: text().notNull(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
@@ -524,4 +527,56 @@ export const calendarProposals = pgTable(
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.orgId, t.requesterUserId, t.status)],
+);
+
+/**
+ * A card the PO agent proposed in a PO chat (ADR 0185). Nothing is an issue until the person confirms: the claim on
+ * `status` is one conditional update, and the spec run's queue (`spec_*`) lives on the same row.
+ */
+export const poCardProposals = pgTable(
+  "po_card_proposals",
+  {
+    id: uuid()
+      .primaryKey()
+      .$defaultFn(() => Bun.randomUUIDv7()),
+    orgId: uuid()
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /** The PO that proposed. */
+    agentId: uuid().notNull(),
+    runId: uuid(),
+    requesterUserId: text().notNull(),
+    /** The PO chat the card was proposed in. */
+    channelId: uuid().notNull(),
+    messageId: uuid(),
+    /** The company in scope. */
+    spaceId: uuid()
+      .notNull()
+      .references(() => issueSpaces.id, { onDelete: "cascade" }),
+    /** The proposed board. */
+    projectId: uuid()
+      .notNull()
+      .references(() => issueProjects.id, { onDelete: "cascade" }),
+    title: text().notNull(),
+    summary: text().notNull().default(""),
+    criteria: jsonb().$type<string[]>().notNull().default([]),
+    duplicateOfIssueId: uuid(),
+    /** `pending`, `creating`, `confirmed` or `dismissed`. */
+    status: text().notNull().default("pending"),
+    decidedByUserId: text(),
+    decidedAt: timestamp({ withTimezone: true }),
+    issueId: uuid().references(() => issues.id, { onDelete: "set null" }),
+    /** `queued`, `running`, `done`, `failed` or `stopped`; null before a confirm. */
+    specState: text(),
+    specRunId: uuid(),
+    specQueuedAt: timestamp({ withTimezone: true }),
+    /** A code or a short reason for a spec that did not finish. */
+    specError: text(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index().on(t.orgId, t.requesterUserId, t.status),
+    index().on(t.spaceId, t.specState, t.specQueuedAt),
+    uniqueIndex().on(t.issueId).where(sql`${t.issueId} is not null`),
+  ],
 );

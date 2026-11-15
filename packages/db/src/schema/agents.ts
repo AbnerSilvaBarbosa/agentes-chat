@@ -376,6 +376,8 @@ export const organizationSettings = pgTable("organization_settings", {
   agentStickers: boolean().notNull().default(true),
   /** How often agents follow a light reply with a sticker or a GIF: `never`, `sometimes` or `often` (ADR 0091). */
   agentMedia: text().$type<"never" | "sometimes" | "often">().notNull().default("sometimes"),
+  /** The agent the workspace talks to about its companies in a PO chat (ADR 0185); cleared when the agent goes. */
+  poAgentId: uuid().references((): AnyPgColumn => agents.id, { onDelete: "set null" }),
   /** What a new agent starts thinking with, and its Autonomia (ADR 0094); null = "Automático" on the API. */
   agentSetup: jsonb().$type<AgentSetup>(),
   /** People can send voice messages (ADR 0100): needs a speech engine on the server too. */
