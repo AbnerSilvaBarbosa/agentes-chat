@@ -30,7 +30,15 @@ import {
   publishUserEvent,
 } from "./events";
 import { cutText } from "./format";
-import { allColumns, boardColumnsOf, columnForMove, columnOf, topRank } from "./issue-columns";
+import {
+  allColumns,
+  boardColumnsOf,
+  columnForMove,
+  columnOf,
+  effectiveColumnSql,
+  topRank,
+  waitingSql,
+} from "./issue-columns";
 import { type IssueProjectRef, projectForTask, projectsById } from "./issue-projects";
 import type { IssueWorkMeta } from "./issue-work";
 import { fileIdsOf, getMessage, insertMessage, type MessageView, messageView, postPersonMessage } from "./messages";
@@ -1029,6 +1037,8 @@ export async function listIssues(
     projectId?: string;
     /** Only the tasks of that space's boards (ADR 0174): every board of a company at once. */
     spaceId?: string;
+    /** Only the live open tasks that sit in a column that waits for a person (ADR 0184), whoever they are assigned to. */
+    waitingForPerson?: boolean;
     limit?: number;
   } = {},
 ): Promise<IssueView[]> {
@@ -1054,6 +1064,14 @@ export async function listIssues(
           : undefined,
         filters.assignee
           ? and(eq(issues.assigneeType, filters.assignee.type), eq(issues.assigneeId, filters.assignee.id))
+          : undefined,
+        // The factory's own rule (`factoryHome`): a live task, on a board and a company that are not archived.
+        filters.waitingForPerson
+          ? sql`exists (select 1 from ${issues} w
+              join ${schema.issueProjects} wp on wp.id = w.project_id and wp.archived_at is null
+              join ${schema.issueSpaces} ws on ws.id = wp.space_id and ws.archived_at is null
+              ${effectiveColumnSql("w")}
+              where w.id = ${issues.id} and ${waitingSql("w")})`
           : undefined,
         q
           ? or(
