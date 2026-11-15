@@ -721,8 +721,11 @@ export function createSetupToolSource(deps: {
             const name = wanted.trim().replace(/^#/, "").toLowerCase();
             const channel = visible.find((c) => c.name === name);
             if (!channel) return { content: `No channel #${name}.`, isError: true };
-            taken.push({ id: channel.id, name: channel.name });
+            if (!taken.some((c) => c.id === channel.id)) taken.push({ id: channel.id, name: channel.name });
           }
+          // The receipt shows under the reply to everyone in the conversation: it names only channels the whole
+          // organization sees, never a private one (the agent's reply to the person below may).
+          const publicNames = taken.filter((c) => visible.find((v) => v.id === c.id)?.visibility === "public");
           const events = holdEvents(deps.pubsub);
           const category = await actWithUndo(
             ctx,
@@ -739,7 +742,7 @@ export function createSetupToolSource(deps: {
             (made) => ({
               kind: "channel_category.created",
               target: { type: "channel_category", id: made.id, title: made.name },
-              params: { name: made.name, channels: taken.map((c) => c.name) },
+              params: { name: made.name, channels: publicNames.map((c) => c.name) },
               before: null,
               after: { name: made.name, channelIds: taken.map((c) => c.id) },
             }),

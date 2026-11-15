@@ -3005,7 +3005,7 @@ export interface AgentActionTarget {
  *   `fields` (name, prompt, target, schedule, active), `active`, `schedule`
  * - `channel.agent_added`: `agentId`, `agentName`, `agentHandle`, `channel`
  * - `channel.created`: `name` (undo archives it)
- * - `channel_category.created`: `name`, `channels` (the names it took along; undo deletes it, ADR 0080)
+ * - `channel_category.created`: `name`, `channels` (the names of the public channels it took along, never a private one's; undo deletes it, ADR 0080)
  * - `pr.merged`: `repo`, and `number` (a pull request) or `ref` (a branch); nothing undoes it
  * - `wiki.page_created` / `wiki.page_edited`: `title`, `slug`
  * - `wiki.page_moved`: `title`, `slug`, `from`, `to` (folders; "" is the top level; undo puts it back)

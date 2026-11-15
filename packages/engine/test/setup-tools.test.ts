@@ -617,6 +617,25 @@ describe("create_channel_category", () => {
     expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
   });
 
+  test("receipt does not name a private channel and names each public one once", async () => {
+    f = await setup();
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "diretoria", visibility: "private" });
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora");
+    const out = await call(f, ctx, "create_channel_category", {
+      name: "Livora",
+      channels: ["diretoria", "#diretoria", "vendas", "Vendas"],
+    });
+    expect(out.isError).toBeUndefined();
+    // The agent hears what it did, each channel once.
+    expect(out.content).toBe('Created the category "Livora" with #diretoria, #vendas.');
+    const [row] = await receiptsOf(f, ctx);
+    expect(row?.params).toEqual({ name: "Livora", channels: ["vendas"] });
+    expect(JSON.stringify(row)).not.toContain("diretoria");
+    // Undo still moves both: the ids are kept.
+    expect((row?.after as { channelIds?: string[] } | undefined)?.channelIds).toHaveLength(2);
+  });
+
   test("sends the layout broadcast once the category exists", async () => {
     f = await setup();
     const seen: { type?: string; event?: { type?: string } }[] = [];
