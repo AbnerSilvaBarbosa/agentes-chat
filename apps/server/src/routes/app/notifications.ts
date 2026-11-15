@@ -26,6 +26,10 @@ export const NotificationSource = z.object({
   threadId: z.string().optional(),
   messageId: z.string().optional(),
   dmId: z.string().optional(),
+  poSpaceId: z
+    .string()
+    .optional()
+    .openapi({ description: "With `dmId`, the company of a PO chat (ADR 0185): the notice opens that PO chat." }),
   issueId: z.string().optional(),
   issueNumber: z.number().int().optional(),
   topicId: z.string().optional(),

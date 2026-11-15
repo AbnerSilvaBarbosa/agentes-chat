@@ -273,6 +273,8 @@ export interface NotificationSource {
   threadId?: string;
   messageId?: string;
   dmId?: string;
+  /** With `dmId`, a PO chat's company (ADR 0185): the notice opens that company's PO chat. */
+  poSpaceId?: string;
   issueId?: string;
   issueNumber?: number;
   topicId?: string;

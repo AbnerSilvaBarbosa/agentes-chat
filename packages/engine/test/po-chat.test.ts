@@ -1,21 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { and, eq, schema } from "@agenteschat/db";
 import {
+  addAgentReaction,
   archiveAgent,
   createAgent,
   createIssue,
   createIssueProject,
   createIssueSpace,
+  drainOutbox,
   getOrgSettings,
+  insertMessage,
   isAgentOnlyDm,
   isPoChatKey,
   listDms,
+  listNotifications,
   listPoCompanies,
+  notifyBrowserHandoff,
+  notifyQuestion,
+  notifySecretRequest,
   openDm,
   openPoChat,
   parsePoChatKey,
   poAgentOf,
   poChatKey,
+  postPersonMessage,
   requireChannelAccess,
   restoreDms,
   scheduleDeletion,
@@ -301,5 +309,129 @@ describe("a PO chat among the other DMs", () => {
     await expect(requireChannelAccess(f.db, bia.id, f.org.id, chat.channelId)).rejects.toThrow();
     const admin = await addMember(f.db, f.org.id, "admin", "walt");
     await expect(requireChannelAccess(f.db, admin.id, f.org.id, chat.channelId)).rejects.toThrow();
+  });
+});
+
+describe("the notices of a PO chat", () => {
+  const deps = () => ({ db: f.db, pubsub: f.pubsub });
+  const sources = async () =>
+    (await listNotifications(deps(), f.owner.id, f.org.id, {})).items.map((n) => [n.kind, n.source] as const);
+
+  test("a PO reply's notice carries the company", async () => {
+    f = await setup();
+    await setPo(f.agent.id);
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const chat = await openPoChat(f.db, f.owner.id, f.org.id, acme.id);
+    const plain = await openDm(f.db, f.owner.id, f.org.id, { agentId: f.agent.id });
+
+    // The agent answers in the PO chat: the notice names the company beside the DM.
+    await postPersonMessage(deps(), f.owner.id, f.org.id, chat.channelId, { body: "Oi, PO" });
+    await drainOutbox(f.db, f.handlers);
+    expect(await sources()).toEqual([
+      ["agent_reply", expect.objectContaining({ dmId: chat.channelId, poSpaceId: acme.id })],
+    ]);
+
+    // The same agent in the plain DM: a DM notice with no company.
+    await postPersonMessage(deps(), f.owner.id, f.org.id, plain.id, { body: "Oi de novo" });
+    await drainOutbox(f.db, f.handlers);
+    const plainNotice = (await sources()).find(([, src]) => src.dmId === plain.id);
+    expect(plainNotice?.[1]).toBeDefined();
+    expect(plainNotice?.[1]).not.toHaveProperty("poSpaceId");
+  });
+
+  test("the reaction, question, secret request and hand-off notices of a PO chat carry the company too", async () => {
+    f = await setup();
+    await setPo(f.agent.id);
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const chat = await openPoChat(f.db, f.owner.id, f.org.id, acme.id);
+    const plain = await openDm(f.db, f.owner.id, f.org.id, { agentId: f.agent.id });
+    const [machine] = await f.db.insert(schema.machines).values({ orgId: f.org.id, name: "Mac" }).returning();
+    if (!machine) throw new Error("no machine");
+
+    for (const [dm, poSpaceId] of [
+      [chat.channelId, acme.id],
+      [plain.id, undefined],
+    ] as const) {
+      const mine = await insertMessage(f.db, {
+        orgId: f.org.id,
+        channelId: dm,
+        author: { type: "person", userId: f.owner.id },
+        body: "Me ajuda?",
+      });
+      const [run] = await f.db
+        .insert(schema.agentRuns)
+        .values({
+          orgId: f.org.id,
+          agentId: f.agent.id,
+          channelId: dm,
+          threadRootId: mine.id,
+          triggerMessageId: mine.id,
+          trigger: "mention",
+          hop: 1,
+          status: "running",
+        })
+        .returning();
+      if (!run) throw new Error("no run");
+      const base = { orgId: f.org.id, runId: run.id, agentId: f.agent.id, channelId: dm };
+      const [question] = await f.db
+        .insert(schema.agentQuestions)
+        .values({
+          ...base,
+          toolUseId: "q1",
+          text: "Qual?",
+          requestedForUserId: f.owner.id,
+          expiresAt: new Date(Date.now() + 1e6),
+        })
+        .returning();
+      const [secret] = await f.db
+        .insert(schema.secretRequests)
+        .values({
+          ...base,
+          toolUseId: "s1",
+          requestedForUserId: f.owner.id,
+          name: "API_KEY",
+          purpose: "para o deploy",
+          targetKind: "env",
+          publicKey: "test-public-key",
+          expiresAt: new Date(Date.now() + 1e6),
+        })
+        .returning();
+      const [handoff] = await f.db
+        .insert(schema.browserHandoffs)
+        .values({
+          orgId: f.org.id,
+          agentId: f.agent.id,
+          runId: run.id,
+          machineId: machine.id,
+          kind: "ask",
+          instructions: "Entre no painel",
+          requestedForUserId: f.owner.id,
+          expiresAt: new Date(Date.now() + 1e6),
+        })
+        .returning();
+      if (!question || !secret || !handoff) throw new Error("no rows");
+      await addAgentReaction(
+        f.db,
+        { orgId: f.org.id, agentId: f.agent.id, messageId: mine.id, reaction: "🙌" },
+        f.pubsub,
+      );
+      await notifyQuestion(deps(), question);
+      await notifySecretRequest(deps(), secret);
+      await notifyBrowserHandoff(deps(), handoff, { channelId: dm, threadId: null }, [f.owner.id]);
+
+      // One open hand-off per agent and screen: this one is over before the next conversation's.
+      await f.db
+        .update(schema.browserHandoffs)
+        .set({ status: "done" })
+        .where(eq(schema.browserHandoffs.id, handoff.id));
+      const here = (await sources()).filter(([, src]) => src.channelId === dm || src.dmId === dm);
+      const kinds = here.map(([k]) => k).sort();
+      expect(kinds).toEqual(["agent_question", "browser_handoff", "reaction", "secret_request"]);
+      for (const [, src] of here) {
+        expect(src.dmId).toBe(dm);
+        if (poSpaceId) expect(src.poSpaceId).toBe(poSpaceId);
+        else expect(src).not.toHaveProperty("poSpaceId");
+      }
+    }
   });
 });

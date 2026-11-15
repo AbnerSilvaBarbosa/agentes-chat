@@ -23,10 +23,24 @@ import {
   retargetNotifications,
 } from "./notifications";
 import { maySql, type RolePermission } from "./permissions";
+import { parsePoChatKey } from "./po-chat";
 import { secretLabelOf } from "./secrets";
 import { stretchCardOf } from "./stretch";
 import { adminChannelSql, taskReadersAmong } from "./task-access";
 import { teamWeekCardOf } from "./team-week";
+
+/**
+ * Where a DM notice opens: the DM, and for a PO chat (ADR 0185) the company too, so the apps open the PO chat of that
+ * company instead of the agent's plain DM.
+ */
+function dmSource(
+  channel: { kind: string; dmKey: string | null } | undefined,
+  channelId: string,
+): { dmId?: string; poSpaceId?: string } {
+  if (channel?.kind !== "dm") return {};
+  const po = parsePoChatKey(channel.dmKey);
+  return po ? { dmId: channelId, poSpaceId: po.spaceId } : { dmId: channelId };
+}
 
 /**
  * Where notifications come from: each flow calls one of these after
@@ -151,7 +165,7 @@ export async function notifyMessage(deps: NotificationDeps, orgId: string, messa
   // A long work's progress line (ADR 0121) never pushes: it counts as unread only for who follows its thread.
   if (meta.workUpdate) return;
   const [channel] = await db
-    .select({ kind: channels.kind, name: channels.name, visibility: channels.visibility })
+    .select({ kind: channels.kind, dmKey: channels.dmKey, name: channels.name, visibility: channels.visibility })
     .from(channels)
     .where(and(eq(channels.id, message.channelId), eq(channels.orgId, orgId)));
   if (!channel) return;
@@ -172,7 +186,7 @@ export async function notifyMessage(deps: NotificationDeps, orgId: string, messa
     channelId: message.channelId,
     ...(message.threadId ? { threadId: message.threadId } : {}),
     messageId: message.id,
-    ...(channel.kind === "dm" ? { dmId: message.channelId } : {}),
+    ...dmSource(channel, message.channelId),
   };
   const done = new Set<string>(authorUser ? [authorUser] : []);
 
@@ -358,7 +372,7 @@ export async function notifyReaction(
   const actor = input.userId ? person(input.userId) : agent(input.agentId);
   if (!actor) return;
   const [channel] = await db
-    .select({ kind: channels.kind, name: channels.name })
+    .select({ kind: channels.kind, dmKey: channels.dmKey, name: channels.name })
     .from(channels)
     .where(eq(channels.id, message.channelId));
   const given = await db
@@ -381,7 +395,7 @@ export async function notifyReaction(
       channelId: message.channelId,
       ...(message.threadId ? { threadId: message.threadId } : {}),
       messageId: message.id,
-      ...(channel?.kind === "dm" ? { dmId: message.channelId } : {}),
+      ...dmSource(channel, message.channelId),
       ...(channel?.kind === "channel" ? { label: channel.name } : {}),
     },
     latest: { emojis, quote: notificationSnippet(readableBody(message.body, message.meta), 140) },
@@ -396,7 +410,7 @@ export async function notifyQuestion(deps: NotificationDeps, q: QuestionRow) {
     q.requestedForUserId ?? (await requesterOfRun(deps, q.orgId, q.runId)) ?? (await agentOwner(deps, q.agentId));
   if (!to) return;
   const [channel] = await deps.db
-    .select({ kind: channels.kind, name: channels.name })
+    .select({ kind: channels.kind, dmKey: channels.dmKey, name: channels.name })
     .from(channels)
     .where(eq(channels.id, q.channelId));
   await notify(deps, {
@@ -410,7 +424,7 @@ export async function notifyQuestion(deps: NotificationDeps, q: QuestionRow) {
       channelId: q.channelId,
       ...(q.threadId ? { threadId: q.threadId } : {}),
       ...(q.messageId ? { messageId: q.messageId } : {}),
-      ...(channel?.kind === "dm" ? { dmId: q.channelId } : {}),
+      ...dmSource(channel, q.channelId),
       ...(channel?.kind === "channel" ? { label: channel.name } : {}),
       questionId: q.id,
     },
@@ -432,7 +446,7 @@ export async function resolveQuestionNotifications(deps: NotificationDeps, orgId
  */
 export async function notifySecretRequest(deps: NotificationDeps, r: typeof schema.secretRequests.$inferSelect) {
   const [channel] = await deps.db
-    .select({ kind: channels.kind, name: channels.name })
+    .select({ kind: channels.kind, dmKey: channels.dmKey, name: channels.name })
     .from(channels)
     .where(eq(channels.id, r.channelId));
   await notify(deps, {
@@ -446,7 +460,7 @@ export async function notifySecretRequest(deps: NotificationDeps, r: typeof sche
       channelId: r.channelId,
       ...(r.threadId ? { threadId: r.threadId } : {}),
       ...(r.messageId ? { messageId: r.messageId } : {}),
-      ...(channel?.kind === "dm" ? { dmId: r.channelId } : {}),
+      ...dmSource(channel, r.channelId),
       ...(channel?.kind === "channel" ? { label: channel.name } : {}),
     },
     latest: { title: secretLabelOf(r), text: notificationSnippet(r.purpose), expiresAt: r.expiresAt.toISOString() },
@@ -1673,7 +1687,7 @@ export async function notifyBrowserHandoff(
   ];
   if (userIds.length === 0) return;
   const [channel] = await deps.db
-    .select({ kind: channels.kind, name: channels.name })
+    .select({ kind: channels.kind, dmKey: channels.dmKey, name: channels.name })
     .from(channels)
     .where(eq(channels.id, where.channelId));
   const handoff = { handoffId: h.id, agentId: h.agentId, ...(h.screen !== "browser" ? { screen: h.screen } : {}) };
@@ -1693,7 +1707,7 @@ export async function notifyBrowserHandoff(
       channelId: where.channelId,
       ...(where.threadId ? { threadId: where.threadId } : {}),
       messageId: h.id,
-      ...(channel?.kind === "dm" ? { dmId: where.channelId } : {}),
+      ...dmSource(channel, where.channelId),
       ...(channel?.kind === "channel" ? { label: channel.name } : {}),
       ...handoff,
     },
