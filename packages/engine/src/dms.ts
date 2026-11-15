@@ -11,6 +11,7 @@ import { type PreviewMeta, previewMediaKind, previewMeta, readableBody } from ".
 import { quietNoticeSql } from "./notices";
 import { resolveNotifications } from "./notifications";
 import { can, getMembership, requirePermission } from "./organizations";
+import { poChatKeyLike } from "./po-chat";
 import { accountInUse, closedRefusal } from "./standing";
 
 const { channels, channelMembers, channelReads, messages, agents, users, organizationMembers } = schema;
@@ -313,6 +314,9 @@ export async function listDms(db: Database, actorId: string, orgId: string, only
         eq(channels.orgId, orgId),
         eq(channels.kind, "dm"),
         isNull(channels.archivedAt),
+        // A PO chat (ADR 0185) is with the same agent as that agent's own DM, and the sidebar keys its rows by agent:
+        // it would take the row's place. PO chats are listed by company, not here (`listPoCompanies`).
+        sql`not ${poChatKeyLike}`,
         only ? eq(channels.id, only) : undefined,
       ),
     );

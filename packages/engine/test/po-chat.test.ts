@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { eq, schema } from "@agenteschat/db";
+import { and, eq, schema } from "@agenteschat/db";
 import {
   archiveAgent,
   createAgent,
@@ -7,12 +7,17 @@ import {
   createIssueProject,
   createIssueSpace,
   getOrgSettings,
+  isAgentOnlyDm,
   isPoChatKey,
+  listDms,
   listPoCompanies,
+  openDm,
   openPoChat,
   parsePoChatKey,
   poAgentOf,
   poChatKey,
+  requireChannelAccess,
+  restoreDms,
   scheduleDeletion,
   setAgentAudience,
   updateIssueSpace,
@@ -247,5 +252,54 @@ describe("opening a PO chat", () => {
     await scheduleDeletion({ db: f.db }, f.owner.id, f.org.id, "owner");
     expect((await openPoChat(f.db, f.owner.id, f.org.id, acme.id)).channelId).toBe(first.channelId);
     await expect(openPoChat(f.db, f.owner.id, f.org.id, beta.id)).rejects.toThrow();
+  });
+});
+
+describe("a PO chat among the other DMs", () => {
+  const deps = () => ({ db: f.db, pubsub: f.pubsub });
+  const world = async () => {
+    f = await setup();
+    await setPo(f.agent.id);
+    const acme = await createIssueSpace(deps(), f.owner.id, f.org.id, { name: "Acme Corp" });
+    const chat = await openPoChat(f.db, f.owner.id, f.org.id, acme.id);
+    const plain = await openDm(f.db, f.owner.id, f.org.id, { agentId: f.agent.id });
+    return { acme, chat, plain };
+  };
+
+  test("listDms leaves a PO chat out so the agent's own DM row stays", async () => {
+    const { chat, plain } = await world();
+    const rows = await listDms(f.db, f.owner.id, f.org.id);
+    expect(rows.map((r) => r.channelId)).toEqual([plain.id]);
+    expect(rows[0]?.with).toMatchObject({ id: f.agent.id });
+    // Asked for the PO chat by its id, the list is empty too.
+    expect(await listDms(f.db, f.owner.id, f.org.id, chat.channelId)).toEqual([]);
+  });
+
+  test("a PO chat key survives isAgentOnlyDm, restoreDms and requireChannelAccess", async () => {
+    const { chat } = await world();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    const [channel] = await f.db.select().from(schema.channels).where(eq(schema.channels.id, chat.channelId));
+    expect(channel).toBeDefined();
+    // A person is in it, so it is not a DM between agents only.
+    expect(isAgentOnlyDm(channel as { kind: string; dmKey: string | null })).toBe(false);
+
+    // The person who left the workspace and came back is readmitted; the PO stays a member.
+    await f.db
+      .delete(schema.channelMembers)
+      .where(and(eq(schema.channelMembers.channelId, chat.channelId), eq(schema.channelMembers.userId, f.owner.id)));
+    await restoreDms(f.db, f.org.id, f.owner.id);
+    const members = await f.db
+      .select()
+      .from(schema.channelMembers)
+      .where(eq(schema.channelMembers.channelId, chat.channelId));
+    expect(members.map((m) => m.userId ?? `agent:${m.agentId}`).sort()).toEqual(
+      [f.owner.id, `agent:${f.agent.id}`].sort(),
+    );
+
+    // The person reads it; anyone else, administrators included in a DM, does not.
+    expect((await requireChannelAccess(f.db, f.owner.id, f.org.id, chat.channelId)).channel.id).toBe(chat.channelId);
+    await expect(requireChannelAccess(f.db, bia.id, f.org.id, chat.channelId)).rejects.toThrow();
+    const admin = await addMember(f.db, f.org.id, "admin", "walt");
+    await expect(requireChannelAccess(f.db, admin.id, f.org.id, chat.channelId)).rejects.toThrow();
   });
 });
