@@ -19,6 +19,8 @@ export interface IssueColumnView {
   position: number;
   /** The board it belongs to; null: the workspace's own set, which a board uses until it has its own. */
   projectId: string | null;
+  /** A task sitting here waits for a person to act on it (ADR 0184). */
+  waitsForPerson: boolean;
 }
 
 /** A set of columns a board can be created from (ADR 0177). */
@@ -39,6 +41,7 @@ const view = (c: ColumnRow): IssueColumnView => ({
   name: c.name,
   position: c.position,
   projectId: c.projectId,
+  waitsForPerson: c.waitsForPerson,
 });
 const stageOrder = (s: IssueStatus) => BOARD_STAGES.indexOf(s);
 const sortColumns = (rows: ColumnRow[]) =>
@@ -153,6 +156,7 @@ export async function ensureBoardColumns(db: Database, orgId: string, projectId:
           stage: c.stage,
           name: c.name,
           position: c.position,
+          waitsForPerson: c.waitsForPerson,
         })),
       )
       .returning();
@@ -296,6 +300,60 @@ export async function updateIssueColumn(
       }
     });
   }
+  return announce(deps, orgId);
+}
+
+/**
+ * Flags a column as one whose tasks wait for a person, or clears it (ADR 0184). A board that still follows the
+ * workspace's set has no row of its own to flag: given `projectId`, it gets its own copy first (the workspace's columns
+ * stay as they were) and each of its tasks is re-pointed to the copy of the column it was in, keeping its clock.
+ */
+export async function setColumnWaits(
+  deps: ColumnDeps,
+  userId: string,
+  orgId: string,
+  columnId: string,
+  waits: boolean,
+  projectId: string | null = null,
+): Promise<IssueColumnView[]> {
+  await requirePoster(deps.db, userId, orgId);
+  const column = (
+    await deps.db
+      .select()
+      .from(issueColumns)
+      .where(and(eq(issueColumns.id, columnId), eq(issueColumns.orgId, orgId)))
+  )[0];
+  if (!column) throw new NotFoundError("Column not found");
+  let target = column;
+  if (!column.projectId && projectId) {
+    const own = await deps.db
+      .select({ id: issueColumns.id })
+      .from(issueColumns)
+      .where(and(eq(issueColumns.orgId, orgId), eq(issueColumns.projectId, projectId)))
+      .limit(1);
+    if (own.length === 0) {
+      const base = await boardColumns(deps.db, orgId);
+      const copies = await ensureBoardColumns(deps.db, orgId, projectId);
+      const at = base.findIndex((c) => c.id === column.id);
+      const copy = copies[at];
+      if (!copy) throw new NotFoundError("Column not found");
+      target = copy;
+      await deps.db.transaction(async (tx) => {
+        // Every task of the board keeps sitting where it sat: only the row it points at changes (the copy has the
+        // same places, in the same order), so its clock does not restart.
+        await tx.execute(sql`select set_config('agentes.keep_column_since', 'on', true)`);
+        for (const [i, from] of base.entries()) {
+          const to = copies[i];
+          if (!to) continue;
+          await tx
+            .update(issues)
+            .set({ columnId: to.id })
+            .where(and(eq(issues.orgId, orgId), eq(issues.projectId, projectId), eq(issues.columnId, from.id)));
+        }
+      });
+    }
+  }
+  await deps.db.update(issueColumns).set({ waitsForPerson: waits }).where(eq(issueColumns.id, target.id));
   return announce(deps, orgId);
 }
 
