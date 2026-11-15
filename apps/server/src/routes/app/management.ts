@@ -195,6 +195,10 @@ const Settings = z
       description:
         "Who the workspace is for (ADR 0159): `team` (the default) or `personal`. It changes the apps' defaults and words, never what anyone may do; a change is audited (`organization.mode_changed`) and reaches every member's apps (`org.mode`).",
     }),
+    poAgentId: z.uuid().nullable().openapi({
+      description:
+        "The agent the workspace's PO chats are with (ADR 0185); null: none. Every member reads it, only who may `configure` sets it.",
+    }),
     voiceAvailable: z.boolean().openapi({
       description: "Read only: this server has a speech engine now, from its environment or from its owner's Settings.",
     }),
@@ -578,6 +582,10 @@ export function managementRoutes(deps: AppDeps) {
             agentStickers: z.boolean().optional(),
             agentMedia: z.enum(AGENT_MEDIA_LEVELS).optional(),
             mode: z.enum(WORKSPACE_MODES).optional().openapi({ description: "`team` or `personal` (ADR 0159)." }),
+            poAgentId: z.uuid().nullable().optional().openapi({
+              description:
+                "The workspace's PO (ADR 0185): an agent that is not archived and not the right hand; null clears it.",
+            }),
           }),
         ),
       },

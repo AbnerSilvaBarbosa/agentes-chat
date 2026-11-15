@@ -2330,6 +2330,8 @@ export interface OrgSettings {
   agentMediaAvailable: boolean;
   /** Who the workspace is for (ADR 0159); absent from an older server, which is a team's. */
   mode?: WorkspaceMode;
+  /** The agent the PO chats are with (ADR 0185); null or absent (an older server): none. */
+  poAgentId?: string | null;
 }
 
 /** `OrgSettings` the server works out itself: never in a PATCH. */

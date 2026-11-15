@@ -336,6 +336,8 @@ export interface FakeState {
    * server that has GIF search and decides when agents send one.
    */
   media?: Partial<Pick<OrgSettings, MediaSetting>>;
+  /** The workspace's PO (ADR 0185): the agent its PO chats are with. */
+  poAgentId?: string | null;
   /** What `gifs.search` finds (trending and any search alike, by title); unset: `FAKE_GIFS`. */
   gifResults?: Gif[];
   /** Make `gifs.search` fail with this error (`gifs.off`…). */
@@ -1869,6 +1871,7 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
         autoModels: state.autoModels ?? {},
         ...mediaSettings(state),
         mode: personalOrg(orgId) ? "personal" : "team",
+        poAgentId: state.poAgentId ?? null,
         // Money: admins only, like the backend.
         ...(seesCost() ? { defaultAgentBudgetUsd: state.defaultAgentBudgetUsd ?? 50 } : {}),
       }),
@@ -1887,6 +1890,7 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
         if (input.defaultCredentialId !== undefined) state.defaultCredentialId = input.defaultCredentialId;
         if (input.defaultAgentBudgetUsd !== undefined) state.defaultAgentBudgetUsd = input.defaultAgentBudgetUsd;
         if (input.actionCheck !== undefined) state.actionCheck = input.actionCheck;
+        if (input.poAgentId !== undefined) state.poAgentId = input.poAgentId;
         const { gifs, gifRating, agentStickers, agentMedia } = input;
         state.media = {
           ...state.media,
@@ -1914,6 +1918,7 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
           autoModels: state.autoModels ?? {},
           ...mediaSettings(state),
           mode: personalOrg(orgId) ? "personal" : "team",
+          poAgentId: state.poAgentId ?? null,
           // As the server's answer: the same settings a read gives, money included for who sees it.
           ...(seesCost() ? { defaultAgentBudgetUsd: state.defaultAgentBudgetUsd ?? 50 } : {}),
         };
