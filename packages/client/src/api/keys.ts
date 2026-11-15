@@ -168,8 +168,19 @@ export const keys = {
   agentAccess: (orgId: string, agentId: string) => ["org", orgId, "access", "agent", agentId] as const,
   issues: (orgId: string) => ["org", orgId, "issues"] as const,
   /** `project`: a project's id, `none`, or "" for every task. */
-  issueList: (orgId: string, q: string, project = "", space = "", assignee = "") =>
-    ["org", orgId, "issues", "list", q, project, space, ...(assignee ? [assignee] : [])] as const,
+  issueList: (orgId: string, q: string, project = "", space = "", assignee = "", waiting = "") =>
+    [
+      "org",
+      orgId,
+      "issues",
+      "list",
+      q,
+      project,
+      space,
+      // Only when set, so the keys of the lists that never ask for them stay what they were.
+      ...(assignee || waiting ? [assignee] : []),
+      ...(waiting ? [waiting] : []),
+    ] as const,
   issue: (orgId: string, number: number) => ["org", orgId, "issues", "one", number] as const,
   issueActivity: (orgId: string, id: string) => ["org", orgId, "issues", "activity", id] as const,
   issueColumns: (orgId: string, projectId = "") => ["org", orgId, "issues", "columns", projectId] as const,
@@ -177,6 +188,8 @@ export const keys = {
   boardAlerts: (orgId: string, projectId = "") =>
     ["org", orgId, "issues", "alerts", ...(projectId ? [projectId] : [])] as const,
   issueColumnTemplates: (orgId: string) => ["org", orgId, "issues", "column-templates"] as const,
+  /** The factory on Início (ADR 0184); under the issues prefix, so a task change refreshes it. */
+  factoryHome: (orgId: string) => ["org", orgId, "issues", "factory"] as const,
   /** A company's Painel; under the issues prefix, so a task change refreshes it. */
   companyDashboard: (orgId: string, spaceId: string, days: number) =>
     ["org", orgId, "issues", "dashboard", spaceId, days] as const,

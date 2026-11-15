@@ -104,6 +104,7 @@ import type {
   DmRead,
   EndpointCheck,
   EndpointModel,
+  FactoryHome,
   FeedbackFile,
   FeedbackOffer,
   ForeignMailbox,
@@ -1477,6 +1478,7 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
               projectId: filters.projectId,
               spaceId: filters.spaceId,
               assignee: filters.assignee,
+              waiting: filters.waiting,
             },
           })
         ).issues,
@@ -1569,6 +1571,7 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
         request<IssueSpaceRef>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/image`, { method: "DELETE" }),
       companyDashboard: (orgId, spaceId, days) =>
         request<CompanyDashboard>(`${org(orgId)}/issue-spaces/${enc(spaceId)}/dashboard`, { query: { days } }),
+      factoryHome: (orgId) => request<FactoryHome>(`${org(orgId)}/factory-home`),
     },
     threads: {
       list: (orgId, filters = {}) => request<ThreadPage>(`${org(orgId)}/threads`, { query: threadQuery(filters) }),

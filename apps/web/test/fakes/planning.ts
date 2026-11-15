@@ -24,6 +24,7 @@ import type {
   CalendarEvent,
   CalendarProposal,
   CompanyDashboard,
+  FactoryCompany,
   Issue,
   IssueActivity,
   IssueColumn,
@@ -37,6 +38,7 @@ import type {
   RoutineRun,
   RuleInfo,
   ScheduleParse,
+  WaitingTask,
   WebhookProvider,
   WebhookSetup,
 } from "@agenteschat/client";
@@ -232,6 +234,27 @@ const defaultColumns = (): IssueColumn[] =>
 /** Board order: by stage, then position. */
 const boardOrder = (cols: IssueColumn[]) =>
   [...cols].sort((a, b) => STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage) || a.position - b.position);
+
+/**
+ * The column a task waits in, as the engine reads it (`effectiveColumnSql`): its own column when it is in the board's
+ * set and in its stage, else the first of its stage in the board's own set or the workspace's. Null when the task is
+ * not open or the column is not flagged.
+ */
+function waitingOf(s: { columns: IssueColumn[] }, i: Issue): IssueColumn | null {
+  if (i.status !== "todo" && i.status !== "in_progress" && i.status !== "in_review") return null;
+  const own = s.columns.filter((c) => c.projectId !== null && c.projectId === i.project?.id);
+  const set = boardOrder(own.length > 0 ? own : s.columns.filter((c) => c.projectId === null));
+  const column = set.find((c) => c.id === i.columnId && c.stage === i.status) ?? set.find((c) => c.stage === i.status);
+  return column?.waitsForPerson ? column : null;
+}
+
+/** The board and the company of a live task: not canceled, on a board and in a company that are not archived. */
+function livePlace(s: Pick<Store, "projects" | "spaces">, i: Issue) {
+  if (i.status === "canceled") return null;
+  const board = s.projects.find((p) => p.id === i.project?.id);
+  const space = board && !board.archived ? s.spaces.find((sp) => sp.id === board.spaceId) : undefined;
+  return board && space && !space.archived ? { board, space } : null;
+}
 
 interface Store {
   issues: Issue[];
@@ -572,10 +595,18 @@ export function createMockPlanning(
         const myId = filters.assignee === "me" ? (await me()).id : null;
         const assignedToMe = (i: Issue) =>
           !myId || (i.assignee?.type === "person" && i.assignee.id === myId && i.status !== "canceled");
+        const s = await store(orgId);
+        // The server's filter (`waitingForPerson`): the factory's own rule, here as it is below.
+        const waits = (i: Issue) =>
+          filters.waiting !== "person" || (livePlace(s, i) !== null && waitingOf(s, i) !== null);
         return clone(
-          (await store(orgId)).issues
+          s.issues
             .filter(
-              (i) => inProject(i) && assignedToMe(i) && (!q || `${i.title} #${i.number}`.toLowerCase().includes(q)),
+              (i) =>
+                inProject(i) &&
+                assignedToMe(i) &&
+                waits(i) &&
+                (!q || `${i.title} #${i.number}`.toLowerCase().includes(q)),
             )
             .sort((a, b) => b.number - a.number)
             // The server's own cap (`listIssues`): a list is the 200 most recent, a search too.
@@ -999,6 +1030,67 @@ export function createMockPlanning(
         record("issues.deleteColumnTemplate", templateId);
         const at = templates.findIndex((t) => t.id === templateId);
         if (at >= 0) templates.splice(at, 1);
+      },
+      factoryHome: async (orgId) => {
+        record("issues.factoryHome");
+        const s = await store(orgId);
+        const today = ctx.now().toISOString().slice(0, 10);
+        const weekAgo = ctx.now().getTime() - 7 * 86_400_000;
+        // Live: not canceled, on a board and a company that are not archived (the fake has no viewer to hide from).
+        const live = s.issues.flatMap((i) => {
+          const place = livePlace(s, i);
+          return place ? [{ i, ...place }] : [];
+        });
+        const companies: FactoryCompany[] = [];
+        for (const space of s.spaces) {
+          const mine = live.filter((l) => l.space.id === space.id);
+          if (mine.length === 0) continue;
+          const count = (status: IssueStatus) => mine.filter((l) => l.i.status === status).length;
+          companies.push({
+            id: space.id,
+            name: space.name,
+            color: space.color,
+            image: space.image,
+            stages: {
+              todo: count("todo"),
+              in_progress: count("in_progress"),
+              in_review: count("in_review"),
+              // The fake keeps no conclusion date: the last update stands in for it.
+              done: mine.filter((l) => l.i.status === "done" && new Date(l.i.updatedAt).getTime() >= weekAgo).length,
+            },
+            late: mine.filter((l) => l.i.status !== "done" && l.i.dueDate && l.i.dueDate < today).length,
+            waiting: mine.filter((l) => waitingOf(s, l.i) !== null).length,
+          });
+        }
+        companies.sort(
+          (a, b) => b.waiting - a.waiting || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+        );
+        const waiting = live
+          .flatMap((l) => {
+            const column = waitingOf(s, l.i);
+            const stage = l.i.status;
+            if (!column || (stage !== "todo" && stage !== "in_progress" && stage !== "in_review")) return [];
+            const task: WaitingTask = {
+              id: l.i.id,
+              number: l.i.number,
+              title: l.i.title,
+              stage,
+              spaceId: l.space.id,
+              spaceName: l.space.name,
+              projectId: l.board.id,
+              projectName: l.board.name,
+              columnName: column.name,
+              // The fake keeps no column clock: the last update stands in for it.
+              since: l.i.updatedAt,
+            };
+            return [task];
+          })
+          .sort((a, b) => a.since.localeCompare(b.since) || a.number - b.number);
+        return clone({
+          companies: companies.slice(0, 20),
+          companiesTotal: companies.length,
+          waiting: { total: waiting.length, items: waiting.slice(0, 5) },
+        });
       },
       companyDashboard: async (orgId, spaceId, days) => {
         record("issues.companyDashboard", spaceId, days);

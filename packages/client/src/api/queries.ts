@@ -4096,16 +4096,24 @@ export const useArtifactBlob = (orgId: string, id: string, version: number, enab
  * `project`: only a project's tasks (its id), or `none` for the ones with no project. `assignee: "me"`: only the ones
  * assigned to me as a person. The server filters.
  */
-export const useIssues = (orgId: string, q = "", project = "", space = "", assignee: "me" | "" = "") => {
+export const useIssues = (
+  orgId: string,
+  q = "",
+  project = "",
+  space = "",
+  assignee: "me" | "" = "",
+  waiting: "person" | "" = "",
+) => {
   const api = useApi();
   return useQuery({
-    queryKey: keys.issueList(orgId, q, project, space, assignee),
+    queryKey: keys.issueList(orgId, q, project, space, assignee, waiting),
     queryFn: () =>
       api.issues.list(orgId, {
         ...(q ? { q } : {}),
         ...(project ? { projectId: project } : {}),
         ...(space ? { spaceId: space } : {}),
         ...(assignee ? { assignee } : {}),
+        ...(waiting ? { waiting } : {}),
       }),
     placeholderData: (prev) => prev,
     // While an agent works on an issue its steps change without an event: look again every 10 s.
@@ -4410,6 +4418,15 @@ export function useIssueColumnTemplateAction(orgId: string) {
 export const useIssueProjects = (orgId: string) => {
   const api = useApi();
   return useQuery({ queryKey: keys.issueProjects(orgId), queryFn: () => api.issues.projects(orgId) });
+};
+
+/**
+ * The factory on Início (ADR 0184): a panel per company and the tasks waiting for a person, in one read. It sits under
+ * the issues key prefix, so a task event reads it again.
+ */
+export const useFactoryHome = (orgId: string) => {
+  const api = useApi();
+  return useQuery({ queryKey: keys.factoryHome(orgId), queryFn: () => api.issues.factoryHome(orgId) });
 };
 
 /** A company's Painel for the last `days` days (ADR 0182), read when it opens and when the period changes. */

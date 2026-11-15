@@ -3703,6 +3703,44 @@ export interface IssueSpace extends IssueSpaceRef {
   open: number;
 }
 
+/** One company's panel on Início (ADR 0184), for the tasks you see. */
+export interface FactoryCompany {
+  id: string;
+  name: string;
+  color: string;
+  image: string | null;
+  /** Open tasks by stage; `done` is what was concluded in the last 7 days. */
+  stages: { todo: number; in_progress: number; in_review: number; done: number };
+  late: number;
+  waiting: number;
+}
+
+/** A task that waits for a person (ADR 0184): it sits in a column flagged as one. */
+export interface WaitingTask {
+  id: string;
+  number: number;
+  title: string;
+  stage: "todo" | "in_progress" | "in_review";
+  spaceId: string;
+  spaceName: string;
+  projectId: string;
+  projectName: string;
+  /** Null: the stage's own name. */
+  columnName: string | null;
+  /** ISO time of the task's last change of status, column or board. */
+  since: string;
+}
+
+/** The factory on Início (ADR 0184): a panel per company and the tasks waiting for a person, in one read. */
+export interface FactoryHome {
+  /** At most 20, most waiting first, then by name. */
+  companies: FactoryCompany[];
+  /** Every company with a live task you see: more than `companies` holds shows the link to Tarefas. */
+  companiesTotal: number;
+  /** `total` counts them all; `items` are the first five, longest waiting first. */
+  waiting: { total: number; items: WaitingTask[] };
+}
+
 /** A company's Painel (ADR 0182): the numbers of the tasks you see on its boards over the last `days` days. */
 export interface CompanyDashboard {
   days: 7 | 30 | 90;

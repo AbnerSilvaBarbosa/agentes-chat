@@ -137,6 +137,7 @@ import type {
   EndpointCheck,
   EndpointModel,
   EndpointStyle,
+  FactoryHome,
   FeedbackFile,
   FeedbackInput,
   FeedbackOffer,
@@ -1295,11 +1296,12 @@ export interface ApiClient {
   issues: {
     /**
      * `projectId`: only that project's tasks, or `none` for the ones with no project. `assignee: "me"`: only the
-     * tasks assigned to me as a person (the page of my own tasks, ADR 0181).
+     * tasks assigned to me as a person (the page of my own tasks, ADR 0181). `waiting: "person"`: only the tasks in a
+     * column that waits for a person (ADR 0184).
      */
     list(
       orgId: string,
-      filters?: { q?: string; projectId?: string; spaceId?: string; assignee?: "me" },
+      filters?: { q?: string; projectId?: string; spaceId?: string; assignee?: "me"; waiting?: "person" },
     ): Promise<Issue[]>;
     get(orgId: string, number: number): Promise<Issue>;
     create(orgId: string, input: IssueInput): Promise<Issue>;
@@ -1400,6 +1402,8 @@ export interface ApiClient {
     clearSpaceImage(orgId: string, spaceId: string): Promise<IssueSpaceRef>;
     /** A company's Painel (ADR 0182) over the last `days` days (7, 30 or 90). */
     companyDashboard(orgId: string, spaceId: string, days: 7 | 30 | 90): Promise<CompanyDashboard>;
+    /** The factory on Início (ADR 0184): a panel per company and the tasks waiting for a person. */
+    factoryHome(orgId: string): Promise<FactoryHome>;
   };
   /** Threads (ADR 0029): the Threads page, a thread from a range, moving it, closing and archiving. */
   threads: {
