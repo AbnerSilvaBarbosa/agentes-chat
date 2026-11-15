@@ -3,8 +3,9 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 
 setupDom();
 
-import type { FactoryCompany, FactoryHome, WaitingTask } from "@agenteschat/client";
+import type { ApiClient, FactoryCompany, FactoryHome as FactoryHomeData, WaitingTask } from "@agenteschat/client";
 import { cleanup, within } from "@testing-library/react";
+import { FactoryHome } from "@/components/factory/FactoryHome";
 import { FactoryPanels } from "@/components/factory/FactoryPanels";
 import { FactoryWaiting } from "@/components/factory/FactoryWaiting";
 import { createFakeApi, ORG_ID, seedState } from "./fake-api";
@@ -39,7 +40,7 @@ const task = (over: Partial<WaitingTask> = {}): WaitingTask => ({
   ...over,
 });
 
-const showWaiting = (waiting: FactoryHome["waiting"], companies: FactoryCompany[] = [company()]) =>
+const showWaiting = (waiting: FactoryHomeData["waiting"], companies: FactoryCompany[] = [company()]) =>
   renderPage(<FactoryWaiting waiting={waiting} companies={companies} />, {
     api: createFakeApi(seedState()),
     org: true,
@@ -163,5 +164,83 @@ describe("the company panels", () => {
   test("with every company shown there is no link to more", async () => {
     await showPanels([company()], 1);
     expect(screen().queryByRole("link", { name: /Ver as .* empresas/ })).toBeNull();
+  });
+});
+
+/** The fake api's own factory: one company with a task in a column that waits for a person, one without. */
+async function factoryApi() {
+  const api = createFakeApi(seedState());
+  const clinic = await api.issues.createSpace(ORG_ID, { name: "Clínica Teo" });
+  const beta = await api.issues.createSpace(ORG_ID, { name: "Beta" });
+  const board = await api.issues.createProject(ORG_ID, { name: "Entregas", spaceId: clinic.id });
+  const site = await api.issues.createProject(ORG_ID, { name: "Site", spaceId: beta.id });
+  const added = await api.issues.addColumn(ORG_ID, { name: "Teste humano", stage: "in_review" });
+  const column = added.find((c) => c.name === "Teste humano");
+  if (!column) throw new Error("no column");
+  await api.issues.updateColumn(ORG_ID, column.id, { waitsForPerson: true });
+  return { api, board, site, column };
+}
+
+const withFactory = (api: ApiClient, factoryHome: ApiClient["issues"]["factoryHome"]): ApiClient => ({
+  ...api,
+  issues: { ...api.issues, factoryHome },
+});
+
+describe("the Fábrica block", () => {
+  test("makes one request and draws the list and the panels from it", async () => {
+    const { api, board, site, column } = await factoryApi();
+    const made = await api.issues.create(ORG_ID, { title: "Revisar a tela", projectId: board.id });
+    await api.issues.update(ORG_ID, made.id, { columnId: column.id });
+    await api.issues.create(ORG_ID, { title: "Do site", projectId: site.id });
+    let calls = 0;
+    await renderPage(<FactoryHome />, {
+      api: withFactory(api, (orgId) => {
+        calls++;
+        return api.issues.factoryHome(orgId);
+      }),
+      org: true,
+    });
+    expect(calls).toBe(1);
+    expect(screen().getByRole("heading", { name: /Esperando seu teste/ })).toBeTruthy();
+    expect(screen().getByRole("link", { name: /#\d+ Revisar a tela/ })).toBeTruthy();
+    expect(screen().getByRole("link", { name: "Abrir o painel de Clínica Teo" })).toBeTruthy();
+    expect(screen().getByRole("link", { name: "Abrir o painel de Beta" })).toBeTruthy();
+  });
+
+  test("with no waiting task the list is absent and the panels stay", async () => {
+    const { api, site } = await factoryApi();
+    await api.issues.create(ORG_ID, { title: "Do site", projectId: site.id });
+    await renderPage(<FactoryHome />, { api, org: true });
+    expect(screen().queryByRole("heading", { name: /Esperando seu teste/ })).toBeNull();
+    expect(screen().getByRole("link", { name: "Abrir o painel de Beta" })).toBeTruthy();
+  });
+
+  test("with no company that has a task it draws nothing", async () => {
+    const { api } = await factoryApi();
+    const { container } = await renderPage(<FactoryHome />, { api, org: true });
+    expect(container.querySelector(".fh")).toBeNull();
+    expect(screen().queryAllByRole("link")).toHaveLength(0);
+  });
+
+  test("while loading it draws nothing", async () => {
+    const { api } = await factoryApi();
+    const { container } = await renderPage(<FactoryHome />, {
+      api: withFactory(api, () => new Promise(() => {})),
+      org: true,
+    });
+    expect(container.querySelector(".fh")).toBeNull();
+  });
+
+  test("on an error it draws nothing and breaks nothing around it", async () => {
+    const { api } = await factoryApi();
+    const { container } = await renderPage(
+      <>
+        <p>vizinho</p>
+        <FactoryHome />
+      </>,
+      { api: withFactory(api, () => Promise.reject(new Error("boom"))), org: true },
+    );
+    expect(container.querySelector(".fh")).toBeNull();
+    expect(screen().getByText("vizinho")).toBeTruthy();
   });
 });
