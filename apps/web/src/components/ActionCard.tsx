@@ -149,6 +149,8 @@ export function ActionCard({ message }: { message: Message }) {
   if (card.kind === "autonomy_proposal") return <CostlyProposalCardView message={message} card={card} />;
   if (card.kind === "team_week") return <TeamWeekCardView message={message} card={card} />;
   if (card.kind === "calendar_proposal") return <CalendarProposalCardView message={message} card={card} />;
+  // The PO's card proposal (ADR 0185) is drawn by its own view once the screen lands.
+  if (card.kind === "card_proposal") return null;
   const done = connectAiDone(card, status.data, dir.agentById);
   const agents = joinNames(
     card.agentIds.map((id) => dir.agentById.get(id)?.name ?? t("channel.unknownAgent")),

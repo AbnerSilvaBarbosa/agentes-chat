@@ -1627,6 +1627,14 @@ export type ChannelEvent =
       messageId: string;
       proposal: CalendarProposal;
     }
+  /** A PO's card proposal was decided or its spec moved on (ADR 0185): its card (`meta.cardProposal`) as it is now. */
+  | {
+      type: "card.proposal.updated";
+      channelId: string;
+      threadId: string | null;
+      messageId: string;
+      proposal: CardProposalView;
+    }
   /** A report an agent offered was sent or turned down: its row (`meta.feedbackOffer`) as it is now. */
   | {
       type: "feedback_offer.updated";
@@ -4229,6 +4237,53 @@ export interface CalendarProposal {
   status: "pending" | "confirmed" | "dismissed";
 }
 
+/** A PO's proposed card as its chat shows it (ADR 0185): `meta.cardProposal`, rewritten whole by the server. */
+export interface CardProposalView {
+  id: string;
+  agentId: string;
+  requesterUserId: string;
+  spaceId: string;
+  title: string;
+  summary: string;
+  criteria: string[];
+  project: { id: string; name: string };
+  status: "pending" | "confirmed" | "dismissed";
+  duplicateOf: { number: number; title: string } | null;
+  issue: { id: string; number: number } | null;
+  spec: {
+    state: "queued" | "running" | "done" | "failed" | "stopped";
+    page: { slug: string; title: string } | null;
+    error: string | null;
+  } | null;
+}
+
+/** What a person may change on a proposal as they confirm it. */
+export interface CardProposalEdits {
+  title?: string;
+  summary?: string;
+  criteria?: string[];
+  projectId?: string;
+}
+
+/** A company a PO chat opens for: the reader's open cards and their chat for it, once it exists. */
+export interface PoCompany extends IssueSpaceRef {
+  open: number;
+  channelId: string | null;
+}
+
+/** The workspace's PO and the companies its chat opens for (ADR 0185); no PO: no agent and no companies. */
+export interface PoOverview {
+  agentId: string | null;
+  companies: PoCompany[];
+}
+
+/** The person's PO chat for one company. */
+export interface PoChat {
+  channelId: string;
+  agentId: string;
+  space: IssueSpaceRef;
+}
+
 export interface CalendarReminder {
   id: string;
   message: string;
@@ -6548,6 +6603,8 @@ export interface NotificationSource {
   threadId?: string;
   messageId?: string;
   dmId?: string;
+  /** With `dmId`: the DM is the person's PO chat for this company (ADR 0185). */
+  poSpaceId?: string;
   issueId?: string;
   issueNumber?: number;
   topicId?: string;

@@ -6,6 +6,7 @@ import {
   type AiStatus,
   type CalendarProposal,
   type CardDelegate,
+  type CardProposalView,
   type CostKind,
   type CostlyDecision,
   type Member,
@@ -217,8 +218,26 @@ export function calendarProposalCardOf(meta: Record<string, unknown> | null | un
   return { kind: "calendar_proposal", proposal: p as CalendarProposal };
 }
 
+/** A PO's proposed card (`propose_card`, ADR 0185): the person who asked creates it, edits it or drops it. */
+export interface CardProposalCard {
+  kind: "card_proposal";
+  proposal: CardProposalView;
+}
+
+const CARD_PROPOSAL_STATES: readonly string[] = ["pending", "confirmed", "dismissed"];
+
+/** The proposal on its message (`meta.cardProposal`), only as the server writes it whole. */
+export function cardProposalCardOf(meta: Record<string, unknown> | null | undefined): CardProposalCard | null {
+  const p = meta?.cardProposal as Partial<CardProposalView> | undefined;
+  if (!p || typeof p !== "object") return null;
+  const texts = [p.id, p.agentId, p.requesterUserId, p.spaceId, p.title].every((v) => typeof v === "string");
+  if (!texts || !Array.isArray(p.criteria) || !CARD_PROPOSAL_STATES.includes(p.status ?? "")) return null;
+  return { kind: "card_proposal", proposal: p as CardProposalView };
+}
+
 export type ActionCard =
   | CalendarProposalCard
+  | CardProposalCard
   | WorkspaceActionCard
   | ApprovalsCard
   | MemberChangesCard
@@ -452,7 +471,8 @@ export function actionCardOf(meta: Record<string, unknown> | null | undefined): 
     costlyProposalOf(meta) ??
     personLimitCardOf(meta) ??
     teamWeekCardOf(meta) ??
-    calendarProposalCardOf(meta);
+    calendarProposalCardOf(meta) ??
+    cardProposalCardOf(meta);
   if (proposal) return proposal;
   const raw = meta?.actionCard;
   if (!raw || typeof raw !== "object") return null;
