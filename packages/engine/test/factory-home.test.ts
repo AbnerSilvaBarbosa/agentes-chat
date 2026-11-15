@@ -68,6 +68,23 @@ async function company(name: string) {
   return { spaceId, board, first, task };
 }
 
+/** A column that waits for a person, in the review stage: the workspace's, or a board's own with `projectId`. */
+const flagged = async ({
+  name = "Teste humano",
+  projectId = null,
+  waitsForPerson = true,
+}: {
+  name?: string;
+  projectId?: string | null;
+  waitsForPerson?: boolean;
+} = {}) => {
+  const [col] = await f.db
+    .insert(schema.issueColumns)
+    .values({ orgId: f.org.id, projectId, stage: "in_review", name, position: 5, waitsForPerson })
+    .returning();
+  return must(col);
+};
+
 const read = (userId: string = f.owner.id) => factoryHome(f.db, userId, f.org.id, NOW);
 
 describe("factoryHome panels", () => {
@@ -167,8 +184,9 @@ describe("factoryHome panels", () => {
     await a.task({ status: "done", dueDate: "2026-10-01", moves: [["done", 2]] });
     await a.task({ status: "in_review", columnId: must(col).id });
     await a.task({ status: "in_review", columnId: must(col).id });
-    // A done task in a flagged column does not wait; another company with none flagged shows none.
-    await b.task({ status: "in_progress", dueDate: "2026-11-09" });
+    // Beta's board has its own, unflagged set while the workspace's "Teste humano" is flagged: nothing of Beta waits.
+    await flagged({ name: "Revisão", projectId: b.first.id, waitsForPerson: false });
+    await b.task({ status: "in_review", dueDate: "2026-11-09" });
     const byName = new Map((await read()).companies.map((c) => [c.name, c]));
     expect(byName.get("Alfa")?.late).toBe(2);
     expect(byName.get("Alfa")?.waiting).toBe(2);
@@ -228,27 +246,40 @@ describe("factoryHome panels", () => {
 
   test("shows the first 20 companies and says how many there are", async () => {
     f = await setup();
+    const col = await flagged();
     for (let i = 0; i < 23; i++) {
       const c = await company(`Empresa ${String(i).padStart(2, "0")}`);
       await c.task({ status: "todo" });
     }
+    // The last by name waits for a person: the order comes before the cap of 20.
+    const last = await company("Zzz Última");
+    await last.task({ status: "in_review", columnId: col.id });
     const home = await read();
     expect(home.companies.length).toBe(20);
-    expect(home.companiesTotal).toBe(23);
-    expect(home.companies[0]?.name).toBe("Empresa 00");
-    expect(home.companies[19]?.name).toBe("Empresa 19");
+    expect(home.companiesTotal).toBe(24);
+    expect(home.companies[0]?.name).toBe("Zzz Última");
+    expect(home.companies[1]?.name).toBe("Empresa 00");
+    expect(home.companies[19]?.name).toBe("Empresa 18");
+  });
+
+  test("a board with its own unflagged set does not wait while the workspace's set is flagged", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const own = await a.board("Próprio");
+    const col = await flagged();
+    // The board has its own set: a review column that does not wait, and no "Teste humano".
+    const ownReview = await flagged({ name: "Revisão", projectId: own.id, waitsForPerson: false });
+    const follows = await a.task({ status: "in_review", columnId: col.id });
+    await a.task({ status: "in_review", projectId: own.id });
+    await a.task({ status: "in_review", projectId: own.id, columnId: ownReview.id });
+    const home = await read();
+    expect(home.waiting.total).toBe(1);
+    expect(home.waiting.items.map((i) => i.id)).toEqual([follows.id]);
+    expect(must(home.companies[0]).waiting).toBe(1);
   });
 });
 
 describe("factoryHome waiting list", () => {
-  /** A workspace column that waits for a person, in the review stage. */
-  const flagged = async (name = "Teste humano", projectId: string | null = null) => {
-    const [col] = await f.db
-      .insert(schema.issueColumns)
-      .values({ orgId: f.org.id, projectId, stage: "in_review", name, position: 5, waitsForPerson: true })
-      .returning();
-    return must(col);
-  };
   const waits = (columnId: string, daysAgo: number) => ({
     status: "in_review" as const,
     columnId,
@@ -288,8 +319,8 @@ describe("factoryHome waiting list", () => {
     f = await setup();
     const deps = { db: f.db, pubsub: f.pubsub };
     const a = await company("Alfa");
-    const col = await flagged("Teste humano");
-    const other = await flagged("Aprovação");
+    const col = await flagged();
+    const other = await flagged({ name: "Aprovação" });
     const task = await a.task({ title: "Tela", ...waits(col.id, 9) });
     const sinceOf = async () => must((await read()).waiting.items.find((i) => i.id === task.id)).since;
     expect(await sinceOf()).toBe(ago(9).toISOString());
@@ -302,10 +333,11 @@ describe("factoryHome waiting list", () => {
     expect(await sinceOf()).toBe(ago(9).toISOString());
 
     // A move to another column of the same stage restarts it.
+    const startedAt = Date.now() - 1000;
     await updateIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, task.id, { columnId: other.id });
     const moved = new Date(await sinceOf()).getTime();
-    expect(Date.now() - moved).toBeLessThan(60_000);
-    expect(moved).toBeGreaterThan(ago(1).getTime() - 86_400_000 * 100);
+    expect(moved).toBeGreaterThanOrEqual(startedAt);
+    expect(moved).toBeLessThanOrEqual(Date.now());
 
     // A status change away and back restarts it again.
     await f.db
@@ -373,7 +405,7 @@ describe("factoryHome waiting list", () => {
     f = await setup();
     const deps = { db: f.db, pubsub: f.pubsub };
     const a = await company("Alfa");
-    const col = await flagged("Teste humano");
+    const col = await flagged();
     const plain = must(
       (await f.db.select().from(schema.issueColumns).where(eq(schema.issueColumns.orgId, f.org.id))).find(
         (c) => c.stage === "in_progress" && !c.waitsForPerson,
