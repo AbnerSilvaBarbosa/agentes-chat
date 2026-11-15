@@ -16,6 +16,7 @@ import {
   createToolGateway,
   DEFAULT_AGENT_SCOPES,
   deferrableGroups,
+  deleteChannelCategory,
   INVITE_CARD,
   type InviteCard,
   insertMessage,
@@ -34,6 +35,7 @@ import {
   setMemberRoles,
   type ToolContext,
   undoAgentAction,
+  undoMessageActions,
 } from "../src";
 import { REFUSALS, toolKind, toolPolicy } from "../src/tools/run-policy";
 import { addMember, type Fixture, setup } from "./fixtures";
@@ -857,6 +859,163 @@ describe("create_channel with a category", () => {
     expect(await channelNamed(f, "canal-extra")).toBeUndefined();
     // An existing one is still open to it.
     expect((await call(f, ctx, "create_channel", { name: "canal-4", category: "cat 0" })).isError).toBeUndefined();
+  });
+});
+
+describe("undo and redo of categories", () => {
+  const deps = () => ({ db: f.db, pubsub: f.pubsub });
+  const channelsOf = async (names: string[]) =>
+    (await f.db.select().from(schema.channels).where(eq(schema.channels.orgId, f.org.id))).filter((c) =>
+      names.includes(c.name),
+    );
+  const linkedReply = async (ctx: ToolContext) => {
+    const reply = await insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId: f.general.id,
+      threadId: replyThreadOf(ctx),
+      author: { type: "agent", agentId: f.agent.id, runId: ctx.runId, hop: 1 },
+      body: "Pronto.",
+    });
+    await linkRunActions(f.db, f.org.id, ctx.runId, reply.id);
+    return reply;
+  };
+  const receiptId = async (ctx: ToolContext, index: number) => (await receiptsOf(f, ctx))[index]?.id ?? "";
+
+  test("undoing a category receipt deletes the category and leaves its channels in no category", async () => {
+    f = await setup();
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "suporte" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora com vendas e suporte");
+    await call(f, ctx, "create_channel_category", { name: "Livora", channels: ["vendas", "suporte"] });
+    const [category] = await categoriesOf(f);
+    expect((await channelsOf(["vendas", "suporte"])).map((c) => c.categoryId)).toEqual([
+      category?.id ?? null,
+      category?.id ?? null,
+    ]);
+    const view = await undoAgentAction(deps(), f.owner.id, f.org.id, await receiptId(ctx, 0));
+    expect(view.undoneAt).not.toBeNull();
+    expect(await categoriesOf(f)).toEqual([]);
+    const after = await channelsOf(["vendas", "suporte"]);
+    expect(after.map((c) => c.categoryId)).toEqual([null, null]);
+    expect(after.map((c) => c.archivedAt)).toEqual([null, null]);
+  });
+
+  test("redoing a category receipt makes it again with its channels", async () => {
+    f = await setup();
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "suporte" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora com vendas e suporte");
+    await call(f, ctx, "create_channel_category", { name: "Livora", channels: ["suporte", "vendas"] });
+    const id = await receiptId(ctx, 0);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, id);
+    await redoAgentAction(deps(), f.owner.id, f.org.id, id);
+    const [category] = await categoriesOf(f);
+    expect(category?.name).toBe("Livora");
+    const inside = (await listChannels(f.db, f.owner.id, f.org.id))
+      .filter((c) => c.categoryId === category?.id)
+      .map((c) => c.name);
+    expect(inside).toEqual(["suporte", "vendas"]);
+    // The new category is the one an undo deletes now.
+    await undoAgentAction(deps(), f.owner.id, f.org.id, id);
+    expect(await categoriesOf(f)).toEqual([]);
+    // A category made by hand under that name before the redo: nothing is overwritten.
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "livora" });
+    await expect(redoAgentAction(deps(), f.owner.id, f.org.id, id)).rejects.toMatchObject({
+      code: "action.changed_since",
+    });
+  });
+
+  test("undoing a category receipt whose category is already gone says so and changes nothing else", async () => {
+    f = await setup();
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora com vendas");
+    await call(f, ctx, "create_channel_category", { name: "Livora", channels: ["vendas"] });
+    const [category] = await categoriesOf(f);
+    await deleteChannelCategory(f.db, f.owner.id, f.org.id, category?.id ?? "");
+    await expect(undoAgentAction(deps(), f.owner.id, f.org.id, await receiptId(ctx, 0))).rejects.toMatchObject({
+      code: "action.target_gone",
+    });
+    expect((await channelsOf(["vendas"]))[0]).toMatchObject({ categoryId: null, archivedAt: null });
+    const [row] = await receiptsOf(f, ctx);
+    expect(row?.undoneAt).toBeNull();
+  });
+
+  test("undoing a channel made in a new category archives it and deletes the category", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas na categoria Livora");
+    await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    const id = await receiptId(ctx, 0);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, id);
+    expect((await channelNamed(f, "vendas"))?.archivedAt).not.toBeNull();
+    expect(await categoriesOf(f)).toEqual([]);
+  });
+
+  test("redoing a channel made in a new category brings back channel and category", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas na categoria Livora");
+    await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    const id = await receiptId(ctx, 0);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, id);
+    await redoAgentAction(deps(), f.owner.id, f.org.id, id);
+    const [category] = await categoriesOf(f);
+    expect(category?.name).toBe("Livora");
+    expect(await channelNamed(f, "vendas")).toMatchObject({ archivedAt: null, categoryId: category?.id });
+    // And its undo goes on to work with the new category.
+    await undoAgentAction(deps(), f.owner.id, f.org.id, id);
+    expect(await categoriesOf(f)).toEqual([]);
+    // Someone made the category by hand meanwhile: redo changes nothing.
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "LIVORA" });
+    await expect(redoAgentAction(deps(), f.owner.id, f.org.id, id)).rejects.toMatchObject({
+      code: "action.changed_since",
+    });
+    expect((await channelNamed(f, "vendas"))?.archivedAt).not.toBeNull();
+  });
+
+  test("undoing a channel made in a new category keeps the category while a sibling channel is in it", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria vendas e suporte na categoria Livora");
+    await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    await call(f, ctx, "create_channel", { name: "suporte", category: "Livora" });
+    const first = await receiptId(ctx, 0);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, first);
+    expect((await channelNamed(f, "vendas"))?.archivedAt).not.toBeNull();
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
+    await redoAgentAction(deps(), f.owner.id, f.org.id, first);
+    expect(await categoriesOf(f)).toHaveLength(1);
+    expect((await channelNamed(f, "vendas"))?.archivedAt).toBeNull();
+    // Desfazer tudo goes newest first: the sibling, then the channel that made the category, which takes it along.
+    const reply = await linkedReply(ctx);
+    const done = await undoMessageActions(deps(), f.owner.id, f.org.id, reply.id);
+    expect(done.failed).toEqual([]);
+    expect(await categoriesOf(f)).toEqual([]);
+    expect((await channelsOf(["vendas", "suporte"])).map((c) => c.archivedAt !== null)).toEqual([true, true]);
+  });
+
+  test("an archived channel keeps its place in its category", async () => {
+    f = await setup();
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora" });
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas na categoria Livora");
+    await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    const [category] = await categoriesOf(f);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, await receiptId(ctx, 0));
+    // Undone: archived, the category stays and so does the channel's place in it (ADR 0080 section 4).
+    expect(await channelNamed(f, "vendas")).toMatchObject({ categoryId: category?.id });
+    expect((await channelNamed(f, "vendas"))?.archivedAt).not.toBeNull();
+    expect(await categoriesOf(f)).toHaveLength(1);
+  });
+
+  test("undoing a receipt from before categories still archives the channel", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas");
+    await call(f, ctx, "create_channel", { name: "vendas" });
+    const [row] = await receiptsOf(f, ctx);
+    // As an older build wrote it: no category key anywhere.
+    expect(row?.params).toEqual({ name: "vendas" });
+    expect(row?.after).toEqual({ name: "vendas" });
+    await undoAgentAction(deps(), f.owner.id, f.org.id, row?.id ?? "");
+    expect((await channelNamed(f, "vendas"))?.archivedAt).not.toBeNull();
+    await redoAgentAction(deps(), f.owner.id, f.org.id, row?.id ?? "");
+    expect((await channelNamed(f, "vendas"))?.archivedAt).toBeNull();
   });
 });
 

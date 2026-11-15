@@ -1,14 +1,15 @@
-import type { PubSub } from "@agenteschat/adapters";
-import { and, type Database, desc, eq, gt, gte, isNull, ne, or, schema, sql } from "@agenteschat/db";
+import { holdEvents, type PubSub } from "@agenteschat/adapters";
+import { and, type Database, desc, eq, gt, gte, inArray, isNull, ne, or, schema, sql } from "@agenteschat/db";
 import { actionsFor, actionView, describeAction, publishMessageActions, UNDO_WINDOW_MS } from "./agent-actions";
 import { getAgentCached } from "./agents";
 import { recordAudit } from "./audit";
 import { caches } from "./cache";
+import { createChannelCategory, deleteChannelCategory, findCategoryByName } from "./channel-categories";
 import { addChannelMember, archiveChannel, removeChannelMember, unarchiveChannel } from "./channels";
 import { ConflictError, ForbiddenError, NotFoundError } from "./errors";
 import { getIssue, type IssueView, setCriterion, updateIssue, type WorkActor } from "./issues";
 import { announceMessageMemories } from "./message-memories";
-import { assertActiveMembership, can, getMembership } from "./organizations";
+import { assertActiveMembership, can, getMembership, requirePermission } from "./organizations";
 import { hookMethodsOf, routineHookKeys } from "./routine-hooks";
 import { nextRoutineTime } from "./routines";
 import { enqueueIndex } from "./search";
@@ -34,6 +35,7 @@ const {
   contextItems,
   routines,
   routineHooks,
+  channelCategories,
   channels,
   channelMembers,
   issueActivity,
@@ -441,16 +443,82 @@ const handlers: Record<string, Handler> = {
     return undefined;
   },
 
+  async "channel_category.created"(deps, a, userId, direction) {
+    const after = obj(a.after);
+    const events = { pubsub: deps.pubsub };
+    if (direction === "undo") {
+      // Redo makes the category again under a new id, which `state` remembers; the row's own target id stays.
+      const id = String(obj(a.state).categoryId ?? a.targetId);
+      const [category] = await deps.db
+        .select({ id: channelCategories.id })
+        .from(channelCategories)
+        .where(and(eq(channelCategories.orgId, a.orgId), eq(channelCategories.id, id)));
+      if (!category) throw new NotFoundError("The category is gone", "action.target_gone");
+      // Its channels fall back to none (ADR 0080 §4).
+      await deleteChannelCategory(deps.db, userId, a.orgId, category.id, events);
+      return undefined;
+    }
+    const name = String(after.name ?? "");
+    if (await findCategoryByName(deps.db, a.orgId, name)) throw changedSince();
+    const wanted = Array.isArray(after.channelIds) ? after.channelIds.map(String) : [];
+    // The channels it took, as long as they are still live and in no category.
+    const loose = wanted.length
+      ? await deps.db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(
+            and(
+              eq(channels.orgId, a.orgId),
+              eq(channels.kind, "channel"),
+              isNull(channels.archivedAt),
+              isNull(channels.categoryId),
+              inArray(channels.id, wanted),
+            ),
+          )
+      : [];
+    const ids = wanted.filter((id) => loose.some((c) => c.id === id));
+    const made = await createChannelCategory(deps.db, userId, a.orgId, { name, channelIds: ids }, events);
+    return { categoryId: made.id };
+  },
+
   async "channel.created"(deps, a, userId, direction) {
     const [channel] = await deps.db
       .select({ createdAt: channels.createdAt, archivedAt: channels.archivedAt })
       .from(channels)
       .where(and(eq(channels.orgId, a.orgId), eq(channels.id, a.targetId)));
     if (!channel) throw new NotFoundError("The channel is gone", "action.target_gone");
+    // A channel made together with its category (`categoryCreated`): the category goes and comes with it.
+    const after = obj(a.after);
+    const together = after.categoryCreated === true;
+    const categoryId = String(obj(a.state).categoryId ?? after.categoryId ?? "");
+    const categoryRow = async (db: Database) => {
+      const [row] = await db
+        .select({ id: channelCategories.id })
+        .from(channelCategories)
+        .where(and(eq(channelCategories.orgId, a.orgId), eq(channelCategories.id, categoryId)));
+      return row ?? null;
+    };
     if (direction === "redo") {
       if (!channel.archivedAt) throw changedSince();
-      await unarchiveChannel(deps.db, userId, a.orgId, a.targetId, { pubsub: deps.pubsub });
-      return undefined;
+      if (!together) {
+        await unarchiveChannel(deps.db, userId, a.orgId, a.targetId, { pubsub: deps.pubsub });
+        return undefined;
+      }
+      // All checks first: the category is still there (a sibling kept it), or its name is free to make it again.
+      const kept = await categoryRow(deps.db);
+      const name = String(after.categoryName ?? "");
+      if (!kept) {
+        if (await findCategoryByName(deps.db, a.orgId, name)) throw changedSince();
+        await requirePermission(deps.db, userId, a.orgId, "manage_channels");
+      }
+      const events = holdEvents(deps.pubsub);
+      const made = await deps.db.transaction(async (tx) => {
+        const db = tx as unknown as Database;
+        await unarchiveChannel(db, userId, a.orgId, a.targetId, events);
+        return kept ? null : createChannelCategory(db, userId, a.orgId, { name, channelIds: [a.targetId] }, events);
+      });
+      await events.flush();
+      return made ? { categoryId: made.id } : undefined;
     }
     if (channel.archivedAt) throw changedSince();
     // Someone already wrote there: archiving would hide their messages.
@@ -467,7 +535,35 @@ const handlers: Record<string, Handler> = {
       )
       .limit(1);
     if (written) throw changedSince();
-    await archiveChannel(deps.db, userId, a.orgId, a.targetId, { pubsub: deps.pubsub });
+    if (!together) {
+      await archiveChannel(deps.db, userId, a.orgId, a.targetId, { pubsub: deps.pubsub });
+      return undefined;
+    }
+    // The category goes with its last channel; one that is already gone does not stop the archive.
+    const category = await categoryRow(deps.db);
+    const [sibling] = category
+      ? await deps.db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(
+            and(
+              eq(channels.orgId, a.orgId),
+              eq(channels.categoryId, category.id),
+              isNull(channels.archivedAt),
+              ne(channels.id, a.targetId),
+            ),
+          )
+          .limit(1)
+      : [];
+    const dropCategory = category && !sibling;
+    if (dropCategory) await requirePermission(deps.db, userId, a.orgId, "manage_channels");
+    const events = holdEvents(deps.pubsub);
+    await deps.db.transaction(async (tx) => {
+      const db = tx as unknown as Database;
+      await archiveChannel(db, userId, a.orgId, a.targetId, events);
+      if (dropCategory) await deleteChannelCategory(db, userId, a.orgId, category.id, events);
+    });
+    await events.flush();
     return undefined;
   },
 
