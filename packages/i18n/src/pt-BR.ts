@@ -16297,6 +16297,8 @@ export const ptBR = {
       desktop_handoff: "Preciso de ajuda no meu computador.",
       browser_restarted: "{{agent}} reiniciou o navegador. O controle de {{person}} terminou.",
       file_saved: "Arquivo salvo.",
+      card_proposal: "Proposta de card: {{title}}",
+      card_spec_start: "Escreva a spec do card #{{number}} e salve na wiki.",
       issue_work_start: "Pode fazer a tarefa #{{number}}.",
       issue_taken: "Peguei a tarefa #{{number}}.",
       done: "Pronto.",

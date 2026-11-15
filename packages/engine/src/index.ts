@@ -233,6 +233,7 @@ export * from "./po-chat-context";
 export * from "./po-columns";
 export * from "./po-proposals";
 export * from "./po-spec-brief";
+export * from "./po-specs";
 export * from "./profile";
 export * from "./push";
 export * from "./push-messages";

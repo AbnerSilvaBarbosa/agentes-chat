@@ -16309,6 +16309,8 @@ export const en = {
       desktop_handoff: "I need help on my computer.",
       browser_restarted: "{{agent}} restarted its browser. {{person}}'s control ended.",
       file_saved: "File saved.",
+      card_proposal: "Card proposal: {{title}}",
+      card_spec_start: "Write the spec of card #{{number}} and save it in the wiki.",
       issue_work_start: "Please do task #{{number}}.",
       issue_taken: "Took task #{{number}}.",
       done: "Done.",
