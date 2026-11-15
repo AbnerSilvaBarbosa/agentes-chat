@@ -23,11 +23,18 @@ export interface IssueColumnView {
   waitsForPerson: boolean;
 }
 
+/** One column of a set; `waitsForPerson` is only ever present as `true` (ADR 0184). */
+export interface TemplateColumn {
+  name: string;
+  stage: IssueStatus;
+  waitsForPerson?: boolean;
+}
+
 /** A set of columns a board can be created from (ADR 0177). */
 export interface ColumnTemplateView {
   id: string;
   name: string;
-  columns: { name: string; stage: IssueStatus }[];
+  columns: TemplateColumn[];
   /** One of the two this workspace started with, which it may not delete. */
   seeded: boolean;
 }
@@ -453,7 +460,7 @@ export async function columnForMove(db: Database, orgId: string, columnId: strin
 const templateRef = (t: TemplateRow): ColumnTemplateView => ({
   id: t.id,
   name: t.name,
-  columns: t.columns as { name: string; stage: IssueStatus }[],
+  columns: t.columns as TemplateColumn[],
   seeded: SEEDED_TEMPLATES.some((s) => s.name.toLowerCase() === t.name.toLowerCase()),
 });
 
@@ -515,9 +522,7 @@ export async function applyColumnTemplate(
   const templates = await columnTemplates(deps.db, orgId);
   const template = templates.find((t) => t.id === templateId);
   if (!template) throw new NotFoundError("Template not found");
-  const wanted = (template.columns as { name: string; stage: IssueStatus }[]).filter((c) =>
-    BOARD_STAGES.includes(c.stage),
-  );
+  const wanted = (template.columns as TemplateColumn[]).filter((c) => BOARD_STAGES.includes(c.stage));
   if (wanted.length === 0) throw new ValidationError("That template has no columns");
   // Copy-on-write first: a board that still followed the workspace gets its own set, then it is replaced.
   await ensureBoardColumns(deps.db, orgId, projectId);
@@ -536,6 +541,7 @@ export async function applyColumnTemplate(
           stage: c.stage,
           name: c.name.trim().slice(0, 40) || null,
           position: i,
+          waitsForPerson: c.waitsForPerson === true,
         })),
       )
       .returning();
@@ -571,6 +577,7 @@ export async function saveColumnTemplate(
   const columns = (await boardColumnsOf(deps.db, orgId, input.projectId ?? null)).map((c) => ({
     name: c.name ?? c.stage,
     stage: c.stage,
+    ...(c.waitsForPerson ? { waitsForPerson: true } : {}),
   }));
   if (columns.length === 0) throw new ValidationError("There are no columns to save");
   const [row] = await deps.db
@@ -598,7 +605,7 @@ function templateName(name: string) {
 }
 
 /** A set's columns as given: each named (1 to 40 characters) and in a stage of the board, at least one. */
-function templateColumns(columns: { name: string; stage: IssueStatus }[]) {
+function templateColumns(columns: TemplateColumn[]) {
   if (columns.length === 0) {
     throw new ValidationError("A set needs at least one column", "issue_template.empty");
   }
@@ -619,7 +626,7 @@ function templateColumns(columns: { name: string; stage: IssueStatus }[]) {
       });
     }
     seen.add(clean.toLowerCase());
-    return { name: clean, stage: c.stage };
+    return { name: clean, stage: c.stage, ...(c.waitsForPerson === true ? { waitsForPerson: true } : {}) };
   });
 }
 
@@ -631,7 +638,7 @@ export async function createColumnTemplate(
   deps: ColumnDeps,
   userId: string,
   orgId: string,
-  input: { name: string; columns: { name: string; stage: IssueStatus }[] },
+  input: { name: string; columns: TemplateColumn[] },
 ): Promise<ColumnTemplateView> {
   await requirePoster(deps.db, userId, orgId);
   const name = templateName(input.name);
@@ -656,7 +663,7 @@ export async function updateColumnTemplate(
   userId: string,
   orgId: string,
   templateId: string,
-  patch: { name?: string; columns?: { name: string; stage: IssueStatus }[] },
+  patch: { name?: string; columns?: TemplateColumn[] },
 ): Promise<ColumnTemplateView> {
   await requirePoster(deps.db, userId, orgId);
   const set: Partial<typeof issueColumnTemplates.$inferInsert> = {};

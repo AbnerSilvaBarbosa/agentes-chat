@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { eq, schema, sql } from "@agenteschat/db";
 import {
+  applyColumnTemplate,
+  createColumnTemplate,
   createIssue,
   createIssueColumn,
   createIssueProject,
   ForbiddenError,
+  listColumnTemplates,
   listIssueColumns,
   NotFoundError,
+  saveColumnTemplate,
   setColumnWaits,
+  updateColumnTemplate,
   updateIssue,
   updateIssueColumn,
 } from "../src";
@@ -164,5 +169,99 @@ describe("a column that waits for a person", () => {
     } finally {
       await other.close();
     }
+  });
+});
+
+describe("status sets carry the flag", () => {
+  test("a set keeps a flag only when it is true, and the seeded sets are unflagged", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const made = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Entrega",
+      columns: [
+        { name: "Fazer", stage: "todo" },
+        { name: "Teste humano", stage: "in_review", waitsForPerson: true },
+        { name: "Talvez", stage: "in_review", waitsForPerson: "yes" as unknown as boolean },
+        { name: "Pronto", stage: "done", waitsForPerson: false },
+      ],
+    });
+    expect(made.columns).toEqual([
+      { name: "Fazer", stage: "todo" },
+      { name: "Teste humano", stage: "in_review", waitsForPerson: true },
+      { name: "Talvez", stage: "in_review" },
+      { name: "Pronto", stage: "done" },
+    ]);
+    const seeded = (await listColumnTemplates(f.db, f.owner.id, f.org.id)).filter((t) => t.seeded);
+    expect(seeded.length).toBeGreaterThan(0);
+    expect(seeded.flatMap((t) => t.columns).some((c) => c.waitsForPerson)).toBe(false);
+  });
+
+  test("a board made from a set carries the flags of its columns", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const set = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+      name: "Entrega",
+      columns: [
+        { name: "Fazer", stage: "todo" },
+        { name: "Teste humano", stage: "in_review", waitsForPerson: true },
+        { name: "Pronto", stage: "done" },
+      ],
+    });
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site" });
+    const made = await applyColumnTemplate(deps, f.owner.id, f.org.id, board.id, set.id);
+    const own = made.filter((c) => c.projectId === board.id);
+    expect(own.map((c) => [c.name, c.waitsForPerson])).toEqual([
+      ["Fazer", false],
+      ["Teste humano", true],
+      ["Pronto", false],
+    ]);
+  });
+
+  test("a set saved from a board and edited keeps the flags", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site" });
+    const cols = await createIssueColumn(deps, f.owner.id, f.org.id, {
+      name: "Teste humano",
+      stage: "in_review",
+      projectId: board.id,
+    });
+    const human = must(cols.find((c) => c.name === "Teste humano"));
+    await setColumnWaits(deps, f.owner.id, f.org.id, human.id, true, board.id);
+
+    const saved = await saveColumnTemplate(deps, f.owner.id, f.org.id, { name: "Do site", projectId: board.id });
+    expect(saved.columns.filter((c) => c.waitsForPerson)).toEqual([
+      { name: "Teste humano", stage: "in_review", waitsForPerson: true },
+    ]);
+
+    // An edit keeps the flags it is sent, and a column without one is unflagged.
+    const edited = await updateColumnTemplate(deps, f.owner.id, f.org.id, saved.id, {
+      columns: [
+        ...saved.columns.map((c) => (c.name === "Teste humano" ? { ...c, name: "QA humano" } : c)),
+        { name: "Extra", stage: "todo" },
+      ],
+    });
+    expect(edited.columns.find((c) => c.name === "QA humano")).toEqual({
+      name: "QA humano",
+      stage: "in_review",
+      waitsForPerson: true,
+    });
+    expect(edited.columns.filter((c) => c.waitsForPerson)).toHaveLength(1);
+    const reread = (await listColumnTemplates(f.db, f.owner.id, f.org.id)).find((t) => t.id === saved.id);
+    expect(reread?.columns.filter((c) => c.waitsForPerson).map((c) => c.name)).toEqual(["QA humano"]);
+  });
+
+  test("a set without the key reads as unflagged and a board made from it starts unflagged", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [row] = await f.db
+      .insert(schema.issueColumnTemplates)
+      .values({ orgId: f.org.id, name: "Antigo", columns: [{ name: "Fazer", stage: "todo" }] })
+      .returning();
+    const old = (await listColumnTemplates(f.db, f.owner.id, f.org.id)).find((t) => t.id === must(row).id);
+    expect(old?.columns.some((c) => c.waitsForPerson)).toBe(false);
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site" });
+    const made = await applyColumnTemplate(deps, f.owner.id, f.org.id, board.id, must(row).id);
+    expect(made.filter((c) => c.projectId === board.id).every((c) => c.waitsForPerson === false)).toBe(true);
   });
 });

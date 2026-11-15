@@ -76,8 +76,8 @@ export const issueColumnTemplates = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     name: text().notNull(),
-    /** `[{ name, stage }]`, in the order the board shows them. */
-    columns: jsonb().$type<{ name: string; stage: string }[]>().notNull().default([]),
+    /** `[{ name, stage, waitsForPerson? }]`, in the order the board shows them. */
+    columns: jsonb().$type<{ name: string; stage: string; waitsForPerson?: boolean }[]>().notNull().default([]),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("issue_column_templates_org_name").on(t.orgId, sql`lower(${t.name})`)],
