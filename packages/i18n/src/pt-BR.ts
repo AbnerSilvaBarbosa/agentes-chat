@@ -3377,6 +3377,8 @@ export const ptBR = {
     channel: {
       agent_added: "Chamei {{agentName}} para <b>#{{channel}}</b>",
       created: "Criei o canal <b>#{{name}}</b>",
+      created_category: "Criei o canal <b>#{{name}}</b> na categoria <b>{{category}}</b>",
+      created_new_category: "Criei o canal <b>#{{name}}</b> e a categoria <b>{{category}}</b>",
     },
     channel_category: {
       created: "Criei a categoria <b>{{name}}</b>",
@@ -3493,6 +3495,7 @@ export const ptBR = {
       channel: {
         agent_added: "Chamei {{agentName}} para {{refs}}",
         created: "Criei os canais {{refs}}",
+        created_category: "Criei os canais {{refs}} na categoria <b>{{category}}</b>",
       },
       wiki: {
         page_created: "Criei na wiki as páginas {{refs}}",

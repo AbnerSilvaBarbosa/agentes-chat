@@ -137,8 +137,12 @@ export function actionTextValues(
     }
     case "channel.agent_added":
       return { agentName: str(p.agentName), channel: str(p.channel) || a.target.title || "" };
-    case "channel.created":
-      return { name: str(p.name) || a.target.title || "" };
+    case "channel.created": {
+      const name = str(p.name) || a.target.title || "";
+      const category = str(p.category);
+      if (!category) return { name };
+      return { name, category, context: p.categoryCreated === true ? "new_category" : "category" };
+    }
     case "channel_category.created": {
       const taken = Array.isArray(p.channels) ? p.channels.filter((v): v is string => typeof v === "string") : [];
       const name = str(p.name) || a.target.title || "";
@@ -231,6 +235,8 @@ interface Blend {
   same?: (a: AgentAction, v: Values) => unknown;
   /** Contexts with a sentence of their own when several are said together (`_self`, `_rule`). */
   contexts?: string[];
+  /** A context said as another when several are said together (a channel that made its category reads as the rest). */
+  as?: Record<string, string>;
   /** Said in words rather than named (a memory): the kind's own sentence, with all of them in this value. */
   slot?: string;
 }
@@ -256,7 +262,13 @@ const BLENDS: Partial<Record<AgentActionKind, Blend>> = {
   "routine.updated": { ref: named("name"), same: (a) => a.params.fields },
   "routine.deleted": { ref: named("name") },
   "channel.agent_added": { ref: hashed("channel"), same: (a, v) => a.params.agentId ?? v.agentName },
-  "channel.created": { ref: hashed("name") },
+  // One category's channels are one row, whichever of them made the category.
+  "channel.created": {
+    ref: hashed("name"),
+    same: (_a, v) => v.category ?? "",
+    contexts: ["category"],
+    as: { new_category: "category" },
+  },
   "wiki.page_created": { ref: named("title") },
   "wiki.page_edited": { ref: named("title") },
   "wiki.page_moved": { ref: named("title"), same: (a) => a.params.to ?? "", contexts: ["root"] },
@@ -283,7 +295,8 @@ function blendKey(a: AgentAction, v: Values): string | null {
   const fields = Array.isArray(a.params.fields) ? a.params.fields : [];
   if (!how?.ref(v) || own || SAYS_WHAT.has(v.context ?? "") || fields.some((f) => OWN_FIELDS.has(String(f))))
     return null;
-  const context = v.context && how.contexts?.includes(v.context) ? v.context : "";
+  const said = v.context ? (how.as?.[v.context] ?? v.context) : "";
+  const context = said && how.contexts?.includes(said) ? said : "";
   // Undone by one person, or doing the same on its own: the line under the row stays true for all of it.
   const undone = a.undoneAt ? (a.undoneByUserId ?? "") : null;
   return JSON.stringify([a.kind, context, how.same?.(a, v) ?? null, undone, routineOwnActions(a)]);
@@ -393,7 +406,8 @@ export function receiptPieces(
         : {};
     return parts(say(t, actionTextKey(first), { ...values, ...all }, context), refs, first, false);
   }
-  const own = context && how?.contexts?.includes(context) ? context : undefined;
+  const said = context ? (how?.as?.[context] ?? context) : "";
+  const own = said && how?.contexts?.includes(said) ? said : undefined;
   const refsText = joinNames(
     refs.map((_, i) => slot(i)),
     t,

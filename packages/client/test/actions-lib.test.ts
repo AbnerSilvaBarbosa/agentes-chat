@@ -220,6 +220,65 @@ describe("receipts in rows, one line each", () => {
           .join("")
       : null;
 
+  const channel = (name: string, params: Record<string, unknown> = {}) =>
+    action({
+      id: `ch-${name}`,
+      kind: "channel.created",
+      target: { type: "channel", id: `c-${name}`, title: name },
+      params: { name, ...params },
+    });
+  const categoryReceipt = (name: string, channels: string[] = []) =>
+    action({
+      id: `cat-${name}`,
+      kind: "channel_category.created",
+      target: { type: "channel_category", id: `k-${name}`, title: name },
+      params: { name, channels },
+    });
+
+  test("says a category receipt and a channel made in a category in pt-BR and en, and three channels of one category read as one row", () => {
+    const one = (a: AgentAction, t = pt) => words(receiptRows([a], t)[0], t);
+    expect(one(categoryReceipt("Livora"))).toBe("Criei a categoria [Livora]");
+    expect(one(categoryReceipt("Livora", ["vendas", "suporte"]))).toBe(
+      "Criei a categoria [Livora] com #vendas, #suporte",
+    );
+    expect(one(categoryReceipt("Livora"), en)).toBe("Created the category [Livora]");
+    expect(one(categoryReceipt("Livora", ["vendas"]), en)).toBe("Created the category [Livora] with #vendas");
+    // A channel without a category reads as before; in an existing one, or with the category made now, its own sentence.
+    expect(one(channel("vendas"))).toBe("Criei o canal [#vendas]");
+    expect(one(channel("vendas", { category: "Livora" }))).toBe("Criei o canal [#vendas] na categoria [Livora]");
+    expect(one(channel("vendas", { category: "Livora", categoryCreated: true }))).toBe(
+      "Criei o canal [#vendas] e a categoria [Livora]",
+    );
+    expect(one(channel("vendas", { category: "Livora" }), en)).toBe(
+      "Created the channel [#vendas] in the category [Livora]",
+    );
+    expect(one(channel("vendas", { category: "Livora", categoryCreated: true }), en)).toBe(
+      "Created the channel [#vendas] and the category [Livora]",
+    );
+
+    // Three of one new category (the first made it): one row naming the category.
+    const three = [
+      channel("vendas", { category: "Livora", categoryCreated: true }),
+      channel("suporte", { category: "Livora" }),
+      channel("financeiro", { category: "Livora" }),
+    ];
+    const rows = receiptRows(three, pt);
+    expect(rows).toHaveLength(1);
+    expect(words(rows[0])).toBe("Criei os canais [#vendas], [#suporte] e [#financeiro] na categoria [Livora]");
+    expect(words(receiptRows(three, en)[0], en)).toBe(
+      "Created the channels [#vendas], [#suporte], and [#financeiro] in the category [Livora]",
+    );
+    // Channels of different categories, or with none, keep separate rows.
+    const mixed = [
+      channel("a", { category: "Livora", categoryCreated: true }),
+      channel("b", { category: "Outra", categoryCreated: true }),
+      channel("c"),
+    ];
+    expect(receiptRows(mixed, pt).map((r) => r.actions.length)).toEqual([1, 1, 1]);
+    // Plain channels still blend with each other.
+    expect(receiptRows([channel("a"), channel("b")], pt)).toHaveLength(1);
+  });
+
   test("tasks made together are one row, each number opening its own; another kind keeps its row, in order", () => {
     const rows = receiptRows([task(58), memory("m1", "o deploy é às 18h"), task(59), task(60)], pt);
     expect(rows.map((r) => words(r))).toEqual([

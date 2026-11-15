@@ -3457,6 +3457,8 @@ export const en = {
     channel: {
       agent_added: "Brought {{agentName}} into <b>#{{channel}}</b>",
       created: "Created the channel <b>#{{name}}</b>",
+      created_category: "Created the channel <b>#{{name}}</b> in the category <b>{{category}}</b>",
+      created_new_category: "Created the channel <b>#{{name}}</b> and the category <b>{{category}}</b>",
     },
     channel_category: {
       created: "Created the category <b>{{name}}</b>",
@@ -3575,6 +3577,7 @@ export const en = {
       channel: {
         agent_added: "Brought {{agentName}} into {{refs}}",
         created: "Created the channels {{refs}}",
+        created_category: "Created the channels {{refs}} in the category <b>{{category}}</b>",
       },
       wiki: {
         page_created: "Created the wiki pages {{refs}}",

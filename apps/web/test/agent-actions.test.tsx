@@ -156,6 +156,42 @@ describe("receipts under the agent's reply", () => {
     expect(group.textContent).not.toContain("Quem vê");
   });
 
+  test("a channel made in a new category reads as one row with Desfazer", async () => {
+    // The row is one change: the channel and its category in one sentence, with the channel's name opening it.
+    await open(
+      withActions([
+        action({
+          kind: "channel.created",
+          target: { type: "channel", id: ENG_ID, title: "vendas" },
+          params: { name: "vendas", category: "Livora", categoryCreated: true },
+        }),
+      ]),
+    );
+    const group = receipts();
+    const rows = group.querySelectorAll(".ag-rc");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toBe("Criei o canal #vendas e a categoria Livora");
+    expect(group.querySelector(".ag-rcg__hd")).toBeNull();
+    expect(rows[0]?.className).not.toContain("is-undone");
+    // Undone by someone: the same one row, struck through, not two.
+    cleanup();
+    await open(
+      withActions([
+        action({
+          kind: "channel.created",
+          target: { type: "channel", id: ENG_ID, title: "vendas" },
+          params: { name: "vendas", category: "Livora", categoryCreated: true },
+          undoneAt: inMs(-60_000),
+          undoneByUserId: "u-joao",
+        }),
+      ]),
+    );
+    const undone = receipts().querySelectorAll(".ag-rc");
+    expect(undone).toHaveLength(1);
+    expect(undone[0]?.className).toContain("is-undone");
+    expect(undone[0]?.textContent).toContain("Criei o canal #vendas e a categoria Livora");
+  });
+
   test("a created routine says what it does on its own, without asking", async () => {
     await open(
       withActions([
