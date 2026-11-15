@@ -27,6 +27,8 @@ import {
 } from "./issues";
 import { fileIdsOf, getMessage } from "./messages";
 import { can, getMembership, listMembers } from "./organizations";
+import { poScopeOf } from "./po-chat";
+import { proposeCard } from "./po-proposals";
 import { chosenAudience, personBehindCall, visibleToField } from "./requester";
 import { isRightHand, rightHandReader } from "./right-hand";
 import { replyThreadOf } from "./runs";
@@ -36,6 +38,9 @@ import type { ToolContext, ToolDefinition, ToolOutput, ToolSource } from "./tool
 import { untrustedBlock } from "./untrusted";
 
 export const UPDATE_ISSUE_TOOL = "update_issue";
+
+/** What `create_issue` answers in a PO chat. */
+const PO_CREATE_REFUSAL = "In a PO chat nothing is created without a yes: use propose_card.";
 
 const GITHUB_URL_FIELD = {
   type: "string",
@@ -730,6 +735,47 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
     },
     {
+      name: "propose_card",
+      description:
+        "Propose a card to the person in this PO chat: a title, a summary, the acceptance criteria and the board it belongs to (a board of this company). Nothing is created until the person confirms the card in the chat; never say the card exists before that. Check the cards you can see for a similar title before proposing.",
+      scope: "issues:write",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 300 },
+          summary: { type: "string", maxLength: 20000 },
+          criteria: { type: "array", items: { type: "string", maxLength: 500 }, maxItems: 30 },
+          board: {
+            type: "string",
+            minLength: 1,
+            maxLength: 80,
+            description: "The board's name, one of this company's.",
+          },
+        },
+        required: ["title", "board"],
+        additionalProperties: false,
+      },
+      async execute(input, ctx) {
+        try {
+          const p = await proposeCard(deps, ctx, {
+            title: str(input.title),
+            summary: str(input.summary),
+            criteria: Array.isArray(input.criteria) ? input.criteria.map(String) : [],
+            board: str(input.board),
+          });
+          const duplicate = p.duplicateOf
+            ? ` It looks like the open card #${p.duplicateOf.number} "${p.duplicateOf.title}": say so to the person.`
+            : "";
+          return {
+            content: `Proposed "${p.title}" on ${p.project.name}. It waits for the person's confirmation; never say the card exists before that.${duplicate}`,
+            data: { cardProposal: { id: p.id } },
+          };
+        } catch (error) {
+          return failed(error);
+        }
+      },
+    },
+    {
       name: "create_issue",
       description:
         "Create a task on this workspace's board: task, tarefa or backlog mean this board, never GitHub or another tool unless the person names it (criar tarefa no backlog). It takes a title, a description and acceptance criteria (a checklist), and optionally a priority, labels, a project, an assignee and a due date. No permission needed: when work should be tracked, create it; the person sees it with Undo.",
@@ -759,6 +805,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
       async execute(input, ctx) {
         try {
+          // Code, not the prompt: a computer brain lists tools once and a model may call a name it remembers.
+          if (await poScopeOf(deps.db, ctx.orgId, ctx.channelId)) return { content: PO_CREATE_REFUSAL, isError: true };
           const assignee = str(input.assignee) ? await assigneeOf(deps, ctx, str(input.assignee)) : undefined;
           const reader = await rightHandReader(ctx);
           if (reader) {
@@ -1001,5 +1049,12 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
     },
   ];
-  return { name: "issues", tools: async () => tools };
+  return {
+    name: "issues",
+    // A PO chat offers `propose_card` and never `create_issue` (ADR 0185): nothing there is created without a yes.
+    tools: async (ctx) => {
+      const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+      return tools.filter((t) => (po ? t.name !== "create_issue" : t.name !== "propose_card"));
+    },
+  };
 }

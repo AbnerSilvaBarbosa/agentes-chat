@@ -7,8 +7,10 @@ import {
   createIssue,
   createIssueProject,
   createIssueSpace,
+  createIssueToolSource,
   dismissCardProposal,
   ForbiddenError,
+  grantScopes,
   insertMessage,
   listColumnTemplates,
   listIssueColumns,
@@ -395,5 +397,48 @@ describe("a person confirms or discards a proposal", () => {
     const view = await confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id);
     expect(view.status).toBe("confirmed");
     expect(await f.db.select().from(schema.issues)).toHaveLength(1);
+  });
+});
+
+describe("the propose_card tool", () => {
+  test("propose_card posts a card with title, summary, criteria and board", async () => {
+    f = await setup();
+    const { ctx, chat } = await poRun(f);
+    await grantScopes(f.db, f.org.id, f.agent.id, [{ connectionId: null, scope: "issues:write" }]);
+    const tool = (await createIssueToolSource(f.artifactDeps).tools({ db: f.db, ...ctx })).find(
+      (t) => t.name === "propose_card",
+    );
+    const out = await tool?.execute(
+      {
+        title: "Tela de login",
+        summary: "Entrar com e-mail e senha",
+        criteria: ["Mostra erro de senha", "Lembra o e-mail"],
+        board: "Entregas",
+      },
+      { db: f.db, ...ctx },
+    );
+    expect(out?.isError).toBeUndefined();
+    expect(out?.content).toContain("waits for the person's confirmation");
+    expect(out?.content).toContain("never say the card exists");
+    const [row] = await f.db.select().from(schema.poCardProposals);
+    expect(row).toMatchObject({
+      title: "Tela de login",
+      summary: "Entrar com e-mail e senha",
+      criteria: ["Mostra erro de senha", "Lembra o e-mail"],
+      status: "pending",
+      channelId: chat.channelId,
+    });
+    const [card] = await f.db
+      .select()
+      .from(schema.messages)
+      .where(eq(schema.messages.id, row?.messageId as string));
+    expect(card?.meta).toMatchObject({
+      cardProposal: {
+        title: "Tela de login",
+        project: { name: "Entregas" },
+        criteria: ["Mostra erro de senha", "Lembra o e-mail"],
+      },
+    });
+    expect(await allIssues(f)).toHaveLength(0);
   });
 });
