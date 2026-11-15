@@ -136,6 +136,24 @@ describe("a column that waits for a person", () => {
     for (const r of rows) expect(r.columnSince.toISOString()).toBe("2020-01-01T00:00:00.000Z");
   });
 
+  test("a stale workspace column id flags the board's own copy, never the workspace's column", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const ws = await createIssueColumn(deps, f.owner.id, f.org.id, { name: "QA", stage: "in_review" });
+    const qa = must(ws.find((c) => c.name === "QA" && c.projectId === null));
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site" });
+    const other = await createIssueProject(deps, f.owner.id, f.org.id, { name: "App" });
+    // Another person gave the board its own copy first (any change does); this dialog still holds the workspace ids.
+    await createIssueColumn(deps, f.owner.id, f.org.id, { name: "Extra", stage: "todo", projectId: board.id });
+
+    const after = await setColumnWaits(deps, f.owner.id, f.org.id, qa.id, true, board.id);
+    const own = after.filter((c) => c.projectId === board.id);
+    expect(own.filter((c) => c.waitsForPerson).map((c) => [c.stage, c.name])).toEqual([["in_review", "QA"]]);
+    expect(after.filter((c) => c.projectId === null).some((c) => c.waitsForPerson)).toBe(false);
+    const read = await listIssueColumns(f.db, f.owner.id, f.org.id, other.id);
+    expect(read.some((c) => c.waitsForPerson)).toBe(false);
+  });
+
   test("refuses a flag change from a member without the right", async () => {
     f = await setup();
     const deps = { db: f.db, pubsub: f.pubsub };

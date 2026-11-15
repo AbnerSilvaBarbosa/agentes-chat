@@ -361,12 +361,17 @@ export async function setColumnWaits(
   if (!column) throw new NotFoundError("Column not found");
   let target = column;
   if (!column.projectId && projectId) {
-    const own = await deps.db
-      .select({ id: issueColumns.id })
-      .from(issueColumns)
-      .where(and(eq(issueColumns.orgId, orgId), eq(issueColumns.projectId, projectId)))
-      .limit(1);
-    if (own.length === 0) {
+    const own = await boardColumnsOf(deps.db, orgId, projectId);
+    if (own.some((c) => c.projectId === projectId)) {
+      // The board already has its own copy and the id is the workspace's (the dialog was stale): the column is the copy's
+      // at the same place, never the workspace's, which every other board follows.
+      const base = await boardColumns(deps.db, orgId);
+      const copy =
+        own.find((c) => c.stage === column.stage && c.name === column.name) ??
+        own[base.findIndex((c) => c.id === column.id)];
+      if (!copy) throw new NotFoundError("Column not found");
+      target = copy;
+    } else {
       const base = await boardColumns(deps.db, orgId);
       const copies = await ensureBoardColumns(deps.db, orgId, projectId);
       const at = base.findIndex((c) => c.id === column.id);
