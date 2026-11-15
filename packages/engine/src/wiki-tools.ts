@@ -4,7 +4,7 @@ import { agentRoom } from "./artifacts";
 import { cutText } from "./format";
 import { can, getMembership } from "./organizations";
 import { poScopeOf } from "./po-chat";
-import { specFolder } from "./po-spec-brief";
+import { otherCompanysSpecs, specFolder } from "./po-spec-brief";
 import { chosenAudience, personBehindCall, routineCreatorOfCall, visibleToField, wikiActorOfCall } from "./requester";
 import { isRightHand } from "./right-hand";
 import { audienceOfConversation } from "./task-access";
@@ -71,13 +71,6 @@ const wikiEdit = (
 async function specsScope(ctx: ToolContext) {
   const po = await poScopeOf(ctx.db, ctx.orgId, ctx.channelId);
   return po ? { name: po.name, own: specFolder(po.name) } : null;
-}
-
-/** Whether `folder` is, or is under, another company's folder in `Specs/` (compared in any capitals). */
-function otherCompanysSpecs(folder: string, own: string) {
-  const f = folder.toLowerCase();
-  const mine = own.toLowerCase();
-  return f.startsWith("specs/") && f !== mine && !f.startsWith(`${mine}/`);
 }
 
 const otherSpecsRefusal = (po: { name: string; own: string }) =>

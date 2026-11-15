@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { eq, schema } from "@agenteschat/db";
+import { eq, schema, sql } from "@agenteschat/db";
 import { systemText } from "@agenteschat/providers";
 import {
   buildRunContext,
   checkInWork,
+  createContextToolSource,
   createIssue,
   createIssueColumn,
   createIssueProject,
@@ -14,6 +15,7 @@ import {
   drainOutbox,
   getWikiPage,
   grantScopes,
+  indexSource,
   insertMessage,
   moveToBackground,
   openDm,
@@ -393,6 +395,49 @@ describe("the card tools keep to the company in scope", () => {
     const unknown = await call("update_issue", { issue: `#${mine.number}`, project: "Entregas", company: "Gama" });
     expect(unknown.isError).toBe(true);
     expect(unknown.content).not.toContain("Beta");
+  });
+
+  test("search_context keeps to the company: other companies' cards and specs are not hits", async () => {
+    f = await setup();
+    const { mine, theirs, loose, company, beta } = await twoCompanies();
+    const wiki = { db: f.db, pubsub: f.pubsub, search: f.context };
+    const page = (title: string, folder: string) =>
+      createWikiPage(wiki, owner(), f.org.id, { title, folder, body: "Zebra checklist." });
+    const own = await page("Spec Acme zebra", "Specs/Acme");
+    const other = await page("Spec Beta zebra", "Specs/Beta");
+    const nested = await page("Spec Beta fundo zebra", "specs/beta/Fase 2");
+    const general = await page("Guia geral zebra", "Guias");
+    await f.db.update(schema.issues).set({ title: sql`${schema.issues.title} || ' zebra'` });
+    for (const id of [mine.id, theirs.id, loose.id])
+      await indexSource(f.context, { orgId: f.org.id, kind: "issue", sourceId: id });
+    for (const p of [own, other, nested, general])
+      await indexSource(f.context, { orgId: f.org.id, kind: "wiki", sourceId: p.id });
+    expect(company.id).not.toBe(beta.id);
+
+    const inPo = await runIn(f, (await openPoChat(f.db, f.owner.id, f.org.id, company.id)).channelId);
+    const search = async (ctx: typeof inPo, query: string, kinds: string[]) =>
+      (
+        await (
+          await createContextToolSource(f.context).tools(ctx)
+        )
+          .find((t) => t.name === "search_context")
+          ?.execute({ query, kinds }, ctx)
+      )?.content ?? "";
+    const cards = await search(inPo, "zebra", ["issue"]);
+    expect(cards).toContain(mine.id);
+    expect(cards).not.toContain(theirs.id);
+    expect(cards).not.toContain(loose.id);
+    const pages = await search(inPo, "zebra", ["wiki"]);
+    expect(pages).toContain(own.id);
+    expect(pages).toContain(general.id);
+    expect(pages).not.toContain(other.id);
+    expect(pages).not.toContain(nested.id);
+
+    // Anywhere else every hit is still there.
+    const elsewhere = await runIn(f, f.general.id);
+    const all = await search(elsewhere, "zebra", ["issue"]);
+    expect(all).toContain(theirs.id);
+    expect(await search(elsewhere, "zebra", ["wiki"])).toContain(other.id);
   });
 
   test("list_issues says spec or no spec in a PO chat", async () => {

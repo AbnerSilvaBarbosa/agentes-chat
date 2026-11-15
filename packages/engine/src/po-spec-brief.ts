@@ -1,4 +1,4 @@
-import { and, desc, type Executor, eq, ne, schema, sql } from "@agenteschat/db";
+import { and, desc, type Executor, eq, inArray, ne, schema, sql } from "@agenteschat/db";
 import type { ProposalRow } from "./po-proposals";
 import { taskSeenSql } from "./task-access";
 import { untrustedBlock } from "./untrusted";
@@ -13,6 +13,49 @@ type IssueRow = typeof issues.$inferSelect;
  * of its own, so it becomes `-`. The wiki tools of a PO chat keep to this folder among the `Specs/` pages.
  */
 export const specFolder = (company: string) => cleanFolder(`Specs/${company.replace(/\//g, "-")}`);
+
+/** Whether `folder` is, or is under, another company's folder in `Specs/` (compared in any capitals). */
+export function otherCompanysSpecs(folder: string, own: string) {
+  const f = folder.toLowerCase();
+  const mine = own.toLowerCase();
+  return f.startsWith("specs/") && f !== mine && !f.startsWith(`${mine}/`);
+}
+
+/**
+ * A PO chat's search hits kept to its company (ADR 0185): an issue hit only when its board is the company's (a card
+ * on no board is not), a wiki hit unless the page sits under another company's `Specs/` folder. Other kinds stay.
+ */
+export async function keepHitsToCompany<T extends { kind: string; sourceId: string }>(
+  db: Executor,
+  orgId: string,
+  scope: { spaceId: string; name: string },
+  hits: T[],
+): Promise<T[]> {
+  const ids = (kind: string) => hits.filter((h) => h.kind === kind).map((h) => h.sourceId);
+  const [cards, pages] = await Promise.all([
+    ids("issue").length === 0
+      ? []
+      : db
+          .select({ id: issues.id, spaceId: issueProjects.spaceId })
+          .from(issues)
+          .leftJoin(issueProjects, eq(issueProjects.id, issues.projectId))
+          .where(and(eq(issues.orgId, orgId), inArray(issues.id, ids("issue")))),
+    ids("wiki").length === 0
+      ? []
+      : db
+          .select({ id: schema.wikiPages.id, folder: schema.wikiPages.folder })
+          .from(schema.wikiPages)
+          .where(and(eq(schema.wikiPages.orgId, orgId), inArray(schema.wikiPages.id, ids("wiki")))),
+  ]);
+  const mine = new Set(cards.filter((c) => c.spaceId === scope.spaceId).map((c) => c.id));
+  const own = specFolder(scope.name);
+  const folders = new Map(pages.map((p) => [p.id, p.folder]));
+  return hits.filter((h) => {
+    if (h.kind === "issue") return mine.has(h.sourceId);
+    if (h.kind === "wiki") return !otherCompanysSpecs(folders.get(h.sourceId) ?? "", own);
+    return true;
+  });
+}
 
 /**
  * The wiki page's title for a card (ADR 0185): the card's title without the characters a wiki title cannot hold

@@ -32,6 +32,8 @@ import { announceMessageMemories } from "../message-memories";
 import { quietNoticeSql } from "../notices";
 import { can, getMembership } from "../organizations";
 import { personWords, runReadOutsideById, UNASKED_DESTINATION, unaskedDestination } from "../outside";
+import { poScopeOf } from "../po-chat";
+import { keepHitsToCompany } from "../po-spec-brief";
 import { personBehindCall, wikiActorOfCall } from "../requester";
 import { isRightHandId, rightHandReader } from "../right-hand";
 import { agentSearchChannels, agentVisibleChannels, indexSource, searchForUser, searchVisible } from "../search";
@@ -193,10 +195,11 @@ export function createContextToolSource(deps: ContextDeps): ToolSource {
         additionalProperties: false,
       },
       async execute(input, ctx) {
-        const [channels, person, reader] = await Promise.all([
+        const [channels, person, reader, po] = await Promise.all([
           visible(ctx),
           personRequester(ctx),
           rightHandReader(ctx),
+          poScopeOf(ctx.db, ctx.orgId, ctx.channelId),
         ]);
         const dm = await agentsDmReads(ctx.db, ctx.orgId, ctx.channelId, () => readerOfCall(ctx));
         // Only where no person reads the answer: a channel never gets what someone said in their DM.
@@ -213,7 +216,10 @@ export function createContextToolSource(deps: ContextDeps): ToolSource {
                 kinds,
                 limit,
               })
-          ).then(async (found) => wikiHitsForAgent(ctx.db, await wikiActorOfCall(ctx), found)),
+          )
+            .then(async (found) => wikiHitsForAgent(ctx.db, await wikiActorOfCall(ctx), found))
+            // A PO chat reads its company only (ADR 0185): other companies' cards and specs are not hits.
+            .then((found) => (po ? keepHitsToCompany(ctx.db, ctx.orgId, po, found) : found)),
           kinds ? [] : ownPastSteps(ctx.db, ctx.orgId, ctx.agentId, ctx.runId, channels, str(input.query), dm),
         ]);
         if (found.length === 0 && steps.length === 0) return { content: "No results." };
