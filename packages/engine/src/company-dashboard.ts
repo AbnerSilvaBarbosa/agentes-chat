@@ -52,7 +52,7 @@ export interface SpanStats {
 }
 
 /** The workspace's time zone, UTC when none is set (or it is not one Postgres reads). */
-async function workspaceTimezone(db: Database, orgId: string) {
+export async function workspaceTimezone(db: Database, orgId: string) {
   const [row] = await db
     .select({ tz: schema.organizationSettings.timezone })
     .from(schema.organizationSettings)
@@ -73,7 +73,7 @@ const mondayOf = (date: string) => {
   return d.getTime() - ((d.getUTCDay() + 6) % 7) * DAY_MS;
 };
 
-const OPEN = sql`status in ('todo', 'in_progress', 'in_review')`;
+export const OPEN = sql`status in ('todo', 'in_progress', 'in_review')`;
 
 /**
  * The tasks of the company's boards (archived boards included) that `userId` sees, as a CTE named `vis`. Canceled
@@ -92,7 +92,7 @@ function visibleTasks(userId: string, orgId: string, spaceId: string) {
  * The conclusion of each task of `t`: the task's status is `done` now and its last move to `done` (a status change or
  * a column move write the same event) is the date; a done task with no such event takes its creation.
  */
-const CONCLUDED = sql`ev as (
+export const CONCLUDED = sql`ev as (
       select a.issue_id, max(a.created_at) filter (where a.data->>'to' = 'done') as last_done,
         min(a.created_at) filter (where a.data->>'to' = 'in_progress') as first_start
       from ${schema.issueActivity} a join t on t.id = a.issue_id

@@ -123,6 +123,7 @@ export * from "./errors";
 export * from "./events";
 export * from "./executor";
 export * from "./exports";
+export * from "./factory-home";
 export * from "./feedback";
 export * from "./feedback-offers";
 export * from "./feedback-tools";

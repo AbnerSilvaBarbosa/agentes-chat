@@ -1,0 +1,241 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { eq, schema } from "@agenteschat/db";
+import { companyDashboard, factoryHome } from "../src";
+import { addMember, type Fixture, setup } from "./fixtures";
+
+let f: Fixture;
+afterEach(async () => {
+  const current = f;
+  f = undefined as unknown as Fixture;
+  await current?.close();
+});
+
+/** Noon on a Wednesday. */
+const NOW = new Date("2026-11-11T12:00:00Z");
+const ago = (days: number) => new Date(NOW.getTime() - days * 86_400_000);
+const must = <T>(v: T | undefined): T => {
+  if (v === undefined) throw new Error("missing");
+  return v;
+};
+
+type Status = "todo" | "in_progress" | "in_review" | "done" | "canceled";
+let counter = 0;
+
+/** Makes a company with one board, and puts tasks on any board; `moves` write the `status_changed` events. */
+async function company(name: string) {
+  const [space] = await f.db.insert(schema.issueSpaces).values({ orgId: f.org.id, name }).returning();
+  const spaceId = must(space).id;
+  const board = async (boardName = "Entregas") => {
+    const [row] = await f.db
+      .insert(schema.issueProjects)
+      .values({ orgId: f.org.id, name: boardName, spaceId })
+      .returning();
+    return must(row);
+  };
+  const first = await board();
+  async function task(
+    input: Partial<typeof schema.issues.$inferInsert> & { status?: Status; moves?: [Status, number][] } = {},
+  ) {
+    const { moves, ...values } = input;
+    const [row] = await f.db
+      .insert(schema.issues)
+      .values({
+        orgId: f.org.id,
+        number: ++counter,
+        title: `Task ${counter}`,
+        projectId: first.id,
+        createdByType: "person",
+        createdById: f.owner.id,
+        createdAt: ago(40),
+        ...values,
+      })
+      .returning();
+    for (const [to, daysAgo] of moves ?? []) {
+      await f.db.insert(schema.issueActivity).values({
+        orgId: f.org.id,
+        issueId: must(row).id,
+        kind: "event",
+        authorType: "person",
+        authorId: f.owner.id,
+        text: `changed the status to ${to}`,
+        event: "status_changed",
+        data: { to },
+        createdAt: ago(daysAgo),
+      });
+    }
+    return must(row);
+  }
+  return { spaceId, board, first, task };
+}
+
+const read = (userId: string = f.owner.id) => factoryHome(f.db, userId, f.org.id, NOW);
+
+describe("factoryHome panels", () => {
+  test("makes one panel per company with a live task the viewer sees", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const b = await company("Beta");
+    await company("Vazia");
+    const hidden = await company("Oculta");
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    await a.task({ status: "todo" });
+    await b.task({ status: "in_progress" });
+    // A company whose only task the viewer may not see makes no panel for them.
+    await hidden.task({ status: "todo", restricted: true, audienceUserIds: [f.owner.id] });
+
+    const asMember = await read(member.id);
+    expect(asMember.companies.map((c) => c.name)).toEqual(["Alfa", "Beta"]);
+    expect(asMember.companiesTotal).toBe(2);
+    const asOwner = await read();
+    expect(asOwner.companies.map((c) => c.name).sort()).toEqual(["Alfa", "Beta", "Oculta"]);
+  });
+
+  test("a workspace with no live task gives no company", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    await a.task({ status: "canceled" });
+    expect(await read()).toEqual({ companies: [], companiesTotal: 0, waiting: { total: 0, items: [] } });
+  });
+
+  test("counts a company's open tasks by stage and its done in the last 7 days", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    await f.db
+      .update(schema.issueSpaces)
+      .set({ color: "red", image: "abc.png" })
+      .where(eq(schema.issueSpaces.id, a.spaceId));
+    await a.task({ status: "todo" });
+    await a.task({ status: "todo" });
+    await a.task({ status: "in_progress" });
+    await a.task({ status: "in_review" });
+    await a.task({ status: "in_review" });
+    await a.task({ status: "in_review" });
+    await a.task({ status: "done", moves: [["done", 3]] });
+    await a.task({ status: "done", moves: [["done", 6]] });
+    // Concluded before the week: not counted.
+    await a.task({ status: "done", moves: [["done", 10]] });
+    const [panel] = (await read()).companies;
+    expect(panel).toEqual({
+      id: a.spaceId,
+      name: "Alfa",
+      color: "red",
+      image: `/api/app/organizations/${encodeURIComponent(f.org.id)}/issue-space-images/abc.png`,
+      stages: { todo: 2, in_progress: 1, in_review: 3, done: 2 },
+      late: 0,
+      waiting: 0,
+    });
+  });
+
+  test("matches the Painel's stage counts for the same viewer", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    await a.task({ status: "todo" });
+    await a.task({ status: "in_progress", moves: [["in_progress", 5]] });
+    await a.task({ status: "in_review" });
+    await a.task({
+      status: "done",
+      moves: [
+        ["in_progress", 5],
+        ["done", 2],
+      ],
+    });
+    await a.task({ status: "done", moves: [["done", 20]] });
+    await a.task({ status: "canceled" });
+    await a.task({ status: "todo", restricted: true, audienceUserIds: [f.owner.id] });
+    for (const viewer of [f.owner.id, member.id]) {
+      const painel = await companyDashboard(f.db, viewer, f.org.id, a.spaceId, 7, NOW);
+      const [panel] = (await read(viewer)).companies;
+      expect(panel?.stages).toEqual(painel.stages);
+      expect(panel?.late).toBe(painel.late);
+    }
+  });
+
+  test("counts the late tasks and the tasks waiting for a person per company", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const b = await company("Beta");
+    const [col] = await f.db
+      .insert(schema.issueColumns)
+      .values({ orgId: f.org.id, stage: "in_review", name: "Teste humano", position: 5, waitsForPerson: true })
+      .returning();
+    // Due before today (Nov 11): late when open; today and later are not; a done task is never late.
+    await a.task({ status: "todo", dueDate: "2026-11-10" });
+    await a.task({ status: "in_progress", dueDate: "2026-11-01" });
+    await a.task({ status: "todo", dueDate: "2026-11-11" });
+    await a.task({ status: "todo", dueDate: "2026-11-30" });
+    await a.task({ status: "done", dueDate: "2026-10-01", moves: [["done", 2]] });
+    await a.task({ status: "in_review", columnId: must(col).id });
+    await a.task({ status: "in_review", columnId: must(col).id });
+    // A done task in a flagged column does not wait; another company with none flagged shows none.
+    await b.task({ status: "in_progress", dueDate: "2026-11-09" });
+    const byName = new Map((await read()).companies.map((c) => [c.name, c]));
+    expect(byName.get("Alfa")?.late).toBe(2);
+    expect(byName.get("Alfa")?.waiting).toBe(2);
+    expect(byName.get("Beta")?.late).toBe(1);
+    expect(byName.get("Beta")?.waiting).toBe(0);
+  });
+
+  test("orders the panels by tasks waiting then by name", async () => {
+    f = await setup();
+    const names = ["Zeta", "alfa", "Beta", "Gama"];
+    const spaces = new Map<string, Awaited<ReturnType<typeof company>>>();
+    for (const n of names) spaces.set(n, await company(n));
+    const [col] = await f.db
+      .insert(schema.issueColumns)
+      .values({ orgId: f.org.id, stage: "in_review", name: "Teste humano", position: 5, waitsForPerson: true })
+      .returning();
+    const waits = { status: "in_review" as const, columnId: must(col).id };
+    await must(spaces.get("Zeta")).task(waits);
+    await must(spaces.get("Zeta")).task(waits);
+    await must(spaces.get("Gama")).task(waits);
+    await must(spaces.get("alfa")).task({ status: "todo" });
+    await must(spaces.get("Beta")).task({ status: "todo" });
+    expect((await read()).companies.map((c) => c.name)).toEqual(["Zeta", "Gama", "alfa", "Beta"]);
+  });
+
+  test("counts only the tasks the viewer may see", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    await a.task({ status: "todo" });
+    await a.task({ status: "todo", restricted: true, audienceUserIds: [f.owner.id] });
+    await a.task({ status: "todo", restricted: true, audienceUserIds: [member.id] });
+    expect(must((await read(member.id)).companies[0]).stages.todo).toBe(2);
+    expect(must((await read()).companies[0]).stages.todo).toBe(3);
+  });
+
+  test("leaves canceled tasks archived boards and archived companies out of every number", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const archivedBoard = await a.board("Antigo");
+    const gone = await company("Arquivada");
+    await a.task({ status: "todo" });
+    await a.task({ status: "canceled" });
+    await a.task({ status: "todo", projectId: archivedBoard.id });
+    await a.task({ status: "done", projectId: archivedBoard.id, moves: [["done", 1]] });
+    await gone.task({ status: "todo" });
+    await f.db
+      .update(schema.issueProjects)
+      .set({ archivedAt: NOW })
+      .where(eq(schema.issueProjects.id, archivedBoard.id));
+    await f.db.update(schema.issueSpaces).set({ archivedAt: NOW }).where(eq(schema.issueSpaces.id, gone.spaceId));
+    const home = await read();
+    expect(home.companies.map((c) => c.name)).toEqual(["Alfa"]);
+    expect(home.companiesTotal).toBe(1);
+    expect(must(home.companies[0]).stages).toEqual({ todo: 1, in_progress: 0, in_review: 0, done: 0 });
+  });
+
+  test("shows the first 20 companies and says how many there are", async () => {
+    f = await setup();
+    for (let i = 0; i < 23; i++) {
+      const c = await company(`Empresa ${String(i).padStart(2, "0")}`);
+      await c.task({ status: "todo" });
+    }
+    const home = await read();
+    expect(home.companies.length).toBe(20);
+    expect(home.companiesTotal).toBe(23);
+    expect(home.companies[0]?.name).toBe("Empresa 00");
+    expect(home.companies[19]?.name).toBe("Empresa 19");
+  });
+});

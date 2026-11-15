@@ -64,7 +64,7 @@ export const projectRef = (p: ProjectRow): IssueProjectRef => ({
 });
 
 /** Where a company's image is served: `GET /api/app/organizations/{orgId}/issue-space-images/{file}`. */
-const spaceImageUrl = (orgId: string, file: string) =>
+export const spaceImageUrl = (orgId: string, file: string) =>
   `/api/app/organizations/${encodeURIComponent(orgId)}/issue-space-images/${file}`;
 
 export const spaceRef = (s: SpaceRow): IssueSpaceRef => ({
