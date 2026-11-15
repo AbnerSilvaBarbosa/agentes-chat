@@ -45,6 +45,8 @@ import { missionBrief } from "./mission-brief";
 import { handoffGuidance, noticeForOthers, noticeText } from "./notices";
 import { openRequestsBlock, openRequestsOf } from "./open-requests";
 import { parkedOnBlock } from "./parked-asks";
+import { parsePoChatKey, poScopeOf } from "./po-chat";
+import { poChatBrief } from "./po-chat-context";
 import { reachNote, reachOf } from "./reach";
 import {
   byAnotherAgent,
@@ -818,6 +820,13 @@ export async function buildRunContext(
   // One statement, two parts: what agents already did in this thread (or DM),
   // and this agent's own work in other conversations the requester is in.
   const requester = trigger.authorUserId;
+  // A PO chat (ADR 0185): its company's boards, cards and rules, read for the person behind the run, every turn.
+  const poKey = channel.kind === "dm" ? parsePoChatKey(channel.dmKey) : null;
+  const poBrief = poKey
+    ? await poScopeOf(db, run.orgId, run.channelId).then(
+        (scope) => scope && poChatBrief(db, run.orgId, scope, requester ?? poKey.userId),
+      )
+    : null;
   // Another agent's request made for a person: this agent's work with that person elsewhere counts too.
   const workedFor = requester ?? samePerson?.personId ?? null;
   // A quote reply ("why did the clone hang?"): what the run behind the quoted message did counts as here.
@@ -1255,6 +1264,7 @@ export async function buildRunContext(
     // Per turn and read whole, like memory: it changes between runs, and a live computer session keeps the
     // system prompt it started with.
     ...(openTasks ? await openTasks.then((text) => (text ? [{ turn: true, found: true, text }] : [])) : []),
+    ...(poBrief ? [{ turn: true, found: true, text: poBrief }] : []),
     ...(works ? await works.then((text) => (text ? [{ turn: true, found: true, text }] : [])) : []),
     ...(heldElsewhere ? await heldElsewhere.then((text) => (text ? [{ turn: true, found: true, text }] : [])) : []),
     ...(openRequests ? await openRequests.then((text) => (text ? [{ turn: true, found: true, text }] : [])) : []),
