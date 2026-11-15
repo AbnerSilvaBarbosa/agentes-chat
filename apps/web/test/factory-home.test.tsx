@@ -4,7 +4,7 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 setupDom();
 
 import type { ApiClient, FactoryCompany, FactoryHome as FactoryHomeData, WaitingTask } from "@agenteschat/client";
-import { cleanup, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { FactoryHome } from "@/components/factory/FactoryHome";
 import { FactoryPanels } from "@/components/factory/FactoryPanels";
 import { FactoryWaiting } from "@/components/factory/FactoryWaiting";
@@ -266,5 +266,79 @@ describe("Fábrica on Início", () => {
     await settle(6);
     expect(document.querySelector(".fh")).toBeNull();
     expect(document.querySelector(".home-ask")).not.toBeNull();
+  });
+});
+
+const click = (el: Element) => act(async () => fireEvent.click(el));
+
+/** Two tasks in the flagged column and one outside it, on two companies. */
+async function waitingScene() {
+  const scene = await factoryApi();
+  const { api, board, site, column } = scene;
+  for (const title of ["Teste da tela", "Teste do envio"]) {
+    const made = await api.issues.create(ORG_ID, { title, projectId: board.id });
+    await api.issues.update(ORG_ID, made.id, { columnId: column.id });
+  }
+  await api.issues.create(ORG_ID, { title: "Tarefa comum", projectId: site.id });
+  return scene;
+}
+const visit = async (api: ApiClient, search: string) => {
+  const app = await renderApp(`/org/${ORG_ID}/issues${search}`, { api });
+  await settle(8);
+  return app;
+};
+const searchOf = (app: Awaited<ReturnType<typeof visit>>) =>
+  app.router.state.location.search as Record<string, unknown>;
+
+describe("Tarefas filtered to the tasks that wait for a person", () => {
+  test("lists only the tasks in flagged columns and keeps the toolbar of Todas as tarefas", async () => {
+    const { api } = await waitingScene();
+    await visit(api, "?all=1&waiting=person");
+    expect(screen().queryAllByText("Teste da tela").length).toBeGreaterThan(0);
+    expect(screen().queryAllByText("Teste do envio").length).toBeGreaterThan(0);
+    expect(screen().queryAllByText("Tarefa comum")).toHaveLength(0);
+    // The toolbar of the whole workspace: the Empresa and Board choices.
+    expect(screen().getAllByRole("button", { name: /^Empresa/ }).length).toBeGreaterThan(0);
+    expect(screen().getAllByRole("button", { name: /^Board/ }).length).toBeGreaterThan(0);
+  });
+
+  test("a chip names the filter, and clearing it lists every task again", async () => {
+    const { api } = await waitingScene();
+    const app = await visit(api, "?all=1&waiting=person");
+    expect(screen().getAllByText("Esperando uma pessoa").length).toBeGreaterThan(0);
+    await click(screen().getByRole("button", { name: "Remover o filtro Esperando uma pessoa" }));
+    await settle(8);
+    expect(screen().queryAllByText("Tarefa comum").length).toBeGreaterThan(0);
+    expect(screen().queryAllByText("Teste da tela").length).toBeGreaterThan(0);
+    expect(screen().queryByRole("button", { name: "Remover o filtro Esperando uma pessoa" })).toBeNull();
+    // Only the filter left the address.
+    expect(String(searchOf(app).all)).toBe("1");
+    expect(searchOf(app).waiting).toBeUndefined();
+  });
+
+  test("without the filter there is no chip and every task is listed", async () => {
+    const { api } = await waitingScene();
+    await visit(api, "?all=1");
+    expect(screen().queryByRole("button", { name: "Remover o filtro Esperando uma pessoa" })).toBeNull();
+    expect(screen().queryAllByText("Tarefa comum").length).toBeGreaterThan(0);
+  });
+
+  test("picking a company leaves the filter, as it leaves all", async () => {
+    const { api } = await waitingScene();
+    const app = await visit(api, "?all=1&waiting=person");
+    await click(screen().getAllByRole("button", { name: /^Empresa/ })[0] as Element);
+    await settle(3);
+    await click(screen().getByRole("option", { name: /Beta/ }));
+    await settle(8);
+    expect(searchOf(app).waiting).toBeUndefined();
+    expect(searchOf(app).all).toBeUndefined();
+    expect(searchOf(app).space).toBeDefined();
+  });
+
+  test("a reload keeps the filter: it is in the address", async () => {
+    const { api } = await waitingScene();
+    const app = await visit(api, "?all=1&waiting=person");
+    expect(searchOf(app).waiting).toBe("person");
+    expect(app.router.state.location.href).toContain("waiting=person");
   });
 });

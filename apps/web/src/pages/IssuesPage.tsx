@@ -32,6 +32,7 @@ import {
   cx,
   EmptyState,
   FactLine,
+  FilterChip,
   GroupHeading,
   Icon,
   type IconName,
@@ -135,7 +136,16 @@ function useProjectParam(): [string | undefined, (value: string | undefined) => 
       to: ".",
       search: ((prev: Record<string, unknown>) => {
         // A board belongs to a company: picking one leaves the company's own board.
-        const { project: _project, space: _space, all: _all, open: _open, m: _m, tab: _tab, ...rest } = prev;
+        const {
+          project: _project,
+          space: _space,
+          all: _all,
+          waiting: _waiting,
+          open: _open,
+          m: _m,
+          tab: _tab,
+          ...rest
+        } = prev;
         return next ? { ...rest, project: next } : rest;
       }) as never,
     });
@@ -153,11 +163,39 @@ function useAllParam(): [boolean, (on: boolean) => void] {
     void navigate({
       to: ".",
       search: ((prev: Record<string, unknown>) => {
-        const { project: _project, space: _space, all: _all, open: _open, m: _m, tab: _tab, ...rest } = prev;
+        const {
+          project: _project,
+          space: _space,
+          all: _all,
+          waiting: _waiting,
+          open: _open,
+          m: _m,
+          tab: _tab,
+          ...rest
+        } = prev;
         return on ? { ...rest, all: "1" } : rest;
       }) as never,
     });
   return [value, set];
+}
+
+/**
+ * `?waiting=person` beside `?all=1` (ADR 0184): only the tasks in a column flagged as one that waits for a person, the
+ * server filtering them ("Ver tudo" on Início opens this). Clearing it keeps the rest of the address; picking a company
+ * or a board leaves it, as it leaves `all`.
+ */
+function useWaitingParam(): [boolean, () => void] {
+  const value = useRouterState({ select: (s) => (s.location.search as { waiting?: string }).waiting === "person" });
+  const navigate = useNavigate();
+  const clear = () =>
+    void navigate({
+      to: ".",
+      search: ((prev: Record<string, unknown>) => {
+        const { waiting: _waiting, ...rest } = prev;
+        return rest;
+      }) as never,
+    });
+  return [value, clear];
 }
 
 /**
@@ -171,7 +209,16 @@ function useSpaceParam(): [string | undefined, (value: string | undefined) => vo
     void navigate({
       to: ".",
       search: ((prev: Record<string, unknown>) => {
-        const { project: _project, space: _space, all: _all, open: _open, m: _m, tab: _tab, ...rest } = prev;
+        const {
+          project: _project,
+          space: _space,
+          all: _all,
+          waiting: _waiting,
+          open: _open,
+          m: _m,
+          tab: _tab,
+          ...rest
+        } = prev;
         return next ? { ...rest, space: next } : rest;
       }) as never,
     });
@@ -266,7 +313,10 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const [columnsDialog, setColumnsDialog] = useState(false);
   // Tasks are read in a board or in the whole workspace, never on the companies' pages.
   const readsTasks = !onRootPage && !onCompanyPage;
-  const issues = useIssues(org.id, search, projectParam, spaceParam, mine ? "me" : "");
+  // The filter is a level of "Todas as tarefas": a board or a company has its own tasks to read.
+  const [waitingParam, clearWaiting] = useWaitingParam();
+  const waitingOn = waitingParam && level === "all";
+  const issues = useIssues(org.id, search, projectParam, spaceParam, mine ? "me" : "", waitingOn ? "person" : "");
   const columnsQuery = useIssueColumns(org.id, projectParam);
   const columns = columnsQuery.data;
   // The member's page never shows canceled tasks, whatever the display option says for the other pages.
@@ -531,6 +581,17 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                     value={projectParam}
                     onChange={setProjectParam}
                     onNew={posts ? () => setProjectDialog("new") : undefined}
+                  />
+                )}
+                {waitingOn && (
+                  <FilterChip
+                    label={t("issues.waitingFilter")}
+                    icon="clock"
+                    options={[{ value: "person", label: t("issues.waitingFilter") }]}
+                    value={["person"]}
+                    onChange={clearWaiting}
+                    valueText={(o) => o.label}
+                    clearLabel={t("issues.waitingFilterClear")}
                   />
                 )}
                 <IssueFilters view={view} issues={all} onChange={changeView} assignee={chrome.assignee !== false} />
