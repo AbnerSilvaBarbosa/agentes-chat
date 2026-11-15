@@ -483,7 +483,7 @@ const handlers: Record<string, Handler> = {
 
   async "channel.created"(deps, a, userId, direction) {
     const [channel] = await deps.db
-      .select({ createdAt: channels.createdAt, archivedAt: channels.archivedAt })
+      .select({ createdAt: channels.createdAt, archivedAt: channels.archivedAt, categoryId: channels.categoryId })
       .from(channels)
       .where(and(eq(channels.orgId, a.orgId), eq(channels.id, a.targetId)));
     if (!channel) throw new NotFoundError("The channel is gone", "action.target_gone");
@@ -535,12 +535,25 @@ const handlers: Record<string, Handler> = {
       )
       .limit(1);
     if (written) throw changedSince();
-    if (!together) {
-      await archiveChannel(deps.db, userId, a.orgId, a.targetId, { pubsub: deps.pubsub });
-      return undefined;
+    // The category goes with the last channel of it that the run put there, whichever receipt is undone last: the
+    // one that made it, or one of the others that joined it.
+    let category = together ? await categoryRow(deps.db) : null;
+    if (!together && channel.categoryId) {
+      const [madeHere] = await deps.db
+        .select({ id: agentActions.id })
+        .from(agentActions)
+        .where(
+          and(
+            eq(agentActions.orgId, a.orgId),
+            a.runId ? eq(agentActions.runId, a.runId) : sql`false`,
+            eq(agentActions.kind, "channel.created"),
+            sql`${agentActions.params}->>'categoryCreated' = 'true'`,
+            sql`(${agentActions.after}->>'categoryId' = ${channel.categoryId} or ${agentActions.state}->>'categoryId' = ${channel.categoryId})`,
+          ),
+        )
+        .limit(1);
+      if (madeHere) category = { id: channel.categoryId };
     }
-    // The category goes with its last channel; one that is already gone does not stop the archive.
-    const category = await categoryRow(deps.db);
     const [sibling] = category
       ? await deps.db
           .select({ id: channels.id })
@@ -555,13 +568,13 @@ const handlers: Record<string, Handler> = {
           )
           .limit(1)
       : [];
-    const dropCategory = category && !sibling;
+    const dropCategory = category && !sibling ? category : null;
     if (dropCategory) await requirePermission(deps.db, userId, a.orgId, "manage_channels");
     const events = holdEvents(deps.pubsub);
     await deps.db.transaction(async (tx) => {
       const db = tx as unknown as Database;
       await archiveChannel(db, userId, a.orgId, a.targetId, events);
-      if (dropCategory) await deleteChannelCategory(db, userId, a.orgId, category.id, events);
+      if (dropCategory) await deleteChannelCategory(db, userId, a.orgId, dropCategory.id, events);
     });
     await events.flush();
     return undefined;

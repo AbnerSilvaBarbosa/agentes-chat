@@ -1022,6 +1022,28 @@ describe("undo and redo of categories", () => {
     expect((await channelsOf(["vendas", "suporte"])).map((c) => c.archivedAt !== null)).toEqual([true, true]);
   });
 
+  test("undo in any order: the last of three channels in a new category takes the category along", async () => {
+    for (const order of [
+      [0, 1, 2],
+      [2, 1, 0],
+      [1, 0, 2],
+    ]) {
+      f = await setup();
+      const ctx = await runFor(f, f.owner.id, "cria vendas, suporte e financeiro na categoria Livora");
+      for (const name of ["vendas", "suporte", "financeiro"])
+        await call(f, ctx, "create_channel", { name, category: "Livora" });
+      const ids = await Promise.all([0, 1, 2].map((i) => receiptId(ctx, i)));
+      for (const [n, i] of order.entries()) {
+        await undoAgentAction(deps(), f.owner.id, f.org.id, ids[i] ?? "");
+        // While one of the three is live the category stays; with the last one gone it goes too.
+        expect(await categoriesOf(f)).toHaveLength(n < 2 ? 1 : 0);
+      }
+      expect((await channelsOf(["vendas", "suporte", "financeiro"])).every((c) => c.archivedAt !== null)).toBe(true);
+      await f.close();
+      f = undefined as unknown as Fixture;
+    }
+  });
+
   test("an archived channel keeps its place in its category", async () => {
     f = await setup();
     await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora" });
