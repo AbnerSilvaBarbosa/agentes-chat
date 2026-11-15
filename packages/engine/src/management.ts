@@ -85,6 +85,8 @@ export interface OrgSettings extends MediaSettings {
   autoModels: AutoModels;
   /** Who the workspace is for (ADR 0159): `team` or `personal`. */
   mode: WorkspaceMode;
+  /** The agent the workspace's PO chats are with (ADR 0185); null: none. */
+  poAgentId: string | null;
 }
 
 export const TEAM_SIZES = ["solo", "small", "medium", "large"] as const;
@@ -109,6 +111,7 @@ export async function getOrgSettings(db: Database, actorId: string, orgId: strin
     voiceMessages: s?.voiceMessages ?? true,
     autoModels: (s?.autoModels ?? {}) as AutoModels,
     mode: isWorkspaceMode(s?.mode) ? s.mode : "team",
+    poAgentId: s?.poAgentId ?? null,
     ...mediaSettingsFrom(s),
   };
 }
@@ -162,6 +165,21 @@ export async function updateOrgSettings(
     throw new ValidationError(`gifRating must be one of ${GIF_RATINGS.join(", ")}`);
   if (input.agentMedia !== undefined && !AGENT_MEDIA_LEVELS.includes(input.agentMedia as AgentMediaLevel))
     throw new ValidationError(`agentMedia must be one of ${AGENT_MEDIA_LEVELS.join(", ")}`);
+  if (input.poAgentId) {
+    const [po] = await db
+      .select({ id: schema.agents.id, builtin: schema.agents.builtin })
+      .from(schema.agents)
+      .where(
+        and(
+          eq(schema.agents.id, input.poAgentId),
+          eq(schema.agents.orgId, orgId),
+          isNull(schema.agents.archivedAt),
+          isNull(schema.agents.deletedAt),
+        ),
+      );
+    if (!po) throw new ValidationError("poAgentId must be an agent of this workspace", "po.agent_invalid");
+    if (po.builtin === "right_hand") throw new ValidationError("The right hand cannot be the PO", "po.agent_invalid");
+  }
   for (const [provider, id] of Object.entries(input.defaultCredentialIds ?? {})) {
     if (!id) continue;
     const [cred] = await db
@@ -241,6 +259,7 @@ export async function updateOrgSettings(
       ...(input.agentStickers !== undefined ? { agentStickers: input.agentStickers } : {}),
       ...(input.agentMedia !== undefined ? { agentMedia: input.agentMedia } : {}),
       ...(input.mode !== undefined ? { mode: input.mode } : {}),
+      ...(input.poAgentId !== undefined ? { poAgentId: input.poAgentId } : {}),
       ...(input.autoModels !== undefined
         ? { autoModels: mergeAutoModels(await storedAutoModels(), input.autoModels) }
         : {}),

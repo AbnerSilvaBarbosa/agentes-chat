@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { schema } from "@agenteschat/db";
+import { eq, schema } from "@agenteschat/db";
 import {
   archiveAgent,
+  createAgent,
   createIssue,
   createIssueProject,
   createIssueSpace,
+  getOrgSettings,
   isPoChatKey,
   listPoCompanies,
   parsePoChatKey,
   poAgentOf,
   poChatKey,
   updateIssueSpace,
+  updateOrgSettings,
 } from "../src";
 import { addMember, addUser, type Fixture, setup } from "./fixtures";
 
@@ -99,5 +102,51 @@ describe("the companies a PO chat opens for", () => {
     await setPo(f.agent.id);
     const stranger = await addUser(f.db, "zed");
     await expect(listPoCompanies(f.db, stranger.id, f.org.id)).rejects.toThrow();
+  });
+});
+
+describe("the workspace picks its PO", () => {
+  test("a PO agent is set by the workspace and an archived one counts as none", async () => {
+    f = await setup({ rightHand: true });
+    expect((await getOrgSettings(f.db, f.owner.id, f.org.id)).poAgentId).toBeNull();
+
+    const saved = await updateOrgSettings(f.db, f.owner.id, f.org.id, { poAgentId: f.agent.id });
+    expect(saved.poAgentId).toBe(f.agent.id);
+    expect((await getOrgSettings(f.db, f.owner.id, f.org.id)).poAgentId).toBe(f.agent.id);
+    expect((await poAgentOf(f.db, f.org.id))?.id).toBe(f.agent.id);
+
+    // An unknown agent, the right hand and an archived agent are refused; the PO stays.
+    const [rightHand] = await f.db.select().from(schema.agents).where(eq(schema.agents.builtin, "right_hand"));
+    expect(rightHand).toBeDefined();
+    const refused = (agentId: string) =>
+      updateOrgSettings(f.db, f.owner.id, f.org.id, { poAgentId: agentId }).then(
+        () => undefined,
+        (e: unknown) => e as { code?: string },
+      );
+    expect((await refused(crypto.randomUUID()))?.code).toBe("po.agent_invalid");
+    expect((await refused((rightHand as { id: string }).id))?.code).toBe("po.agent_invalid");
+    const other = await createAgent(
+      f.db,
+      f.owner.id,
+      f.org.id,
+      { name: "Old", handle: "old", role: "PO", instructions: "x", credentialId: f.credential.id },
+      { model: "claude-sonnet-5-5" },
+    );
+    await archiveAgent(f.db, f.owner.id, f.org.id, other.id);
+    expect((await refused(other.id))?.code).toBe("po.agent_invalid");
+    expect((await getOrgSettings(f.db, f.owner.id, f.org.id)).poAgentId).toBe(f.agent.id);
+
+    // The PO archived later reads as none; clearing stores null.
+    await archiveAgent(f.db, f.owner.id, f.org.id, f.agent.id);
+    expect(await poAgentOf(f.db, f.org.id)).toBeNull();
+    const cleared = await updateOrgSettings(f.db, f.owner.id, f.org.id, { poAgentId: null });
+    expect(cleared.poAgentId).toBeNull();
+  });
+
+  test("only who may configure picks the PO", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await expect(updateOrgSettings(f.db, bia.id, f.org.id, { poAgentId: f.agent.id })).rejects.toThrow();
+    expect((await getOrgSettings(f.db, f.owner.id, f.org.id)).poAgentId).toBeNull();
   });
 });
