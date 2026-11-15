@@ -639,10 +639,17 @@ describe("create_channel_category", () => {
   test("sends the layout broadcast once the category exists", async () => {
     f = await setup();
     const seen: { type?: string; event?: { type?: string } }[] = [];
-    f.pubsub.subscribe(orgTopic(f.org.id), (e) => seen.push(e as never));
+    const categoriesWhenTold: Promise<string[]>[] = [];
+    f.pubsub.subscribe(orgTopic(f.org.id), (e) => {
+      seen.push(e as never);
+      if ((e as { event?: { type?: string } }).event?.type === "channels.layout")
+        categoriesWhenTold.push(categoriesOf(f).then((all) => all.map((c) => c.name)));
+    });
     const ctx = await runFor(f, f.owner.id, "cria a categoria Livora");
     await call(f, ctx, "create_channel_category", { name: "Livora" });
     expect(seen.filter((e) => e.event?.type === "channels.layout")).toHaveLength(1);
+    // When it fires the category is already there.
+    expect(await Promise.all(categoriesWhenTold)).toEqual([["Livora"]]);
     // A refusal says nothing to anyone.
     seen.length = 0;
     await call(f, ctx, "create_channel_category", { name: "Livora" });
@@ -661,6 +668,13 @@ describe("create_channel_category", () => {
     });
     expect(MAX_CATEGORIES_PER_RUN).toBe(3);
     expect(await categoriesOf(f)).toHaveLength(3);
+    // Five at once in another run: three are made, two refused.
+    const other = await runFor(f, f.owner.id, "cria cinco categorias de uma vez");
+    const outs = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) => call(f, other, "create_channel_category", { name: `Par ${i}` })),
+    );
+    expect(outs.filter((o) => o.isError === undefined)).toHaveLength(3);
+    expect(await categoriesOf(f)).toHaveLength(6);
   });
 
   test("lists create_channel_category and create_channel's category field in the setup tools", async () => {
@@ -673,7 +687,7 @@ describe("create_channel_category", () => {
     expect(Object.keys(schemaOf.properties)).toContain("category");
   });
 
-  test("create_channel_category is elsewhere and a routine's run is refused it", () => {
+  test("create_channel_category is elsewhere and a routine's run is refused it", async () => {
     const tool = { name: "create_channel_category", scope: SETUP_SCOPE, connectionId: null };
     expect(toolKind(tool).kind).toBe("elsewhere");
     const routine = {
@@ -692,6 +706,16 @@ describe("create_channel_category", () => {
       },
     } as const;
     expect(toolPolicy(routine as never, tool)).toEqual({ action: "refuse", reason: REFUSALS.routineElsewhere });
+    // And its tool list leaves it out, while a person's run lists it.
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria uma categoria");
+    expect((await gatewayOf(f).granted(ctx)).map((t) => t.name)).toContain("create_channel_category");
+    await f.db.update(schema.agentRuns).set({ background: true }).where(eq(schema.agentRuns.id, ctx.runId));
+    const names = (await gatewayOf(f).granted(ctx)).map((t) => t.name);
+    expect(names).not.toContain("create_channel_category");
+    expect(names).not.toContain("create_channel");
+    expect(await call(f, ctx, "create_channel_category", { name: "Livora" })).toMatchObject({ isError: true });
+    expect(await categoriesOf(f)).toEqual([]);
   });
 
   test("the descriptions say the person's rights, Undo and a person's request", async () => {
@@ -702,7 +726,7 @@ describe("create_channel_category", () => {
       const description = granted.find((t) => t.name === name)?.description ?? "";
       expect(description).toContain("person's rights");
       expect(description).toContain("Undo");
-      expect(description).toContain("person");
+      expect(description).toContain("request from a person");
       expect(description).toContain("current message");
     }
   });
@@ -786,6 +810,11 @@ describe("create_channel with a category", () => {
 
   test("a taken channel name leaves no new category behind", async () => {
     f = await setup();
+    const heard: string[] = [];
+    f.pubsub.subscribe(orgTopic(f.org.id), (e) => {
+      const type = (e as { event?: { type?: string } }).event?.type;
+      if (type?.startsWith("channels.")) heard.push(type);
+    });
     const ctx = await runFor(f, f.owner.id, "cria o canal general na categoria Livora");
     expect(await call(f, ctx, "create_channel", { name: "general", category: "Livora" })).toMatchObject({
       isError: true,
@@ -796,6 +825,8 @@ describe("create_channel with a category", () => {
     });
     expect(await categoriesOf(f)).toEqual([]);
     expect(await receiptsOf(f, ctx)).toEqual([]);
+    // A rolled back call tells no one: no layout and no list change went out.
+    expect(heard).toEqual([]);
   });
 
   test("three channels in turn with the same new category make it once", async () => {
@@ -893,6 +924,11 @@ describe("create_channel with a category", () => {
     await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
     expect(told.filter((t) => t === "layout")).toHaveLength(1);
     expect(await Promise.all(placedWhenTold)).toEqual([["vendas"]]);
+    // A call that rolls back (a taken name, into a category made for it) sends nothing more.
+    const before = told.length;
+    expect((await call(f, ctx, "create_channel", { name: "general", category: "Outra" })).isError).toBe(true);
+    expect(told).toHaveLength(before);
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
   });
 
   test("refuses the fourth new category of a run, creating no channel for it", async () => {
@@ -997,6 +1033,14 @@ describe("undo and redo of categories", () => {
     const id = await receiptId(ctx, 0);
     await undoAgentAction(deps(), f.owner.id, f.org.id, id);
     expect((await channelNamed(f, "vendas"))?.archivedAt).not.toBeNull();
+    expect(await categoriesOf(f)).toEqual([]);
+    // With siblings in it, the category goes when the last of them does.
+    const crew = await runFor(f, f.owner.id, "cria dois canais na categoria Dupla");
+    await call(f, crew, "create_channel", { name: "alfa", category: "Dupla" });
+    await call(f, crew, "create_channel", { name: "beta", category: "Dupla" });
+    await undoAgentAction(deps(), f.owner.id, f.org.id, await receiptId(crew, 1));
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Dupla"]);
+    await undoAgentAction(deps(), f.owner.id, f.org.id, await receiptId(crew, 0));
     expect(await categoriesOf(f)).toEqual([]);
   });
 
