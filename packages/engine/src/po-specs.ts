@@ -172,7 +172,11 @@ export async function pumpSpecs(deps: SpecDeps, spaceId: string): Promise<number
   return started;
 }
 
-/** Why a spec did not finish, as the card's comment and the PO chat say it (`specError` holds the code or the run's error). */
+/** The reasons a spec is stored with: a short fixed code, never the run's own error text (it can hold anything). */
+const SPEC_CODES = new Set(["po_missing", "card_gone", "no_spec_page", "run_missing", "stopped", "failed"]);
+const specCodeOf = (error: string) => (SPEC_CODES.has(error) ? error : "failed");
+
+/** Why a spec did not finish, as the card's comment and the PO chat say it (`specError` holds one of the fixed codes). */
 export function specReasonText(code: string | null): string {
   switch (code) {
     case "po_missing":
@@ -183,11 +187,12 @@ export function specReasonText(code: string | null): string {
       return "the run ended without saving the spec in the wiki";
     case "run_missing":
       return "its run is gone";
+    case "stopped":
     case null:
     case "":
       return "it stopped";
     default:
-      return code;
+      return "the run failed";
   }
 }
 
@@ -198,7 +203,7 @@ export function specReasonText(code: string | null): string {
 async function endSpec(deps: SpecDeps, row: ProposalRow, state: "failed" | "stopped", reason: string) {
   const [ended] = await deps.db
     .update(poCardProposals)
-    .set({ specState: state, specError: reason.slice(0, 300) })
+    .set({ specState: state, specError: reason })
     .where(and(eq(poCardProposals.id, row.id), eq(poCardProposals.specState, "queued")))
     .returning();
   if (ended) await reportSpec(deps, ended, state);
@@ -350,10 +355,12 @@ async function settleRow(
       ? null
       : status === "done"
         ? "no_spec_page"
-        : (error ?? (status === "canceled" ? "stopped" : "failed"));
+        : status === "canceled"
+          ? "stopped"
+          : specCodeOf(error ?? "failed");
   const [settled] = await db
     .update(poCardProposals)
-    .set({ specState: state, specError: reason ? reason.slice(0, 300) : null })
+    .set({ specState: state, specError: reason })
     .where(and(eq(poCardProposals.id, proposal.id), eq(poCardProposals.specState, "running")))
     .returning();
   if (settled) await reportSpec(deps, settled, state);

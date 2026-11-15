@@ -14,6 +14,25 @@ type IssueRow = typeof issues.$inferSelect;
  */
 export const specFolder = (company: string) => cleanFolder(`Specs/${company.replace(/\//g, "-")}`);
 
+/**
+ * The folder of one company (ADR 0185): `specFolder` of its name, and two companies whose names make the same folder
+ * ("A/B" and "A-B", or the same name in other capitals) must not share it, or each reads and writes the other's specs.
+ * The earliest company keeps the plain folder, so pages already written stay where they are; each later one gets
+ * its id's last six characters in brackets after the name ("Specs/A-B [1f3a9c]"), the same on every call.
+ */
+export async function specFolderOf(db: Executor, orgId: string, space: { id: string; name: string }) {
+  const plain = specFolder(space.name);
+  const all = await db
+    .select({ id: issueSpaces.id, name: issueSpaces.name, createdAt: issueSpaces.createdAt })
+    .from(issueSpaces)
+    .where(eq(issueSpaces.orgId, orgId));
+  const sharing = all
+    .filter((c) => specFolder(c.name).toLowerCase() === plain.toLowerCase())
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+  if (sharing.length < 2 || sharing[0]?.id === space.id) return plain;
+  return cleanFolder(`${plain} [${space.id.replace(/-/g, "").slice(-6)}]`);
+}
+
 /** Whether `folder` is, or is under, another company's folder in `Specs/` (compared in any capitals). */
 export function otherCompanysSpecs(folder: string, own: string) {
   const f = folder.toLowerCase();
@@ -48,7 +67,7 @@ export async function keepHitsToCompany<T extends { kind: string; sourceId: stri
           .where(and(eq(schema.wikiPages.orgId, orgId), inArray(schema.wikiPages.id, ids("wiki")))),
   ]);
   const mine = new Set(cards.filter((c) => c.spaceId === scope.spaceId).map((c) => c.id));
-  const own = specFolder(scope.name);
+  const own = await specFolderOf(db, orgId, { id: scope.spaceId, name: scope.name });
   const folders = new Map(pages.map((p) => [p.id, p.folder]));
   return hits.filter((h) => {
     if (h.kind === "issue") return mine.has(h.sourceId);
@@ -112,7 +131,7 @@ export async function specBrief(
     .orderBy(desc(issues.updatedAt))
     .limit(BRIEF_NEIGHBOURS);
   const title = specPageTitle(issue.title);
-  const folder = specFolder(company);
+  const folder = await specFolderOf(db, orgId, { id: proposal.spaceId, name: company });
   const card = [
     `Title: ${issue.title}`,
     `Summary: ${proposal.summary.trim() || "(none)"}`,

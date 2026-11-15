@@ -29,7 +29,7 @@ import { fileIdsOf, getMessage } from "./messages";
 import { can, getMembership, listMembers } from "./organizations";
 import { poScopeOf } from "./po-chat";
 import { PROPOSAL_LIMITS, proposeCard } from "./po-proposals";
-import { specFolder } from "./po-spec-brief";
+import { specFolderOf } from "./po-spec-brief";
 import { withCriteriaSection } from "./po-specs";
 import { chosenAudience, personBehindCall, visibleToField, wikiActorOfCall } from "./requester";
 import { isRightHand, rightHandReader } from "./right-hand";
@@ -836,10 +836,10 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           if (!proposal?.issueId)
             return { content: "attach_spec is only for the run that writes a card's spec.", isError: true };
           const [space] = await deps.db
-            .select({ name: schema.issueSpaces.name })
+            .select({ id: schema.issueSpaces.id, name: schema.issueSpaces.name })
             .from(schema.issueSpaces)
             .where(eq(schema.issueSpaces.id, proposal.spaceId));
-          const own = specFolder(space?.name ?? "");
+          const own = await specFolderOf(deps.db, ctx.orgId, { id: proposal.spaceId, name: space?.name ?? "" });
           const page = await getWikiPage(deps.db, await wikiActorOfCall(ctx), ctx.orgId, str(input.page));
           const folder = (page.folder ?? "").toLowerCase();
           if (folder !== own.toLowerCase() && !folder.startsWith(`${own.toLowerCase()}/`))

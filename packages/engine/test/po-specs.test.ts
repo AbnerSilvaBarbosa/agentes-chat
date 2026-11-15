@@ -21,6 +21,7 @@ import {
   listIssues,
   onConsultedRunFinished,
   openPoChat,
+  otherCompanysSpecs,
   proposeCard,
   pumpSpecs,
   reapSpecs,
@@ -29,6 +30,7 @@ import {
   specBrief,
   specColumns,
   specFolder,
+  specFolderOf,
   specPageTitle,
   updateIssue,
   withCriteriaSection,
@@ -366,15 +368,16 @@ describe("a spec run starts in the card's conversation, three at a time per comp
     const c = await specCompany();
     await c.queue("A");
     const seen: string[] = [];
-    const log = tracingLogger.logQuery;
-    tracingLogger.logQuery = (query: string, params: unknown[]) => {
+    const logger = tracingLogger as { logQuery: (query: string, params: unknown[]) => void };
+    const log = logger.logQuery;
+    logger.logQuery = (query, params) => {
       seen.push(`${query}\u0000${JSON.stringify(params)}`);
-      log();
+      log(query, params);
     };
     try {
       await pumpSpecs(c.deps, c.company.id);
     } finally {
-      tracingLogger.logQuery = log;
+      logger.logQuery = log;
     }
     const at = (needle: RegExp, from = 0) => seen.findIndex((q, i) => i >= from && needle.test(q));
     const lock = at(/pg_advisory_xact_lock/);
@@ -499,6 +502,63 @@ describe("the brief a spec run reads", () => {
   test("a company's folder turns a slash in its name into a dash", () => {
     expect(specFolder("Acme/Brasil")).toBe("Specs/Acme-Brasil");
     expect(specFolder("  Acme  ")).toBe("Specs/Acme");
+  });
+
+  test("companies whose names make one folder get one each: the earliest keeps the plain one", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const first = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "A/B" });
+    const second = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "A-B" });
+    const alone = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Solta" });
+    const folders = await Promise.all(
+      [first, second, alone].map((c) => specFolderOf(f.db, f.org.id, { id: c.id, name: c.name })),
+    );
+    expect(folders[0]).toBe("Specs/A-B");
+    expect(folders[2]).toBe("Specs/Solta");
+    // The same on every call, and all three are different, none under another.
+    expect(await specFolderOf(f.db, f.org.id, { id: second.id, name: second.name })).toBe(folders[1] ?? "");
+    expect(new Set(folders.map((x) => x.toLowerCase())).size).toBe(3);
+    for (const mine of folders)
+      for (const other of folders)
+        if (mine !== other) expect(otherCompanysSpecs(other, mine) || otherCompanysSpecs(mine, other)).toBe(true);
+    expect(folders[1]).toContain(second.id.replace(/-/g, "").slice(-6));
+  });
+
+  test("attach_spec of one company refuses the page in the folder of the one that shares its name", async () => {
+    f = await setup();
+    const first = await specCompany("A/B", "pipeline");
+    const second = await specCompany("A-B", "pipeline");
+    await grantScopes(
+      f.db,
+      f.org.id,
+      f.agent.id,
+      ["issues:read", "issues:write", "wiki:read", "wiki:write"].map((scope) => ({ connectionId: null, scope })),
+    );
+    const mine = await second.queue("Do segundo");
+    await pumpSpecs(second.deps, second.company.id);
+    const run = (await second.state(mine.row.id))?.specRunId as string;
+    const [row] = await f.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, run));
+    if (!row) throw new Error("no run");
+    const ctx = {
+      db: f.db,
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      runId: row.id,
+      channelId: row.channelId,
+      threadRootId: row.threadRootId,
+      triggerMessageId: row.triggerMessageId,
+    };
+    const attachTool = (await createIssueToolSource(f.artifactDeps).tools(ctx)).find((t) => t.name === "attach_spec");
+    const wiki = { db: f.db, pubsub: f.pubsub, search: f.context };
+    const theirs = await createWikiPage(wiki, { type: "person", userId: f.owner.id }, f.org.id, {
+      title: "Spec do primeiro",
+      body: "# Spec",
+      folder: await specFolderOf(f.db, f.org.id, { id: first.company.id, name: first.company.name }),
+    });
+    const refused = await attachTool?.execute({ page: theirs.slug }, ctx);
+    expect(refused?.isError).toBe(true);
+    const [card] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, mine.issue.id));
+    expect(card?.specPageId).toBeNull();
   });
 });
 
@@ -738,15 +798,16 @@ describe("a finished spec run moves its card", () => {
     const [failed, stopped, paged] = await started(c, ["Falha", "Parada", "Com página"]);
     if (!failed || !stopped || !paged) throw new Error("none");
     await attach(paged.issue.id, "Spec que não conta");
-    await end(failed.run, "failed", "provider_down");
+    // The run's own error text can hold anything (a path, a key, a prompt): none of it is stored or said.
+    await end(failed.run, "failed", "ECONNRESET at /srv/app/secret.ts sk-live-123456 token=abc");
     await end(stopped.run, "canceled", "stopped by a person");
     // A run that ends done has to have attached a page: the page is gone with the link, so it is a failure.
     await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, paged.issue.id, { specPageId: null });
     await end(paged.run, "done");
     const rows = await Promise.all([failed, stopped, paged].map((x) => c.state(x.row.id)));
     expect(rows.map((r) => [r?.specState, r?.specError])).toEqual([
-      ["failed", "provider_down"],
-      ["stopped", "stopped by a person"],
+      ["failed", "failed"],
+      ["stopped", "stopped"],
       ["failed", "no_spec_page"],
     ]);
     for (const x of [failed, stopped, paged]) {
@@ -757,8 +818,10 @@ describe("a finished spec run moves its card", () => {
       expect(said.chat).toHaveLength(1);
     }
     const first = await reports(failed.issue.id, c.chat.channelId, failed.row.id);
-    expect(first.comments[0]?.body).toContain("provider_down");
+    expect(first.comments[0]?.body).toContain("the run failed");
     expect(first.chat[0]?.body).toContain("did not finish");
+    for (const text of [first.comments[0]?.body, first.chat[0]?.body, JSON.stringify(first.chat[0]?.meta)])
+      for (const leak of ["ECONNRESET", "secret.ts", "sk-live", "token=abc"]) expect(text).not.toContain(leak);
   });
 
   test("a run that ends without a page is a failed spec", async () => {
@@ -928,12 +991,12 @@ describe("the tick settles specs nobody heard end", () => {
     });
     await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, done.issue.id, { specPageId: page.id });
     await setRun(done.now?.specRunId, { status: "done" });
-    await setRun(failed.now?.specRunId, { status: "failed", error: "provider_down" });
+    await setRun(failed.now?.specRunId, { status: "failed", error: "failed" });
     await f.db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, gone.now?.specRunId as string));
 
     expect(await reapSpecs(c.deps)).toBe(3);
     expect((await c.state(done.row.id))?.specState).toBe("done");
-    expect(await c.state(failed.row.id)).toMatchObject({ specState: "failed", specError: "provider_down" });
+    expect(await c.state(failed.row.id)).toMatchObject({ specState: "failed", specError: "failed" });
     expect(await c.state(gone.row.id)).toMatchObject({ specState: "failed", specError: "run_missing" });
     // The card of the finished spec moved on; the others stayed.
     const column = async (id: string) =>
@@ -1066,7 +1129,7 @@ describe("confirming a card starts its spec", () => {
       page: { slug: page.slug, title: "Spec A" },
       error: null,
     });
-    expect(await snapshot(proposals[1]?.id as string)).toEqual({ state: "failed", page: null, error: "provider_down" });
+    expect(await snapshot(proposals[1]?.id as string)).toEqual({ state: "failed", page: null, error: "failed" });
     // The fourth took a freed slot and its snapshot followed.
     expect(await snapshot(proposals[3]?.id as string)).toMatchObject({ state: "running" });
   });

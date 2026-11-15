@@ -4,7 +4,7 @@ import { agentRoom } from "./artifacts";
 import { cutText } from "./format";
 import { can, getMembership } from "./organizations";
 import { poScopeOf } from "./po-chat";
-import { otherCompanysSpecs, specFolder } from "./po-spec-brief";
+import { otherCompanysSpecs, specFolderOf } from "./po-spec-brief";
 import { chosenAudience, personBehindCall, routineCreatorOfCall, visibleToField, wikiActorOfCall } from "./requester";
 import { isRightHand } from "./right-hand";
 import { audienceOfConversation } from "./task-access";
@@ -70,7 +70,7 @@ const wikiEdit = (
  */
 async function specsScope(ctx: ToolContext) {
   const po = await poScopeOf(ctx.db, ctx.orgId, ctx.channelId, ctx.runId);
-  return po ? { name: po.name, own: specFolder(po.name) } : null;
+  return po ? { name: po.name, own: await specFolderOf(ctx.db, ctx.orgId, { id: po.spaceId, name: po.name }) } : null;
 }
 
 const otherSpecsRefusal = (po: { name: string; own: string }) =>
