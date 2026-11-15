@@ -1,0 +1,104 @@
+# 0185. The PO chat: one conversation per company with the workspace's PO
+
+- Status: Accepted
+- Date: 2026-11-15
+- Extends: ADR 0174 and 0179 (companies and boards), ADR 0151 (who sees which task), ADR 0023 (the wiki), ADR 0053 (unattended runs), ADR 0184 (the factory on Início)
+
+## Context
+
+A person who wants a card for a company talked to an agent in a plain DM: the agent could create the card with no
+yes, knew every company at once, and left no place to read what was asked about one company. The product wants a
+product owner (PO) agent that a person talks to about one company, that proposes cards a person confirms, and that
+writes each confirmed card's spec in the wiki, with several specs at once and none of them moving a card toward
+development by itself.
+
+## Decision
+
+### 1. The key and the sidebar rule
+
+A PO chat is a DM (`channels.kind = 'dm'`) whose `dm_key` has a third segment, the company: `a:<po>|s:<company>|u:<person>`
+(`poChatKey`, `parsePoChatKey` in `packages/engine/src/po-chat.ts`). `dm_key` is unique per organization, so there is
+one conversation per person, PO and company with no new table or column. The company id is the only fact read from the
+key. Every other reader of `dm_key` (membership, search, the wiki's `dmOther`, agent deletion, the `u:` and `a:` tests)
+survives the extra segment, and a chat is archived with its PO.
+
+The sidebar keys its direct messages by agent, so two chats with one agent would overwrite each other's row. `listDms`
+leaves out the keys with `|s:` (`poChatKeyLike`); a PO chat is opened from the company (its page, the Início panel, the
+switcher in the chat's header, search and notifications), never from the sidebar. A notice from a PO chat carries the
+company (`NotificationSource.poSpaceId`) so it opens that chat, not the agent's plain DM.
+
+### 2. The PO setting
+
+`organization_settings.po_agent_id` (null: no PO) names the workspace's PO, picked by who may configure in
+Configurações › Tarefas and readable by every member. `poAgentOf` returns the agent or null when it is unset, archived
+or deleted, and every rule asks it. No role text is trusted. With no PO nothing is offered and `openPoChat` refuses.
+
+### 3. What a PO chat holds
+
+`context.ts` adds a per-turn block for a PO chat (`po-chat-context.ts`): the company, its boards and columns, the cards
+the person sees (ADR 0151) with the link to each spec, a proposal still waiting, and the rules. The tools are scoped by
+the chat's key (`poScopeOf`) and change nothing elsewhere: `list_issues`, `list_boards`, the card lookup and the company
+by name stay inside the company. `create_issue` is not listed in a PO chat and its `execute` refuses too, because a
+computer brain lists tools once. A PO chat proposes with `propose_card` (scope `issues:write`, in the run-policy's
+`ELSEWHERE` and `ASKS_ITSELF` as `propose_event`: a routine or an unattended run never proposes, and an agent set to
+always ask adds no approval before a card that is itself the question).
+
+### 4. The proposal and its claim
+
+A proposal is a row of `po_card_proposals` and a card in the conversation (`meta.cardProposal`, a snapshot rewritten by
+`syncProposalCard`, event `card.proposal.updated`). Only the person it was proposed to decides: Criar (with the edits
+they made to title, summary, criteria and board) or Descartar. Deciding is one conditional `update` that moves
+`pending` to `creating` and returns the row, so two clicks create one card and the second answers `card_proposal.decided`
+(400). A `creating` row older than 2 minutes can be claimed again, which recovers a crash between the claim and the
+card. The card is made with `createIssue` as the person (their right to `post`, a live board of the company) in the
+board's "Especificar" column; a refusal puts the claim back so the person can pick another board. The proposal notes an
+open card with the same title (`duplicateOf`) but never blocks on it.
+
+### 5. The spec run and its queue
+
+A confirmed proposal is `spec_state = 'queued'`. `pumpSpecs` starts queued specs of a company, oldest first, up to 3
+running at once (`SPEC_RUNS_PER_COMPANY`), counting and starting under an advisory lock per company (no Redis, ADR 0005).
+`startSpecRun` writes a start message by the confirming person in the card's own conversation ("Escreva a spec do card
+#N e salve na wiki") and runs the PO there with the brief of `po-spec-brief.ts`. That message is the request the wiki
+write needs, and the page is written with that person's rights. The card is never assigned to the PO, so the assignee's
+first tool call moves nothing, and no code path names "Ready for dev".
+
+The PO saves the page with `create_wiki_page` in the folder `Specs/<company>` and calls `attach_spec` (listed only in a
+spec run), which links the page (`issues.spec_page_id`, a foreign key that survives a rename) and writes the criteria
+into the description and the card's checklist. `settleSpecRun` is called from the one hook every run ending already
+passes (`onConsultedRunFinished`, also stop and recovery): a run that ends done with a page moves the card to
+"Priorizado" only while it is still in "Especificar", comments the link and tells the PO chat; any other ending leaves
+the card where it is with the reason. Either way the next queued spec starts. A `specs` tick every minute settles runs
+that ended unheard and starts held specs. A spec run that waits on a person holds its slot, so the brief forbids
+questions; a timeout is left for later.
+
+### 6. The wiki scope by folder
+
+The wiki has no company field (ADR 0023). In a PO chat the company's wiki is the folder `Specs/<company>`: search and
+read drop and refuse pages in another company's `Specs/` folder, create defaults to the company's folder, and create,
+update, move and link refuse another company's. Pages outside `Specs/` stay workspace knowledge.
+
+### 7. Entries
+
+"Conversar com o PO" on a live company's page in Tarefas and on its panel in the factory on Início (ADR 0184), only when
+the workspace has a PO; the route `/org/$orgId/po/$spaceId` (the DM page with a company, a switcher among the companies
+in its header); search hits and notifications open the chat of their company; the card's page shows its spec.
+
+### 8. Deploy data step (not code, each needs its own go-ahead)
+
+1. Set the workspace's PO to Paula in Configurações › Tarefas.
+2. Pause or edit the Paula routine on `issue.moved` that moves a card from "Priorizado" to "Ready for dev", so a
+   Priorizado card stays there until a person releases it (that routine fires on any move, whoever made it).
+3. Give the boards the PO uses "Especificar" and "Priorizado" columns. A board without them works through the fallbacks:
+   the first column of the `todo` stage, then the next `todo` column, or none (the card stays and the comment says so).
+
+## Consequences
+
+- One migration (`0262_po-chat`): `organization_settings.po_agent_id`, `issues.spec_page_id`, `po_card_proposals`.
+  Additive.
+- A PO chat is a person's DM everywhere the engine counts DMs, and its history stays readable by search when the
+  workspace changes its PO; only the current PO's chats open.
+- A proposal edited in Editar is not checked for a duplicate again.
+- Existing cards get no spec: `attach_spec` exists only in a spec run.
+- The phone and desktop shells, a timeout for a spec run that waits, and a company field on wiki pages are left for
+  later decisions.
