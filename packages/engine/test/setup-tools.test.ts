@@ -1019,6 +1019,64 @@ describe("undo and redo of categories", () => {
   });
 });
 
+describe("the request in the screenshot", () => {
+  test("one turn: a category and three channels in it, one receipt per channel, Desfazer tudo leaves nothing", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "crie os canais vendas, suporte e financeiro com a categoria Livora");
+    for (const name of ["vendas", "suporte", "financeiro"])
+      expect((await call(f, ctx, "create_channel", { name, category: "Livora" })).isError).toBeUndefined();
+    const [category, ...others] = await categoriesOf(f);
+    expect(category?.name).toBe("Livora");
+    expect(others).toEqual([]);
+    const inside = (await listChannels(f.db, f.owner.id, f.org.id)).filter((c) => c.categoryId === category?.id);
+    // Order inside a category nobody arranged is by name (ADR 0080 section 4): all three are in it.
+    expect(inside.map((c) => c.name)).toEqual(["financeiro", "suporte", "vendas"]);
+    const rows = await receiptsOf(f, ctx);
+    expect(rows.map((r) => [r.kind, (r.target as { title?: string }).title])).toEqual([
+      ["channel.created", "vendas"],
+      ["channel.created", "suporte"],
+      ["channel.created", "financeiro"],
+    ]);
+    expect(rows.map((r) => (r.params as { categoryCreated?: boolean }).categoryCreated === true)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+
+    const reply = await insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId: f.general.id,
+      threadId: replyThreadOf(ctx),
+      author: { type: "agent", agentId: f.agent.id, runId: ctx.runId, hop: 1 },
+      body: "Criei a categoria Livora com os três canais.",
+    });
+    await linkRunActions(f.db, f.org.id, ctx.runId, reply.id);
+    const undone = await undoMessageActions({ db: f.db, pubsub: f.pubsub }, f.owner.id, f.org.id, reply.id);
+    expect(undone.failed).toEqual([]);
+    expect(await categoriesOf(f)).toEqual([]);
+    for (const name of ["vendas", "suporte", "financeiro"])
+      expect((await channelNamed(f, name))?.archivedAt).not.toBeNull();
+  });
+
+  test("a member without manage_channels gets no category and no channel through any call", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    const ctx = await runFor(f, bia.id, "crie os canais com a categoria Livora");
+    const calls = [
+      call(f, ctx, "create_channel_category", { name: "Livora" }),
+      call(f, ctx, "create_channel_category", { name: "Livora", channels: ["general"] }),
+      call(f, ctx, "create_channel", { name: "vendas", category: "Livora" }),
+      call(f, ctx, "create_channel", { name: "suporte", category: "livora", topic: "x" }),
+    ];
+    for (const out of await Promise.all(calls)) expect(out).toMatchObject({ isError: true });
+    expect(await categoriesOf(f)).toEqual([]);
+    expect(await channelNamed(f, "vendas")).toBeUndefined();
+    expect(await channelNamed(f, "suporte")).toBeUndefined();
+    expect((await channelNamed(f, "general"))?.categoryId).toBeNull();
+    expect(await receiptsOf(f, ctx)).toEqual([]);
+  });
+});
+
 describe("a consulted agent's cards", () => {
   /** @dev answering a note from @lia in their DM; @lia's run answers the person's message in #general. */
   async function consulted(fx: Fixture, userId: string) {
