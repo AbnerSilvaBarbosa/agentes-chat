@@ -139,6 +139,11 @@ export function actionTextValues(
       return { agentName: str(p.agentName), channel: str(p.channel) || a.target.title || "" };
     case "channel.created":
       return { name: str(p.name) || a.target.title || "" };
+    case "channel_category.created": {
+      const taken = Array.isArray(p.channels) ? p.channels.filter((v): v is string => typeof v === "string") : [];
+      const name = str(p.name) || a.target.title || "";
+      return taken.length ? { name, channels: taken.map((c) => `#${c}`).join(", "), context: "channels" } : { name };
+    }
     case "wiki.page_created":
     case "wiki.page_edited":
       return p.restricted ? { context: "restricted" } : { title };

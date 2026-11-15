@@ -35,6 +35,7 @@ export const AGENT_ACTION_KINDS = [
   "routine.deleted",
   "channel.agent_added",
   "channel.created",
+  "channel_category.created",
   "wiki.page_created",
   "wiki.page_edited",
   "wiki.page_moved",
@@ -75,6 +76,7 @@ export type AgentActionTargetType =
   | "memory"
   | "routine"
   | "channel"
+  | "channel_category"
   | "wiki_page"
   | "thread"
   | "skill"
@@ -293,6 +295,8 @@ export function describeAction(a: Pick<AgentActionView, "kind" | "target" | "par
       return `added ${typeof p.agentName === "string" ? p.agentName : "an agent"} to #${t.title ?? "?"}`;
     case "channel.created":
       return `created the channel #${t.title ?? "?"}`;
+    case "channel_category.created":
+      return `created the category "${t.title ?? "?"}"`;
     case "wiki.page_created":
       return `created the wiki page${title}`;
     case "wiki.page_edited":

@@ -572,6 +572,7 @@ export const AgentAction = z
         "memory",
         "routine",
         "channel",
+        "channel_category",
         "wiki_page",
         "thread",
         "skill",

@@ -3378,6 +3378,10 @@ export const ptBR = {
       agent_added: "Chamei {{agentName}} para <b>#{{channel}}</b>",
       created: "Criei o canal <b>#{{name}}</b>",
     },
+    channel_category: {
+      created: "Criei a categoria <b>{{name}}</b>",
+      created_channels: "Criei a categoria <b>{{name}}</b> com {{channels}}",
+    },
     wiki: {
       page_created: "Criei a página <b>{{title}}</b> na wiki",
       page_edited: "Editei a página <b>{{title}}</b> da wiki",

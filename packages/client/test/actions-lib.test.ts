@@ -84,6 +84,21 @@ describe("receipt sentence values", () => {
     expect(actionTextValues(two, t).context).toBeUndefined();
   });
 
+  test("a category made by an agent: its name, and the channels it took along when it took some", () => {
+    const made = (channels: string[]) =>
+      action({
+        kind: "channel_category.created",
+        target: { type: "channel_category", id: "k1", title: "Livora" },
+        params: { name: "Livora", channels },
+      });
+    expect(actionTextValues(made([]), t)).toEqual({ name: "Livora" });
+    expect(actionTextValues(made(["geral", "dev"]), t)).toEqual({
+      name: "Livora",
+      channels: "#geral, #dev",
+      context: "channels",
+    });
+  });
+
   test("assigned: to the agent itself, or to the viewer", () => {
     const self = action({ kind: "issue.assigned", params: { number: 2, title: "T", assigneeIsSelf: true } });
     expect(actionTextValues(self, t).context).toBe("self");
@@ -417,6 +432,7 @@ describe("receipts in rows, one line each", () => {
       );
     const blended = AGENT_ACTION_KINDS.filter((kind) => receiptRows(two(kind), pt)[0]?.refs);
     expect(AGENT_ACTION_KINDS.filter((kind) => !blended.includes(kind))).toEqual([
+      "channel_category.created",
       "thread.renamed",
       "workspace.changed",
     ]);

@@ -26,6 +26,7 @@ export const RECEIPT_ICONS: Record<AgentActionKind, IconName> = {
   "routine.deleted": "clock",
   "channel.agent_added": "hash",
   "channel.created": "hash",
+  "channel_category.created": "hash",
   "wiki.page_created": "doc",
   "wiki.page_edited": "doc",
   "wiki.page_moved": "doc",

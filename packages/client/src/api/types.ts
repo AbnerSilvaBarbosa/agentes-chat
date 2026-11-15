@@ -2924,6 +2924,7 @@ export const AGENT_ACTION_KINDS = [
   "routine.deleted",
   "channel.agent_added",
   "channel.created",
+  "channel_category.created",
   "wiki.page_created",
   "wiki.page_edited",
   "wiki.page_moved",
@@ -2972,6 +2973,7 @@ export interface AgentActionTarget {
     | "memory"
     | "routine"
     | "channel"
+    | "channel_category"
     | "wiki_page"
     | "thread"
     | "skill"
@@ -3003,6 +3005,7 @@ export interface AgentActionTarget {
  *   `fields` (name, prompt, target, schedule, active), `active`, `schedule`
  * - `channel.agent_added`: `agentId`, `agentName`, `agentHandle`, `channel`
  * - `channel.created`: `name` (undo archives it)
+ * - `channel_category.created`: `name`, `channels` (the names it took along; undo deletes it, ADR 0080)
  * - `pr.merged`: `repo`, and `number` (a pull request) or `ref` (a branch); nothing undoes it
  * - `wiki.page_created` / `wiki.page_edited`: `title`, `slug`
  * - `wiki.page_moved`: `title`, `slug`, `from`, `to` (folders; "" is the top level; undo puts it back)
