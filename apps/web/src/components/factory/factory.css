@@ -46,3 +46,93 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The block: the list over the panels, 24 apart as list groups are. */
+.fh {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+/* The panels: a grid at 1280, one column at 390. */
+.fh-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fh-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.12s;
+}
+.fh-panel:hover {
+  background: color-mix(in srgb, var(--sunken) 45%, var(--surface-raised));
+}
+html:not([data-pointer]) .fh-panel:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.fh-panel__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-weight: 600;
+}
+.fh-panel__nametext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fh-panel__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: 0;
+}
+.fh-panel__stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.fh-panel__stat dt {
+  order: 2;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--muted);
+}
+.fh-panel__stat dd {
+  order: 1;
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.fh-panel__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: 13px;
+  line-height: 20px;
+}
+.fh-panel__late {
+  color: var(--ink2);
+}
+.fh-panel__waiting {
+  color: var(--ink);
+  font-weight: 600;
+}
+.fh-more {
+  align-self: flex-start;
+}

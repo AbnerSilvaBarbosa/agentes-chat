@@ -4,7 +4,8 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 setupDom();
 
 import type { FactoryCompany, FactoryHome, WaitingTask } from "@agenteschat/client";
-import { cleanup } from "@testing-library/react";
+import { cleanup, within } from "@testing-library/react";
+import { FactoryPanels } from "@/components/factory/FactoryPanels";
 import { FactoryWaiting } from "@/components/factory/FactoryWaiting";
 import { createFakeApi, ORG_ID, seedState } from "./fake-api";
 import { renderPage, screen } from "./render";
@@ -94,5 +95,73 @@ describe("Esperando seu teste", () => {
     await showWaiting({ total: 0, items: [] });
     expect(screen().queryByRole("heading", { name: /Esperando seu teste/ })).toBeNull();
     expect(screen().queryAllByRole("link")).toHaveLength(0);
+  });
+});
+
+const showPanels = (companies: FactoryCompany[], companiesTotal = companies.length) =>
+  renderPage(<FactoryPanels home={{ companies, companiesTotal, waiting: { total: 0, items: [] } }} />, {
+    api: createFakeApi(seedState()),
+    org: true,
+  });
+
+describe("the company panels", () => {
+  test("a panel shows the name, the three stages and the done count with their labels", async () => {
+    await showPanels([company({ stages: { todo: 4, in_progress: 2, in_review: 3, done: 9 } })]);
+    const panel = screen().getByRole("link", { name: "Abrir o painel de Clínica Teo" });
+    expect(panel.textContent).toContain("Clínica Teo");
+    const stat = (label: string) => within(panel).getByText(label).parentElement?.querySelector("dd")?.textContent;
+    expect(stat("A fazer")).toBe("4");
+    expect(stat("Em andamento")).toBe("2");
+    expect(stat("Em revisão")).toBe("3");
+    expect(stat("Concluídas em 7 dias")).toBe("9");
+  });
+
+  test("a company with an image draws it, one without draws its colour", async () => {
+    await showPanels([
+      company({ id: "a", name: "Com imagem", image: "/api/app/orgs/o/issue-space-images/a.png" }),
+      company({ id: "b", name: "Sem imagem", image: null }),
+    ]);
+    const withImage = screen().getByRole("link", { name: "Abrir o painel de Com imagem" });
+    expect(withImage.querySelector("img")?.getAttribute("src")).toContain("a.png");
+    const without = screen().getByRole("link", { name: "Abrir o painel de Sem imagem" });
+    expect(without.querySelector("img")).toBeNull();
+    expect(without.querySelector(".ac-colordot")).not.toBeNull();
+  });
+
+  test("late and waiting show only above zero", async () => {
+    await showPanels([
+      company({ id: "a", name: "Atrasada", late: 3, waiting: 0 }),
+      company({ id: "b", name: "Esperando", late: 0, waiting: 2 }),
+      company({ id: "c", name: "Quieta" }),
+    ]);
+    const text = (name: string) => screen().getByRole("link", { name: `Abrir o painel de ${name}` }).textContent ?? "";
+    expect(text("Atrasada")).toContain("3 atrasadas");
+    expect(text("Atrasada")).not.toContain("esperando");
+    expect(text("Esperando")).toContain("2 esperando");
+    expect(text("Esperando")).not.toContain("atrasada");
+    expect(text("Quieta")).not.toMatch(/atrasada|esperando/);
+  });
+
+  test("selecting a panel opens the company's Painel", async () => {
+    await showPanels([company({ id: "sp-9" })]);
+    const href =
+      screen()
+        .getByRole("link", { name: /Abrir o painel/ })
+        .getAttribute("href") ?? "";
+    const url = new URL(href, "http://x");
+    expect(url.pathname).toBe(`/org/${ORG_ID}/issues`);
+    expect(url.searchParams.get("space")?.replace(/^"|"$/g, "")).toBe("sp-9");
+    expect(url.searchParams.get("tab")).toBe("painel");
+  });
+
+  test("with more companies than panels, a link goes to the companies' page", async () => {
+    await showPanels([company()], 25);
+    const more = screen().getByRole("link", { name: "Ver as 25 empresas" });
+    expect(more.getAttribute("href")).toBe(`/org/${ORG_ID}/issues`);
+  });
+
+  test("with every company shown there is no link to more", async () => {
+    await showPanels([company()], 1);
+    expect(screen().queryByRole("link", { name: /Ver as .* empresas/ })).toBeNull();
   });
 });
