@@ -3364,6 +3364,8 @@ export const en = {
     opening: "Opening the conversation…",
     title: "Direct message with {{name}}",
     poNone: "No PO to talk to about this company.",
+    poTopic: "PO · {{company}}",
+    poCompany: "Company",
   },
   memoryCard: {
     remembered: "{{name}} remembered",

@@ -4,9 +4,19 @@ import { setupDom } from "@agenteschat/ui/testing/dom";
 setupDom();
 
 import { type CardProposalView, keys, type Message, type PoCompany } from "@agenteschat/client";
-import { act, cleanup } from "@testing-library/react";
+import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { ADA_ID, createFakeApi, type FakeState, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
+
+const header = () => document.querySelector(".channel__header") as HTMLElement;
+
+/** A Select (Radix): open it with the keyboard, pick the option. */
+async function pick(combobox: HTMLElement, option: RegExp | string) {
+  combobox.focus();
+  await act(async () => fireEvent.keyDown(combobox, { key: "Enter" }));
+  await act(async () => fireEvent.click(screen().getByRole("option", { name: option })));
+  await settle(8);
+}
 
 /** The PO chat (ADR 0185): the route that opens a person's chat with the PO about one company. */
 
@@ -45,6 +55,7 @@ const withPo = (patch: Partial<FakeState> = {}): FakeState => {
     ...patch,
   });
   state.messages.push(say("po-chat-s-acme", "m-acme", "Resumo da Acme"));
+  state.messages.push(say("po-chat-s-beta", "m-beta", "Resumo da Beta"));
   return state;
 };
 
@@ -82,6 +93,55 @@ describe("the PO chat's route", () => {
     const state = withPo({ poCompanies: [company("s-old", "Velha", { archived: true })] });
     await go(state, "po/s-old");
     expect(screen().getByText("Nenhum PO para conversar sobre essa empresa.")).toBeTruthy();
+  });
+});
+
+describe("the header names the company and offers the others", () => {
+  test("the PO's name, the company in its line, and a Select of the live companies with the chat's own chosen", async () => {
+    const state = withPo({
+      poCompanies: [
+        company("s-acme", "Acme"),
+        company("s-beta", "Beta"),
+        company("s-old", "Velha", { archived: true }),
+      ],
+    });
+    await go(state, "po/s-acme");
+    expect(within(header()).getByRole("heading", { level: 1, name: "Ada" })).toBeTruthy();
+    expect(header().querySelector(".channel__topic")?.textContent).toBe("PO · Acme");
+    const box = within(header()).getByRole("combobox", { name: "Empresa" });
+    expect(box.textContent).toContain("Acme");
+    box.focus();
+    await act(async () => fireEvent.keyDown(box, { key: "Enter" }));
+    const options = screen()
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["Acme", "Beta"]);
+  });
+
+  test("picking another company opens that company's chat with its own messages", async () => {
+    const state = withPo();
+    await go(state, "po/s-acme");
+    expect(screen().getByText("Resumo da Acme")).toBeTruthy();
+    await pick(within(header()).getByRole("combobox", { name: "Empresa" }), "Beta");
+    expect(screen().getByText("Resumo da Beta")).toBeTruthy();
+    expect(screen().queryByText("Resumo da Acme")).toBeNull();
+    expect(header().querySelector(".channel__topic")?.textContent).toBe("PO · Beta");
+    expect(state.calls.filter((c) => c.method === "po.openChat").map((c) => c.args[1])).toEqual(["s-acme", "s-beta"]);
+  });
+
+  test("a long company name stays whole in the line, and the switch is one control in the glyphs' row", async () => {
+    const long = "Companhia Brasileira de Distribuição de Alimentos Frescos e Congelados do Nordeste Ltda";
+    await go(withPo({ poCompanies: [company("s-acme", long)] }), "po/s-acme");
+    expect(header().querySelector(".channel__topic")?.textContent).toBe(`PO · ${long}`);
+    const acts = header().querySelector(".channel__acts") as HTMLElement;
+    expect(acts.querySelectorAll(":scope > .po-switch")).toHaveLength(1);
+    expect(acts.contains(within(header()).getByRole("combobox", { name: "Empresa" }))).toBe(true);
+  });
+
+  test("a plain DM with the same agent has no company switch", async () => {
+    await go(withPo(), `dm/agent/${ADA_ID}`);
+    expect(within(header()).queryByRole("combobox", { name: "Empresa" })).toBeNull();
+    expect(header().querySelector(".channel__topic")?.textContent).not.toContain("PO ·");
   });
 });
 

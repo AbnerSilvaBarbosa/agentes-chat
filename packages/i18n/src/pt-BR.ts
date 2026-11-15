@@ -3287,6 +3287,8 @@ export const ptBR = {
     opening: "Abrindo a conversa…",
     title: "Mensagem direta com {{name}}",
     poNone: "Nenhum PO para conversar sobre essa empresa.",
+    poTopic: "PO · {{company}}",
+    poCompany: "Empresa",
   },
   memoryCard: {
     remembered: "{{name}} lembrou",

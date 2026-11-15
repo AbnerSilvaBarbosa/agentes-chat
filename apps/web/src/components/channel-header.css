@@ -261,3 +261,11 @@ html:not([data-pointer]) .channel__icon.ac-btn:focus-visible {
     backdrop-filter: none;
   }
 }
+
+/* The PO chat's company switch (ADR 0185): one 32 control in the header's glyphs, as wide as its name asks up to a
+   limit that keeps it, the search and the toggle on one row at 320. Its list shows the whole name. */
+.po-switch {
+  flex: 0 1 auto;
+  width: 12rem;
+  max-width: 100%;
+}

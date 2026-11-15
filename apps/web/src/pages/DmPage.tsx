@@ -1,12 +1,13 @@
 import type { DmTarget } from "@agenteschat/client";
-import { addDm, useOpenPoChat } from "@agenteschat/client";
+import { addDm, useOpenPoChat, usePoOverview } from "@agenteschat/client";
 import { audienceNotice, canTalk, seesDetails } from "@agenteschat/client/lib/audience";
 import { greetingSuggestions } from "@agenteschat/client/lib/chat";
 import { isGone } from "@agenteschat/client/lib/errors";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
 import { isRightHand, rightHandSeenKey } from "@agenteschat/client/lib/right-hand";
-import { Avatar, BrainIcon, Button, EmptyState, ProviderLogo } from "@agenteschat/ui";
+import { Avatar, BrainIcon, Button, EmptyState, ProviderLogo, Select } from "@agenteschat/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/api/context";
@@ -27,6 +28,7 @@ import { useAgentThinks } from "@/hooks/useAgentThinks";
 import { useDirectory } from "@/hooks/useDirectory";
 import { rightHandSeen } from "@/lib/storage";
 import { ChannelPage, ChannelSkeleton, type DmSideControl } from "./ChannelPage";
+import { SpaceMark } from "./IssueProjects";
 
 /**
  * A direct message with an agent or a person: the channel layout with its own header and empty state. With `po`, the
@@ -113,7 +115,12 @@ export function DmPage({
               <span className="channel__name">{name}</span>
               {agent && <AudienceChip agent={agent} />}
             </h1>
-            {agent && (
+            {agent && po && (
+              <span className="channel__topic">
+                <PoTopic spaceId={po.spaceId} />
+              </span>
+            )}
+            {agent && !po && (
               <span className="channel__topic" data-right-hand={rightHand || undefined}>
                 {rightHand
                   ? `${t("rightHand.label")} · ${t("rightHand.actsAsYou")}`
@@ -144,6 +151,8 @@ export function DmPage({
           {/* The sidebar has the computer: only a line of turns waiting for it still shows here. A viewer of its public
               card gets the sidebar's head alone, so the way in stays for one who may still watch the computer. */}
           {agent && !rightHand && <ComputerButton agent={agent} queueOnly={side?.docked && seesDetails(agent)} />}
+          {/* The PO chat's company (ADR 0185): another company opens that company's own chat. */}
+          {po && <PoCompanySwitch spaceId={po.spaceId} />}
           {/* The same field as a channel's, held to this DM. */}
           <HeaderSearch channelId={dm.data.channelId} onOpen={onSearch} dm />
           {side && (
@@ -197,6 +206,35 @@ export function DmPage({
         emptyTitle: agent ? t("chat.sayHiAgent", agentGrammar(agent.name)) : t("chat.sayHiPerson", { name }),
         suggestions: agent ? greetingSuggestions(t, agent.role) : [],
       }}
+    />
+  );
+}
+
+/** The line under the PO's name: which company this chat is about, whole, wrapping where it must. */
+function PoTopic({ spaceId }: { spaceId: string }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const company = usePoOverview(org.id).data?.companies.find((c) => c.id === spaceId);
+  return <>{t("dm.poTopic", { company: company?.name ?? "" })}</>;
+}
+
+/** The live companies, the chat's own among them: picking one goes to that company's chat with the PO. */
+function PoCompanySwitch({ spaceId }: { spaceId: string }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const navigate = useNavigate();
+  const companies = usePoOverview(org.id).data?.companies ?? [];
+  return (
+    <Select
+      size="sm"
+      className="po-switch"
+      aria-label={t("dm.poCompany")}
+      value={spaceId}
+      onValueChange={(next) => {
+        if (next !== spaceId)
+          void navigate({ to: "/org/$orgId/po/$spaceId", params: { orgId: org.id, spaceId: next } });
+      }}
+      options={companies.map((c) => ({ value: c.id, label: c.name, leading: <SpaceMark space={c} /> }))}
     />
   );
 }
