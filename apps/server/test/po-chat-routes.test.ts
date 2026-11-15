@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { eq, schema } from "@agenteschat/db";
+import { insertMessage, proposeCard } from "@agenteschat/engine";
 import { browser, createTestServer, joinByInvitation, seedOrg, signUp, type TestServer } from "./harness";
 
 let t: TestServer;
@@ -73,4 +75,97 @@ test("the routes list, open, confirm and refuse a second decision", async () => 
 
   // A company that does not exist in this workspace is a 404.
   expect((await api(bia, "/po/chats", { json: { spaceId: "00000000-0000-4000-8000-000000000000" } })).status).toBe(404);
+
+  // A PO's proposal in bia's chat (what its tool writes in a run): a board of the company, a message of hers, a run.
+  const board = (await (
+    await api(owner, "/issue-projects", { json: { name: "Entregas", spaceId: acme.id } })
+  ).json()) as { id: string };
+  const [biaUser] = await t.db.select().from(schema.users).where(eq(schema.users.email, "bia@example.com"));
+  if (!biaUser) throw new Error("no user");
+  const propose = async (title: string) => {
+    const trigger = await insertMessage(t.db, {
+      orgId,
+      channelId: chat.channelId,
+      author: { type: "person", userId: biaUser.id },
+      body: title,
+    });
+    const [run] = await t.db
+      .insert(schema.agentRuns)
+      .values({
+        orgId,
+        agentId,
+        channelId: chat.channelId,
+        threadRootId: trigger.id,
+        triggerMessageId: trigger.id,
+        trigger: "mention",
+        hop: 1,
+        status: "running",
+      })
+      .returning();
+    if (!run) throw new Error("no run");
+    return proposeCard(
+      { db: t.db },
+      {
+        orgId,
+        agentId,
+        runId: run.id,
+        channelId: chat.channelId,
+        threadRootId: trigger.id,
+        triggerMessageId: trigger.id,
+      },
+      { title, summary: "Resumo", criteria: ["um", "dois"], board: "Entregas" },
+    );
+  };
+  const issuesNow = async () => (await t.db.select().from(schema.issues)).length;
+  const first = await propose("Tela de login");
+  const second = await propose("Cadastro");
+  const confirm = (b: typeof owner, id: string, edits?: Record<string, unknown>) =>
+    api(b, `/card-proposals/${id}/confirm`, { json: edits ?? {} });
+  const dismiss = (b: typeof owner, id: string) => api(b, `/card-proposals/${id}/dismiss`, { json: {} });
+
+  // Another person (even the owner) does not decide for her: 403, and nothing is created.
+  expect((await confirm(owner, first.id)).status).toBe(403);
+  expect((await dismiss(owner, first.id)).status).toBe(403);
+  expect(await issuesNow()).toBe(0);
+
+  // Confirm with an edited title returns the view with the created card.
+  const confirmed = await confirm(bia, first.id, { title: "Tela de entrada" });
+  expect(confirmed.status).toBe(200);
+  const view = (await confirmed.json()) as {
+    id: string;
+    status: string;
+    title: string;
+    project: { id: string; name: string };
+    issue: { id: string; number: number } | null;
+  };
+  expect(view).toMatchObject({ id: first.id, status: "confirmed", title: "Tela de entrada" });
+  expect(view.project).toEqual({ id: board.id, name: "Entregas" });
+  expect(view.issue?.number).toBeGreaterThan(0);
+  expect(await issuesNow()).toBe(1);
+
+  // A second decision on it, either way, is refused with its own code and creates nothing.
+  for (const again of [await confirm(bia, first.id), await dismiss(bia, first.id)]) {
+    expect(again.status).toBe(400);
+    expect(await again.json()).toMatchObject({ error: { code: "card_proposal.decided" } });
+  }
+  expect(await issuesNow()).toBe(1);
+
+  // Dismiss returns the dismissed view and creates nothing; confirming it afterwards is refused.
+  const dismissed = await dismiss(bia, second.id);
+  expect(dismissed.status).toBe(200);
+  expect(await dismissed.json()).toMatchObject({ id: second.id, status: "dismissed", issue: null });
+  expect(await issuesNow()).toBe(1);
+  expect(await (await confirm(bia, second.id)).json()).toMatchObject({ error: { code: "card_proposal.decided" } });
+
+  // The card's own refusal answers its error and the proposal stays pending: an archived board.
+  const third = await propose("Relatorios");
+  await api(owner, `/issue-projects/${board.id}`, { method: "PATCH", json: { archived: true } });
+  const refused = await confirm(bia, third.id);
+  expect(refused.status).toBe(400);
+  expect(await refused.json()).toMatchObject({ error: { code: "issue_project.archived" } });
+  expect(await issuesNow()).toBe(1);
+  const [still] = await t.db.select().from(schema.poCardProposals).where(eq(schema.poCardProposals.id, third.id));
+  expect(still?.status).toBe("pending");
+  // A proposal that is not in this workspace is a 404.
+  expect((await confirm(bia, "00000000-0000-4000-8000-000000000000")).status).toBe(404);
 });
