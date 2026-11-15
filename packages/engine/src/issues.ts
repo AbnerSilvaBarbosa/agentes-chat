@@ -82,7 +82,8 @@ export interface WorkActor {
   id: string;
 }
 export type IssueSource =
-  | { type: "manual" }
+  /** `proposalId`: a card a person confirmed from the PO's proposal (ADR 0185), so a second confirm finds it. */
+  | { type: "manual"; proposalId?: string }
   | { type: "message"; channelId: string; messageId: string }
   | { type: "agent"; agentId: string; workId?: string; channelId?: string; messageId?: string }
   | { type: "webhook"; provider: string };

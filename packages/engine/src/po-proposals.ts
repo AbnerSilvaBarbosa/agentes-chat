@@ -301,13 +301,23 @@ export async function confirmCardProposal(
   let done: ProposalRow | undefined;
   try {
     const { specify } = await specColumns(db, orgId, claimed.projectId);
-    const issue = await createIssue(deps, { type: "person", userId }, orgId, {
-      title: claimed.title,
-      description: claimed.summary,
-      criteria: claimed.criteria,
-      projectId: claimed.projectId,
-      columnId: specify.id,
-    });
+    // The card carries its proposal's id: a claim taken again after a stall (the card written, the mark not) finds
+    // the card it already made and links it, never a second one.
+    const [made] = await db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(eq(issues.orgId, orgId), sql`${issues.source}->>'proposalId' = ${id}`))
+      .limit(1);
+    const issue =
+      made ??
+      (await createIssue(deps, { type: "person", userId }, orgId, {
+        title: claimed.title,
+        description: claimed.summary,
+        criteria: claimed.criteria,
+        projectId: claimed.projectId,
+        columnId: specify.id,
+        source: { type: "manual", proposalId: id },
+      }));
     // Confirmed and queued for its spec in one write: the spec starts at once when the company has a slot.
     [done] = await db
       .update(poCardProposals)

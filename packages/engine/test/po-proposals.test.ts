@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { and, eq, schema } from "@agenteschat/db";
+import { and, eq, schema, sql } from "@agenteschat/db";
 import {
   applyColumnTemplate,
   boardColumnsOf,
@@ -398,6 +398,34 @@ describe("a person confirms or discards a proposal", () => {
     const view = await confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id);
     expect(view.status).toBe("confirmed");
     expect(await f.db.select().from(schema.issues)).toHaveLength(1);
+  });
+});
+
+describe("a confirm that stalls between its two writes", () => {
+  test("a second Criar after the stall links the card already made, never a second one", async () => {
+    f = await setup();
+    const { deps, ctx } = await poRun(f);
+    const proposal = await proposeCard(deps, ctx, { title: "Tela de login", board: "Entregas" });
+    // The stall: the card is written, then the write that marks the proposal confirmed fails.
+    await f.db.execute(sql`create function po_stall() returns trigger as $$
+      begin raise exception 'stalled between the writes'; end; $$ language plpgsql`);
+    await f.db.execute(sql`create trigger po_stall before update on po_card_proposals
+      for each row when (new.status = 'confirmed') execute function po_stall()`);
+    await expect(confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id)).rejects.toThrow();
+    expect(await f.db.select().from(schema.issues)).toHaveLength(1);
+    await f.db.execute(sql`drop trigger po_stall on po_card_proposals`);
+
+    // A crash leaves the claim `creating` instead; once it is stale it is claimed again.
+    await f.db
+      .update(schema.poCardProposals)
+      .set({ status: "creating", decidedAt: new Date(Date.now() - 3 * 60_000) })
+      .where(eq(schema.poCardProposals.id, proposal.id));
+    const view = await confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id);
+    const cards = await f.db.select().from(schema.issues);
+    expect(cards).toHaveLength(1);
+    expect(view.status).toBe("confirmed");
+    expect((await proposalRow(proposal.id)).issueId).toBe(cards[0]?.id ?? "");
+    expect(cards[0]?.title).toBe("Tela de login");
   });
 });
 
