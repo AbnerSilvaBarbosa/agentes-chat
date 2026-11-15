@@ -229,6 +229,7 @@ export * from "./pins";
 export * from "./plan-models";
 export * from "./plan-usage";
 export * from "./po-chat";
+export * from "./po-chat-context";
 export * from "./po-columns";
 export * from "./po-proposals";
 export * from "./profile";
