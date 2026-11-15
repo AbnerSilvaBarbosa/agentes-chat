@@ -92,7 +92,7 @@ describe("effectiveColumnSql", () => {
     const got = await resolved(tasks.map((t) => t.id));
     for (const t of tasks) {
       const expected = columnOf(await boardColumnsOf(f.db, f.org.id, t.projectId), t);
-      expect(got.get(t.id)?.column_id).toBe(must(expected).id);
+      expect(got.get(t.id)?.column_id).toBe(expected?.id);
     }
     // And the cases were not all the same column.
     expect(new Set(tasks.map((t) => got.get(t.id)?.column_id)).size).toBeGreaterThanOrEqual(5);
