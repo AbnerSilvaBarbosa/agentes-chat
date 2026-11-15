@@ -134,6 +134,8 @@ const ELSEWHERE = new Set([
   "request_settings_change",
   "request_folder_access",
   "propose_event",
+  // A PO's card proposal (ADR 0185): its card in the chat is the question, put to the person who asked.
+  "propose_card",
   // An email to whoever runs the server, in a person's name (ADR 0160 §11): only a run a person is behind sends it.
   "send_feedback",
 ]);
@@ -221,6 +223,7 @@ const ASKS_ITSELF = new Set([
   "request_folder_access",
   "send_feedback",
   "propose_event",
+  "propose_card",
   "schedule_action",
 ]);
 

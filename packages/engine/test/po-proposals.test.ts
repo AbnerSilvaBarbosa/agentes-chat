@@ -20,6 +20,7 @@ import {
   proposeCard,
   updateIssueProject,
 } from "../src";
+import { REFUSALS, toolPolicy } from "../src/tools/run-policy";
 import { addMember, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
@@ -440,5 +441,64 @@ describe("the propose_card tool", () => {
       },
     });
     expect(await allIssues(f)).toHaveLength(0);
+  });
+});
+
+describe("who may propose a card", () => {
+  const tool = { name: "propose_card", scope: "issues:write", connectionId: null };
+  const brief = {
+    routineId: "00000000-0000-4000-8000-000000000001",
+    routineRunId: "00000000-0000-4000-8000-000000000002",
+    name: "Pedidos do dia",
+    creatorUserId: "user_creator",
+    deliverTo: { channelId: "00000000-0000-4000-8000-000000000003", threadId: null },
+    access: "act" as const,
+    report: "when_new" as const,
+    trigger: "schedule" as const,
+    dueAt: new Date().toISOString(),
+  };
+
+  test("propose_card is refused to a routine and allowed to a person's run", () => {
+    for (const access of ["read", "act"] as const) {
+      expect(toolPolicy({ kind: "routine", personId: null, brief: { ...brief, access } }, tool)).toEqual({
+        action: "refuse",
+        reason: REFUSALS.routineElsewhere,
+      });
+    }
+    // A run a routine's report or work woke keeps the routine's bounds.
+    for (const reason of ["routine_report", "routine"] as const) {
+      expect(toolPolicy({ kind: "unattended", personId: null, reason, brief }, tool)).toEqual({
+        action: "refuse",
+        reason: REFUSALS.fedElsewhere,
+      });
+    }
+    expect(toolPolicy({ kind: "person", personId: "user_ana" }, tool)).toEqual({ action: "allow" });
+  });
+
+  test("an agent set to always ask adds no approval before a card that is itself the question", () => {
+    expect(toolPolicy({ kind: "person", personId: "user_ana" }, tool, "always")).toEqual({ action: "allow" });
+    // Another tool that writes in the same scope does ask at this level: the exemption is the proposal's own.
+    expect(
+      toolPolicy(
+        { kind: "person", personId: "user_ana" },
+        { name: "create_issue", scope: "issues:write", connectionId: null },
+        "always",
+      ),
+    ).toEqual({ action: "approve" });
+  });
+
+  test("a card is never proposed without a person's own request, whoever runs it", async () => {
+    f = await setup();
+    const { deps, ctx } = await poRun(f);
+    const own = await insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId: ctx.channelId,
+      author: { type: "agent", agentId: f.agent.id, runId: ctx.runId, hop: 1 },
+      body: "on its own",
+    });
+    await expect(
+      proposeCard(deps, { ...ctx, triggerMessageId: own.id }, { title: "Sozinho", board: "Entregas" }),
+    ).rejects.toThrow();
+    expect(await f.db.select().from(schema.poCardProposals)).toHaveLength(0);
   });
 });
