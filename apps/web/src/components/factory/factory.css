@@ -1,0 +1,48 @@
+/*
+ * The factory on Início (ADR 0184): "Esperando seu teste" reuses the home list's rows (`.home-row`); only what a row
+ * of a task needs is here, and the company panels' grid.
+ */
+
+/* A waiting task: number and title on one line with the time at its end, the company and board under them. A long
+   title or company name truncates on its line and never moves the time. */
+.fh-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-4);
+  row-gap: 2px;
+  align-items: baseline;
+}
+.fh-row__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+}
+.fh-row__number {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.fh-row__time {
+  white-space: nowrap;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--muted);
+}
+.fh-row__where {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--ink2);
+}
+.fh-row__wheretext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
