@@ -10,7 +10,7 @@ import { ActorAvatar } from "@/components/AgentAvatar";
 import { ErrorState, LoadingList } from "@/components/Loading";
 import { useOrg } from "@/components/org-context";
 import { SearchBox } from "@/components/search/SearchBox";
-import { groupHits, hitLink, SEARCH_PAGE, useWorkspaceSearch } from "@/hooks/useWorkspaceSearch";
+import { groupHits, type HitDm, hitLink, SEARCH_PAGE, useWorkspaceSearch } from "@/hooks/useWorkspaceSearch";
 
 /**
  * "Buscar no workspace" (`GET …/search`, ADR 0123): words and filter chips (`from:`, `in:`, `has:`, `mentions:`,
@@ -179,7 +179,7 @@ function HitRow({
   hit: SearchHit;
   channelId?: string;
   /** Who the DM is with, when the hit's place is a DM. */
-  dm?: { type: "person" | "agent"; id: string };
+  dm?: HitDm;
   /** Shown in the line (hits not grouped by channel). */
   channel?: string;
   onOpen: () => void;

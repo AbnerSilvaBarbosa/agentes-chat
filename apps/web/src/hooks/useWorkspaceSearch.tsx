@@ -1,5 +1,5 @@
 import type { SearchHit, SearchKind, SearchSort } from "@agenteschat/client";
-import { useChannels, useDms, useSearch } from "@agenteschat/client";
+import { useChannels, useDms, usePoOverview, useSearch } from "@agenteschat/client";
 import {
   formatSearch,
   hasSearch,
@@ -39,21 +39,22 @@ export function groupHits(hits: SearchHit[]) {
   return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b));
 }
 
+/** Who a DM is with, and for a PO chat (ADR 0185) the company it is about. */
+export type HitDm = { type: "person" | "agent"; id: string; spaceId?: string };
+
 /**
  * Where a hit opens, at its message: a reply in its thread, a DM's message in the DM (the channel route only knows
- * channels), the rest in its channel. Null when its place isn't one the person is in.
+ * channels), a PO chat's at its company's route, the rest in its channel. Null when its place isn't one the person is
+ * in.
  */
-export function hitLink(
-  orgId: string,
-  hit: SearchHit,
-  channelId?: string,
-  dm?: { type: "person" | "agent"; id: string },
-) {
+export function hitLink(orgId: string, hit: SearchHit, channelId?: string, dm?: HitDm) {
   if (!channelId) return null;
   const m = hit.kind === "message" ? (hit.messageId ?? undefined) : undefined;
   const search = m ? { m } : {};
   if (m && hit.threadId && hit.threadId !== m)
     return linkOptions({ to: "/org/$orgId/threads/$threadId", params: { orgId, threadId: hit.threadId }, search });
+  if (dm?.spaceId)
+    return linkOptions({ to: "/org/$orgId/po/$spaceId", params: { orgId, spaceId: dm.spaceId }, search });
   if (dm?.type === "agent")
     return linkOptions({ to: "/org/$orgId/dm/agent/$agentId", params: { orgId, agentId: dm.id }, search });
   if (dm) return linkOptions({ to: "/org/$orgId/dm/person/$userId", params: { orgId, userId: dm.id }, search });
@@ -70,13 +71,27 @@ export function useWorkspaceSearch(lazy = false) {
   const channels = useChannels(org.id);
   const dms = useDms(org.id);
   const dir = useDirectory(org.id);
+  const po = usePoOverview(org.id).data;
+  const poName = po?.agentId ? dir.agentById.get(po.agentId)?.name : undefined;
   const words = useMemo(() => searchWords(t), [t]);
+  // A PO chat is no row of the DM list: its places are the companies it has been opened for, named by the PO and the
+  // company.
+  const poPlaces = useMemo<SearchPlace[]>(
+    () =>
+      poName
+        ? (po?.companies ?? []).flatMap((c) =>
+            c.channelId ? [{ id: c.channelId, name: `${poName} · ${c.name}`, dm: true, poSpaceId: c.id }] : [],
+          )
+        : [],
+    [po?.companies, poName],
+  );
   const places = useMemo<SearchPlace[]>(
     () => [
       ...(channels.data ?? []).filter((c) => c.isMember).map((c) => ({ id: c.id, name: c.name })),
       ...(dms.data ?? []).map((d) => ({ id: d.channelId, name: d.with.name, dm: true })),
+      ...poPlaces,
     ],
-    [channels.data, dms.data],
+    [channels.data, dms.data, poPlaces],
   );
   const directory = useMemo<SearchDirectory>(
     () => ({
@@ -140,7 +155,12 @@ export function useWorkspaceSearch(lazy = false) {
     filtered,
     setShown,
     placeOf: (id: string | undefined) => places.find((p) => p.id === id),
-    dmWith: (id: string | undefined) => dms.data?.find((d) => d.channelId === id)?.with,
+    dmWith: (id: string | undefined): HitDm | undefined => {
+      const dm = dms.data?.find((d) => d.channelId === id)?.with;
+      if (dm) return dm;
+      const chat = poPlaces.find((p) => p.id === id);
+      return chat?.poSpaceId && po?.agentId ? { type: "agent", id: po.agentId, spaceId: chat.poSpaceId } : undefined;
+    },
     /** The search as typed, kept with the recent ones. */
     remember: () => {
       const text = formatSearch(chips, parseSearch(input, directory, words).text);

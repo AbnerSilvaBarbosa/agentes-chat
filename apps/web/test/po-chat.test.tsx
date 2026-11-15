@@ -5,7 +5,7 @@ setupDom();
 
 import { type CardProposalView, keys, type Message, type PoCompany } from "@agenteschat/client";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
-import { ADA_ID, createFakeApi, type FakeState, ORG_ID, seedState } from "./fake-api";
+import { ADA_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedDm, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
 const header = () => document.querySelector(".channel__header") as HTMLElement;
@@ -232,5 +232,68 @@ describe("Conversar com o PO on a company's page", () => {
   test("an archived company offers none: no chat opens for it", async () => {
     await visit("?space={space}", { poCompanies: [] });
     expect(talk()).toHaveLength(0);
+  });
+});
+
+describe("a search hit in a PO chat", () => {
+  const box = () => within(header()).getByRole("combobox", { name: "Buscar" }) as HTMLInputElement;
+  const typeIn = async (value: string) => {
+    await act(async () => fireEvent.change(box(), { target: { value } }));
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    await settle(4);
+  };
+  const enter = async () => {
+    await act(async () => fireEvent.keyDown(box(), { key: "Enter" }));
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    await settle(4);
+  };
+  const results = () => screen().queryByRole("complementary", { name: "Resultados da busca" }) as HTMLElement | null;
+
+  const scene = () => {
+    // Both chats exist already: the overview gives their channels.
+    const state = withPo({
+      poCompanies: [
+        company("s-acme", "Acme", { channelId: "po-chat-s-acme" }),
+        company("s-beta", "Beta", { channelId: "po-chat-s-beta" }),
+      ],
+    });
+    state.messages.push(say("po-chat-s-acme", "m-zebra-po", "uma zebra no chat do PO da Acme"));
+    state.messages.push(say("po-chat-s-beta", "m-zebra-beta", "outra zebra no chat da Beta"));
+    seedDm(state, { type: "agent", id: ADA_ID }, { body: "uma zebra na DM" });
+    return state;
+  };
+
+  test("is named by the PO and the company, and its link opens that company's PO chat at the message", async () => {
+    const { router } = await go(scene(), `c/${ENG_ID}`);
+    await act(async () => fireEvent.click(screen().getByRole("button", { name: "Remover em: #eng" })));
+    await typeIn("zebra");
+    await enter();
+    const place = within(results() as HTMLElement).getByRole("region", { name: "DM com Ada · Acme" });
+    await act(async () => fireEvent.click(within(place).getByRole("button", { name: "Ir para a mensagem de Ada" })));
+    await settle(8);
+    expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/po/s-acme`);
+    expect(router.state.location.search).toMatchObject({ m: "m-zebra-po" });
+    expect(screen().getByText("uma zebra no chat do PO da Acme")).toBeTruthy();
+  });
+
+  test("a plain DM's hit still opens the DM, not a PO chat", async () => {
+    const { router } = await go(scene(), `c/${ENG_ID}`);
+    await act(async () => fireEvent.click(screen().getByRole("button", { name: "Remover em: #eng" })));
+    await typeIn("zebra");
+    await enter();
+    const dm = within(results() as HTMLElement).getByRole("region", { name: "DM com Ada" });
+    await act(async () => fireEvent.click(within(dm).getByRole("button", { name: "Ir para a mensagem de Ada" })));
+    await settle(8);
+    expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/dm/agent/${ADA_ID}`);
+  });
+
+  test("the PO chat's own header search stays in that chat", async () => {
+    await go(scene(), "po/s-acme");
+    await typeIn("zebra");
+    await enter();
+    const panel = results() as HTMLElement;
+    expect(within(panel).getByText(/chat do PO da Acme/)).toBeTruthy();
+    expect(within(panel).queryByText(/chat da Beta/)).toBeNull();
+    expect(within(panel).queryByText(/na DM/)).toBeNull();
   });
 });

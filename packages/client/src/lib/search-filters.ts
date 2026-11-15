@@ -34,11 +34,13 @@ export interface SearchActor {
   name: string;
   handle?: string | null;
 }
-/** A channel or a DM (`name` = the other person's name). */
+/** A channel, a DM (`name` = the other person's name) or a PO chat (`name` = the PO and the company, ADR 0185). */
 export interface SearchPlace {
   id: string;
   name: string;
   dm?: boolean;
+  /** A PO chat: the company it is about, which is where its hits open. */
+  poSpaceId?: string;
 }
 export interface SearchDirectory {
   actors: readonly SearchActor[];
