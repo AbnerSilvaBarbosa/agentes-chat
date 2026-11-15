@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { and, asc, countQueries, eq, schema } from "@agenteschat/db";
+import { and, asc, countQueries, eq, schema, tracingLogger } from "@agenteschat/db";
 import { systemText } from "@agenteschat/providers";
 import {
   applyColumnTemplate,
@@ -358,6 +358,58 @@ describe("a spec run starts in the card's conversation, three at a time per comp
     const runs = await f.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.agentId, f.agent.id));
     expect(runs).toHaveLength(3);
   });
+
+  test("a start takes the company's advisory lock before it counts the runs and before it writes the run", async () => {
+    // PGlite is one connection, so two transactions cannot interleave here: this pins what keeps them apart on a real
+    // server, the order of the statements of one start (the lock, then the count, then the writes).
+    f = await setup();
+    const c = await specCompany();
+    await c.queue("A");
+    const seen: string[] = [];
+    const log = tracingLogger.logQuery;
+    tracingLogger.logQuery = (query: string, params: unknown[]) => {
+      seen.push(`${query}\u0000${JSON.stringify(params)}`);
+      log();
+    };
+    try {
+      await pumpSpecs(c.deps, c.company.id);
+    } finally {
+      tracingLogger.logQuery = log;
+    }
+    const at = (needle: RegExp, from = 0) => seen.findIndex((q, i) => i >= from && needle.test(q));
+    const lock = at(/pg_advisory_xact_lock/);
+    expect(lock).toBeGreaterThan(-1);
+    expect(seen[lock]).toContain(`po-specs:${c.company.id}`);
+    // The cap is counted again under the lock, then the start message and the row are written, in that order.
+    expect(at(/insert into "messages"/, lock)).toBeGreaterThan(at(/count\(\*\)/, lock));
+    expect(at(/count\(\*\)/, lock)).toBeGreaterThan(lock);
+    expect(at(/insert into "messages"/, lock)).toBeGreaterThan(lock);
+    expect(at(/update "po_card_proposals"[\s\S]*"spec_state"/, lock)).toBeGreaterThan(lock);
+  });
+
+  // Locks between connections: a real server only (`TEST_DATABASE_URL`), as outbox.test.ts does; PGlite has one.
+  test.skipIf(!process.env.TEST_DATABASE_URL)(
+    "ten pumps at once over ten queued specs never run more than three",
+    async () => {
+      f = await setup();
+      const c = await specCompany();
+      for (let i = 0; i < 10; i++) await c.queue(`Card ${i}`);
+      await Promise.all(Array.from({ length: 10 }, () => pumpSpecs(c.deps, c.company.id)));
+      const rows = await f.db
+        .select()
+        .from(schema.poCardProposals)
+        .where(eq(schema.poCardProposals.spaceId, c.company.id));
+      expect(rows.filter((r) => r.specState === "running")).toHaveLength(SPEC_RUNS_PER_COMPANY);
+      expect(rows.filter((r) => r.specState === "queued")).toHaveLength(7);
+      expect(await f.db.select().from(schema.agentRuns)).toHaveLength(SPEC_RUNS_PER_COMPANY);
+      // The ones that started are the first three confirmed.
+      const first = rows
+        .filter((r) => r.specState === "running")
+        .map((r) => r.title)
+        .sort();
+      expect(first).toEqual(["Card 0", "Card 1", "Card 2"]);
+    },
+  );
 
   test("a PO that is gone fails the row with po_missing and starts no run", async () => {
     f = await setup();
