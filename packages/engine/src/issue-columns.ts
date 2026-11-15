@@ -564,6 +564,13 @@ export async function applyColumnTemplate(
       .select()
       .from(issueColumns)
       .where(and(eq(issueColumns.orgId, orgId), eq(issueColumns.projectId, projectId)));
+    // Where each task sat before the old columns go (their deletion empties the tasks' `column_id`).
+    const tasks = await tx
+      .select({ id: issues.id, status: issues.status, columnId: issues.columnId })
+      .from(issues)
+      .where(and(eq(issues.orgId, orgId), eq(issues.projectId, projectId)));
+    // Emptying `column_id` is not a move: the clock stays until each task is placed below.
+    await tx.execute(sql`select set_config('agentes.keep_column_since', 'on', true)`);
     await tx.delete(issueColumns).where(and(eq(issueColumns.orgId, orgId), eq(issueColumns.projectId, projectId)));
     const created = await tx
       .insert(issueColumns)
@@ -581,14 +588,16 @@ export async function applyColumnTemplate(
     // Every task of the board whose column is gone lands in the first column of its stage.
     const byStage = (stage: string) => created.find((c) => c.stage === stage) ?? created[0];
     const gone = new Set(before.map((c) => c.id));
-    const tasks = await tx
-      .select({ id: issues.id, status: issues.status, columnId: issues.columnId })
-      .from(issues)
-      .where(and(eq(issues.orgId, orgId), eq(issues.projectId, projectId)));
+    const oldById = new Map(before.map((c) => [c.id, c]));
+    const oldFirstOfStage = (stage: string) => sortColumns(before).find((c) => c.stage === stage);
     for (const task of tasks) {
       if (task.columnId && !gone.has(task.columnId)) continue;
       const column = byStage(task.status);
       if (!column) continue;
+      // A task that lands in a column of the same name and stage did not move: re-applying a set keeps its clock.
+      const was = task.columnId ? oldById.get(task.columnId) : oldFirstOfStage(task.status);
+      const stays = !!was && was.stage === column.stage && was.name === column.name;
+      await tx.execute(sql`select set_config('agentes.keep_column_since', ${stays ? "on" : "off"}, true)`);
       await tx
         .update(issues)
         .set({ columnId: column.id, status: column.stage as IssueStatus, updatedAt: new Date() })

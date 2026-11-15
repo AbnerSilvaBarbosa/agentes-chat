@@ -2,7 +2,15 @@ import { afterEach, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq, rowsOf, schema, sql } from "@agenteschat/db";
-import { createIssue, createIssueColumn, listIssueColumns, updateIssue } from "../src";
+import {
+  applyColumnTemplate,
+  createColumnTemplate,
+  createIssue,
+  createIssueColumn,
+  createIssueProject,
+  listIssueColumns,
+  updateIssue,
+} from "../src";
 import { type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
@@ -125,6 +133,50 @@ test("resets column_since on a status column or board change and on nothing else
     text: "ping",
   });
   expect(pinned(await sinceOf(issue.id))).toBe(true);
+
+  // Applying a status set that has no column for the task's stage moves it, and restarts the clock.
+  const set = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+    name: "Curto",
+    columns: [
+      { name: "Fazer", stage: "todo" },
+      { name: "Pronto", stage: "done" },
+    ],
+  });
+  const onBoard = await createIssueProject(deps, f.owner.id, f.org.id, { name: "App" });
+  const lost = await createIssue(deps, ana, f.org.id, { title: "Sem coluna", projectId: onBoard.id });
+  await updateIssue(deps, ana, f.org.id, lost.id, { status: "in_progress" });
+  await pin(lost.id);
+  await applyColumnTemplate(deps, f.owner.id, f.org.id, onBoard.id, set.id);
+  expect(pinned(await sinceOf(lost.id))).toBe(false);
+});
+
+test("re-applying a set keeps the clock of a task that stays in a column of the same name and stage", async () => {
+  f = await setup();
+  const deps = { db: f.db, pubsub: f.pubsub };
+  const ana = person(f.owner.id);
+  const set = await createColumnTemplate(deps, f.owner.id, f.org.id, {
+    name: "Entrega",
+    columns: [
+      { name: "Fazer", stage: "todo" },
+      { name: "Teste humano", stage: "in_review", waitsForPerson: true },
+      { name: "Pronto", stage: "done" },
+    ],
+  });
+  const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site" });
+  const columns = await applyColumnTemplate(deps, f.owner.id, f.org.id, board.id, set.id);
+  const human = must(columns.find((c) => c.projectId === board.id && c.name === "Teste humano"));
+  const waiting = await createIssue(deps, ana, f.org.id, { title: "Tela", projectId: board.id, columnId: human.id });
+  const todo = await createIssue(deps, ana, f.org.id, { title: "Ideia", projectId: board.id });
+  await pin(waiting.id);
+  await pin(todo.id);
+
+  const again = await applyColumnTemplate(deps, f.owner.id, f.org.id, board.id, set.id);
+  const fresh = must(again.find((c) => c.projectId === board.id && c.name === "Teste humano"));
+  expect(fresh.id).not.toBe(human.id);
+  const [row] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, waiting.id));
+  expect(row?.columnId).toBe(fresh.id);
+  expect(pinned(await sinceOf(waiting.id))).toBe(true);
+  expect(pinned(await sinceOf(todo.id))).toBe(true);
 });
 
 test("keeps column_since under the bypass setting, inside one transaction only", async () => {
