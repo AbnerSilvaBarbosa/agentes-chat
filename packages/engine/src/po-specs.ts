@@ -1,5 +1,5 @@
 import type { PubSub } from "@agenteschat/adapters";
-import { and, asc, type Database, eq, schema, sql } from "@agenteschat/db";
+import { and, asc, type Database, eq, inArray, isNull, or, schema, sql } from "@agenteschat/db";
 import { publishChannelEvent, publishMessageCreated } from "./events";
 import { updateIssue } from "./issues";
 import { insertMessage, type MessageView, messageView } from "./messages";
@@ -306,8 +306,7 @@ export async function settleSpecRun(
   status: "done" | "failed" | "canceled",
   error?: string,
 ): Promise<void> {
-  const { db } = deps;
-  const [proposal] = await db
+  const [proposal] = await deps.db
     .select()
     .from(poCardProposals)
     .where(
@@ -317,7 +316,16 @@ export async function settleSpecRun(
         eq(poCardProposals.specState, "running"),
       ),
     );
-  if (!proposal) return;
+  if (proposal) await settleRow(deps, proposal, status, error);
+}
+
+async function settleRow(
+  deps: SpecDeps,
+  proposal: ProposalRow,
+  status: "done" | "failed" | "canceled",
+  error?: string,
+) {
+  const { db } = deps;
   const [card] = proposal.issueId
     ? await db
         .select({ specPageId: schema.issues.specPageId })
@@ -337,6 +345,46 @@ export async function settleSpecRun(
     .where(and(eq(poCardProposals.id, proposal.id), eq(poCardProposals.specState, "running")))
     .returning();
   if (settled) await reportSpec(deps, settled, state);
+}
+
+/**
+ * The tick (every minute): a `running` spec whose run is over, or gone, and that nobody settled (a restart between the
+ * run's end and its hook) is settled now, and every company with queued specs is pumped, so a start that was held
+ * goes on. Returns how many it settled.
+ */
+export async function reapSpecs(deps: SpecDeps): Promise<number> {
+  const { db } = deps;
+  const stale = await db
+    .select({ row: poCardProposals, status: agentRuns.status, error: agentRuns.error })
+    .from(poCardProposals)
+    .leftJoin(agentRuns, eq(agentRuns.id, poCardProposals.specRunId))
+    .where(
+      and(
+        eq(poCardProposals.specState, "running"),
+        or(isNull(agentRuns.id), inArray(agentRuns.status, ["done", "failed", "canceled"])),
+      ),
+    )
+    .limit(200);
+  let settled = 0;
+  for (const { row, status, error } of stale) {
+    try {
+      await settleRow(
+        deps,
+        row,
+        status === "done" || status === "canceled" ? status : "failed",
+        status ? (error ?? undefined) : "run_missing",
+      );
+      settled++;
+    } catch {
+      // The next tick tries again; one spec never holds back the rest.
+    }
+  }
+  const waiting = await db
+    .selectDistinct({ spaceId: poCardProposals.spaceId })
+    .from(poCardProposals)
+    .where(eq(poCardProposals.specState, "queued"));
+  for (const { spaceId } of waiting) await pumpSpecs(deps, spaceId).catch(() => undefined);
+  return settled;
 }
 
 /**

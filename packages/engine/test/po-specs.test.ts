@@ -20,6 +20,7 @@ import {
   onConsultedRunFinished,
   openPoChat,
   pumpSpecs,
+  reapSpecs,
   SPEC_RUNS_PER_COMPANY,
   setCriterion,
   specBrief,
@@ -789,5 +790,64 @@ describe("a finished spec run moves its card", () => {
     const said = await reports(one.issue.id, c.chat.channelId);
     expect(said.comments).toHaveLength(1);
     expect(said.chat).toHaveLength(1);
+  });
+});
+
+describe("the tick settles specs nobody heard end", () => {
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+
+  async function running(c: Awaited<ReturnType<typeof specCompany>>, titles: string[]) {
+    const made = [];
+    for (const t of titles) made.push(await c.queue(t));
+    await pumpSpecs(c.deps, c.company.id);
+    return Promise.all(made.map(async (m) => ({ ...m, now: await c.state(m.row.id) })));
+  }
+  const setRun = (runId: string | null | undefined, set: { status: "done" | "failed" | "canceled"; error?: string }) =>
+    f.db
+      .update(schema.agentRuns)
+      .set(set)
+      .where(eq(schema.agentRuns.id, runId as string));
+
+  test("the tick settles a run that ended unheard", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [done, failed, gone, alive] = await running(c, ["Pronta", "Quebrou", "Sumiu", "Trabalhando"]);
+    if (!done || !failed || !gone || !alive) throw new Error("none");
+    // Three runs end without the hook (a restart between the end and its call); the fourth is still queued.
+    const page = await createWikiPage({ db: f.db, pubsub: f.pubsub, search: f.context }, owner(), f.org.id, {
+      title: "Spec pronta",
+      body: "# Spec",
+      folder: "Specs/Acme",
+    });
+    await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, done.issue.id, { specPageId: page.id });
+    await setRun(done.now?.specRunId, { status: "done" });
+    await setRun(failed.now?.specRunId, { status: "failed", error: "provider_down" });
+    await f.db.delete(schema.agentRuns).where(eq(schema.agentRuns.id, gone.now?.specRunId as string));
+
+    expect(await reapSpecs(c.deps)).toBe(3);
+    expect((await c.state(done.row.id))?.specState).toBe("done");
+    expect(await c.state(failed.row.id)).toMatchObject({ specState: "failed", specError: "provider_down" });
+    expect(await c.state(gone.row.id)).toMatchObject({ specState: "failed", specError: "run_missing" });
+    // The card of the finished spec moved on; the others stayed.
+    const column = async (id: string) =>
+      (await f.db.select().from(schema.issues).where(eq(schema.issues.id, id)))[0]?.columnId;
+    expect(await column(done.issue.id)).toBe(c.prioritized?.id);
+    expect(await column(failed.issue.id)).toBe(c.specify.id);
+    // The slot the three freed went to the one that waited.
+    expect((await c.state(alive.row.id))?.specState).toBe("running");
+    // Run again: nothing left to settle, and the run that works is not touched.
+    expect(await reapSpecs(c.deps)).toBe(0);
+    expect((await c.state(alive.row.id))?.specState).toBe("running");
+  });
+
+  test("the tick starts held specs when a slot is free", async () => {
+    f = await setup();
+    const c = await specCompany();
+    const rows = await running(c, ["A", "B", "C", "D"]);
+    expect(rows.map((r) => r.now?.specState)).toEqual(["running", "running", "running", "queued"]);
+    // A run was failed by hand with its row left running: only the tick can free its slot.
+    await setRun(rows[0]?.now?.specRunId, { status: "failed", error: "x" });
+    expect(await reapSpecs(c.deps)).toBe(1);
+    expect((await c.state(rows[3]?.row.id as string))?.specState).toBe("running");
   });
 });

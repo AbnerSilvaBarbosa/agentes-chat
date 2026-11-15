@@ -47,6 +47,7 @@ import {
   purgeDeletedWikiPages,
   queueApprovalDigests,
   reapRoutineRuns,
+  reapSpecs,
   reconcileComposioAccounts,
   reconcileComposioConnectors,
   reconcileWorks,
@@ -155,6 +156,8 @@ export const WORKER_INTERVALS_MS = {
   approvalDigest: 15 * 60_000,
   reflections: 10 * 60_000,
   consolidation: 24 * 3600_000,
+  /** Spec runs of a PO that ended without their hook being heard, and queued specs a start held back (ADR 0185). */
+  specs: 60_000,
   /** Often enough that the routines of one minute fire as the ramp their offsets make (`fireDueRoutines`). */
   routines: 5_000,
   /** Snoozed notifications whose time came back to the inbox. */
@@ -331,6 +334,12 @@ export function startWorkers(deps: WorkerDeps) {
     if (expired > 0) log.info("agent consultations expired", { expired });
     const asks = await expireAgentProposalAsks({ db, pubsub: deps.pubsub });
     if (asks > 0) log.info("expired agent proposals left the inbox", { asks });
+  });
+
+  // A PO's spec run that ended unheard is settled, and held specs start (ADR 0185).
+  every("specs", WORKER_INTERVALS_MS.specs, async () => {
+    const settled = await reapSpecs({ db, pubsub: deps.pubsub });
+    if (settled > 0) log.info("spec runs settled by the tick", { settled });
   });
 
   every("secrets", WORKER_INTERVALS_MS.approvals, async () => {
