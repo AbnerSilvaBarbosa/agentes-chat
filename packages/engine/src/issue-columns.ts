@@ -433,6 +433,8 @@ export async function deleteIssueColumn(
       .where(
         and(
           eq(issues.orgId, orgId),
+          // A board's own column only holds that board's tasks, never another board's with no column.
+          column.projectId ? eq(issues.projectId, column.projectId) : undefined,
           firstOfStage
             ? sql`(${issues.columnId} = ${column.id} or (${issues.columnId} is null and ${issues.status} = ${column.stage}))`
             : eq(issues.columnId, column.id),

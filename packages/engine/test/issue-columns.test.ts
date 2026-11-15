@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { inArray, schema } from "@agenteschat/db";
 import {
   createIssue,
   createIssueColumn,
+  createIssueProject,
   deleteIssueColumn,
   ForbiddenError,
   listIssueColumns,
@@ -93,5 +95,32 @@ describe("board columns", () => {
     expect(after).toMatchObject({ status: "in_progress", columnId: progress.id });
 
     await expect(listIssueColumns(f.db, "someone-else", f.org.id)).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  test("deleting a column leaves other boards' tasks where they are", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const ana = person(f.owner.id);
+    const mine = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Site" });
+    const theirs = await createIssueProject(deps, f.owner.id, f.org.id, { name: "App" });
+    const own = await createIssueColumn(deps, f.owner.id, f.org.id, {
+      name: "Extra",
+      stage: "todo",
+      projectId: mine.id,
+    });
+    const ownColumns = own.filter((c) => c.projectId === mine.id);
+    const firstTodo = must(ownColumns.find((c) => c.stage === "todo" && c.name === null));
+    const progress = must(ownColumns.find((c) => c.stage === "in_progress"));
+    const inMine = await createIssue(deps, ana, f.org.id, { title: "Daqui", projectId: mine.id });
+    const inTheirs = await createIssue(deps, ana, f.org.id, { title: "De fora", projectId: theirs.id });
+
+    await deleteIssueColumn(deps, f.owner.id, f.org.id, firstTodo.id, progress.id);
+    const rows = await f.db
+      .select()
+      .from(schema.issues)
+      .where(inArray(schema.issues.id, [inMine.id, inTheirs.id]));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(inMine.id)).toMatchObject({ status: "in_progress", columnId: progress.id });
+    expect(byId.get(inTheirs.id)).toMatchObject({ status: "todo", columnId: null });
   });
 });
