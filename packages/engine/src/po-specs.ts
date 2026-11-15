@@ -192,3 +192,22 @@ export async function specBriefOfRun(
     .where(and(eq(schema.issues.id, spec.issueId), eq(schema.issues.orgId, run.orgId)));
   return issue ? specBrief(db, run.orgId, proposal, issue) : null;
 }
+
+/** The heading of the section of a card's description that holds its spec's acceptance criteria (`attach_spec`). */
+export const CRITERIA_HEADING = "## Critérios de aceite";
+
+/**
+ * The description with its criteria section written: an existing section (from its heading to the next `##` heading)
+ * is replaced, else one is added at the end, so attaching a spec twice never repeats it. No criteria drops the section.
+ */
+export function withCriteriaSection(description: string, criteria: string[]): string {
+  const section = criteria.length ? `${CRITERIA_HEADING}\n\n${criteria.map((c) => `- ${c}`).join("\n")}` : "";
+  const lines = description.split("\n");
+  const start = lines.findIndex((l) => l.trim() === CRITERIA_HEADING);
+  if (start < 0) return [description.trim(), section].filter(Boolean).join("\n\n");
+  const next = lines.findIndex((l, i) => i > start && /^##\s/.test(l));
+  const end = next < 0 ? lines.length : next;
+  return [lines.slice(0, start).join("\n").trim(), section, lines.slice(end).join("\n").trim()]
+    .filter(Boolean)
+    .join("\n\n");
+}

@@ -28,14 +28,17 @@ import {
 import { fileIdsOf, getMessage } from "./messages";
 import { can, getMembership, listMembers } from "./organizations";
 import { poScopeOf } from "./po-chat";
-import { proposeCard } from "./po-proposals";
-import { chosenAudience, personBehindCall, visibleToField } from "./requester";
+import { PROPOSAL_LIMITS, proposeCard } from "./po-proposals";
+import { specFolder } from "./po-spec-brief";
+import { withCriteriaSection } from "./po-specs";
+import { chosenAudience, personBehindCall, visibleToField, wikiActorOfCall } from "./requester";
 import { isRightHand, rightHandReader } from "./right-hand";
 import { replyThreadOf } from "./runs";
 import { type Audience, audienceOfConversation } from "./task-access";
 import { ensureTaskConversation } from "./task-conversation";
 import type { ToolContext, ToolDefinition, ToolOutput, ToolSource } from "./tools/types";
 import { untrustedBlock } from "./untrusted";
+import { getWikiPage } from "./wiki";
 
 export const UPDATE_ISSUE_TOOL = "update_issue";
 
@@ -804,6 +807,75 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
     },
     {
+      name: "attach_spec",
+      description:
+        "Register the spec you wrote for the card you are speccing: link its wiki page to the card and put the final acceptance criteria in the card's description and checklist. Call it once the page exists; calling it again replaces the criteria. Only in the run that writes a card's spec.",
+      scope: "issues:write",
+      inputSchema: {
+        type: "object",
+        properties: {
+          page: { type: "string", minLength: 1, maxLength: 200, description: "The spec page's title or slug" },
+          criteria: {
+            type: "array",
+            items: { type: "string", maxLength: PROPOSAL_LIMITS.criterion },
+            maxItems: PROPOSAL_LIMITS.criteria,
+            description: "The spec's acceptance criteria, one string each.",
+          },
+        },
+        required: ["page", "criteria"],
+        additionalProperties: false,
+      },
+      async execute(input, ctx) {
+        try {
+          const [proposal] = await deps.db
+            .select()
+            .from(schema.poCardProposals)
+            .where(and(eq(schema.poCardProposals.specRunId, ctx.runId), eq(schema.poCardProposals.orgId, ctx.orgId)));
+          // Code, not the listing: a computer brain lists tools once.
+          if (!proposal?.issueId)
+            return { content: "attach_spec is only for the run that writes a card's spec.", isError: true };
+          const [space] = await deps.db
+            .select({ name: schema.issueSpaces.name })
+            .from(schema.issueSpaces)
+            .where(eq(schema.issueSpaces.id, proposal.spaceId));
+          const own = specFolder(space?.name ?? "");
+          const page = await getWikiPage(deps.db, await wikiActorOfCall(ctx), ctx.orgId, str(input.page));
+          const folder = (page.folder ?? "").toLowerCase();
+          if (folder !== own.toLowerCase() && !folder.startsWith(`${own.toLowerCase()}/`))
+            return {
+              content: `A spec lives in the company's folder ${own}; "${page.title}" is ${page.folder ? `in ${page.folder}` : "outside it"}. Save the spec there and call attach_spec again.`,
+              isError: true,
+            };
+          const criteria = (Array.isArray(input.criteria) ? input.criteria : [])
+            .map((c) => String(c).trim())
+            .filter(Boolean);
+          if (criteria.length > PROPOSAL_LIMITS.criteria || criteria.some((c) => c.length > PROPOSAL_LIMITS.criterion))
+            return {
+              content: `At most ${PROPOSAL_LIMITS.criteria} criteria of ${PROPOSAL_LIMITS.criterion} characters.`,
+              isError: true,
+            };
+          const current = await getIssue(deps.db, actorOf(ctx), ctx.orgId, { id: proposal.issueId });
+          // A criterion whose text stays keeps its id, so a check a person made is not lost.
+          const kept = new Map(current.criteria.map((c) => [c.text, c.id]));
+          const issue = await updateIssue(deps, actorOf(ctx), ctx.orgId, current.id, {
+            specPageId: page.id,
+            description: withCriteriaSection(current.description, criteria),
+            criteria: criteria.map((text) => {
+              const id = kept.get(text);
+              kept.delete(text);
+              return id ? { id, text } : { text };
+            }),
+          });
+          return {
+            content: `Registered the spec [[${page.title}]] on #${issue.number} with ${criteria.length} acceptance criteria. Do not move the card: the system does.`,
+            data: { issue: { id: issue.id, number: issue.number } },
+          };
+        } catch (error) {
+          return failed(error);
+        }
+      },
+    },
+    {
       name: "create_issue",
       description:
         "Create a task on this workspace's board: task, tarefa or backlog mean this board, never GitHub or another tool unless the person names it (criar tarefa no backlog). It takes a title, a description and acceptance criteria (a checklist), and optionally a priority, labels, a project, an assignee and a due date. No permission needed: when work should be tracked, create it; the person sees it with Undo.",
@@ -1082,7 +1154,15 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
     // A PO chat offers `propose_card` and never `create_issue` (ADR 0185): nothing there is created without a yes.
     tools: async (ctx) => {
       const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
-      return tools.filter((t) => (po ? t.name !== "create_issue" : t.name !== "propose_card"));
+      // `attach_spec` is offered to the run a proposal started to write a card's spec, and to no other.
+      const [specRun] = await deps.db
+        .select({ id: schema.poCardProposals.id })
+        .from(schema.poCardProposals)
+        .where(and(eq(schema.poCardProposals.specRunId, ctx.runId), eq(schema.poCardProposals.orgId, ctx.orgId)))
+        .limit(1);
+      return tools.filter((t) =>
+        t.name === "attach_spec" ? Boolean(specRun) : po ? t.name !== "create_issue" : t.name !== "propose_card",
+      );
     },
   };
 }

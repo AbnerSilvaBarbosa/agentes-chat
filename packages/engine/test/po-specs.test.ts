@@ -8,9 +8,11 @@ import {
   createIssueColumn,
   createIssueProject,
   createIssueSpace,
+  createIssueToolSource,
   createWikiPage,
   deleteWikiPage,
   getIssue,
+  grantScopes,
   insertMessage,
   listColumnTemplates,
   listIssueActivity,
@@ -18,11 +20,13 @@ import {
   openPoChat,
   pumpSpecs,
   SPEC_RUNS_PER_COMPANY,
+  setCriterion,
   specBrief,
   specColumns,
   specFolder,
   specPageTitle,
   updateIssue,
+  withCriteriaSection,
 } from "../src";
 import { type Fixture, setup } from "./fixtures";
 
@@ -476,5 +480,120 @@ describe("a spec run reads the spec brief", () => {
     const plain = systemText((await buildRunContext(f.db, otherRun, f.agent, { maxMessages: 10 })).system);
     expect(plain).not.toContain("write the spec of card");
     expect(plain).toContain(`task #${issue.number}`);
+  });
+});
+
+describe("attach_spec registers a card's spec", () => {
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+  const wikiDeps = () => ({ db: f.db, pubsub: f.pubsub, search: f.context });
+
+  /** A started spec run and the tool context the run calls its tools with. */
+  async function specRunCtx(title = "Tela de login") {
+    const c = await specCompany();
+    await grantScopes(
+      f.db,
+      f.org.id,
+      f.agent.id,
+      ["issues:read", "issues:write", "wiki:read", "wiki:write"].map((scope) => ({ connectionId: null, scope })),
+    );
+    const { issue, row } = await c.queue(title);
+    await pumpSpecs(c.deps, c.company.id);
+    const started = await c.state(row.id);
+    const [run] = await f.db
+      .select()
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.id, started?.specRunId as string));
+    if (!run) throw new Error("no run");
+    const ctx = {
+      db: f.db,
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      runId: run.id,
+      channelId: run.channelId,
+      threadRootId: run.threadRootId,
+      triggerMessageId: run.triggerMessageId,
+    };
+    const tool = (await createIssueToolSource(f.artifactDeps).tools(ctx)).find((t) => t.name === "attach_spec");
+    const card = () => getIssue(f.db, owner(), f.org.id, { id: issue.id });
+    const page = (pageTitle: string, folder?: string) =>
+      createWikiPage(wikiDeps(), owner(), f.org.id, {
+        title: pageTitle,
+        body: "# Spec",
+        ...(folder ? { folder } : {}),
+      });
+    return { c, issue, ctx, tool, card, page };
+  }
+
+  test("attach_spec is listed only to the run that writes a spec", async () => {
+    f = await setup();
+    const { ctx, tool } = await specRunCtx();
+    expect(tool).toBeDefined();
+    // Another run, in another conversation, is not offered it, and a call from it is refused by the code.
+    const other = { ...ctx, runId: "019e0000-0000-7000-8000-000000000000", channelId: f.general.id };
+    const listed = (await createIssueToolSource(f.artifactDeps).tools(other)).map((t) => t.name);
+    expect(listed).not.toContain("attach_spec");
+    const refused = await tool?.execute({ page: "x", criteria: [] }, other);
+    expect(refused?.isError).toBe(true);
+  });
+
+  test("attach_spec accepts only a page in the company's Specs folder", async () => {
+    f = await setup();
+    const { ctx, tool, card, page } = await specRunCtx();
+    const loose = await page("Sem pasta");
+    const foreign = await page("De outra empresa", "Specs/Beta");
+    const refusedLoose = await tool?.execute({ page: loose.slug, criteria: ["A"] }, ctx);
+    const refusedForeign = await tool?.execute({ page: foreign.slug, criteria: ["A"] }, ctx);
+    const missing = await tool?.execute({ page: "nao-existe", criteria: ["A"] }, ctx);
+    for (const r of [refusedLoose, refusedForeign, missing]) expect(r?.isError).toBe(true);
+    expect(refusedLoose?.content).toContain("Specs/Acme");
+    expect((await card()).specPage).toBeNull();
+    expect((await card()).criteria).toHaveLength(0);
+
+    const mine = await page("Spec do login", "Specs/Acme");
+    const ok = await tool?.execute({ page: mine.slug, criteria: ["A"] }, ctx);
+    expect(ok?.isError).toBeFalsy();
+    expect((await card()).specPage?.slug).toBe(mine.slug);
+  });
+
+  test("attach_spec links the page and puts the criteria in the description", async () => {
+    f = await setup();
+    const { ctx, tool, card, page, issue } = await specRunCtx();
+    await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, issue.id, {
+      description: "Entrar com e-mail.",
+    });
+    const spec = await page("Spec do login", "Specs/Acme");
+    const first = await tool?.execute({ page: spec.title, criteria: ["Mostra erro", "Lembra o e-mail"] }, ctx);
+    expect(first?.isError).toBeFalsy();
+    let after = await card();
+    expect(after.specPage).toEqual({ id: spec.id, slug: spec.slug, title: "Spec do login" });
+    expect(after.description).toBe("Entrar com e-mail.\n\n## Critérios de aceite\n\n- Mostra erro\n- Lembra o e-mail");
+    expect(after.criteria.map((c) => c.text)).toEqual(["Mostra erro", "Lembra o e-mail"]);
+
+    // A person checked the first one; a second call replaces both lists instead of repeating them and keeps that check.
+    await setCriterion(
+      { db: f.db, pubsub: f.pubsub },
+      owner(),
+      f.org.id,
+      issue.id,
+      after.criteria[0]?.id as string,
+      true,
+    );
+    await tool?.execute({ page: spec.slug, criteria: ["Mostra erro", "Bloqueia após 5 tentativas"] }, ctx);
+    after = await card();
+    expect(after.description).toBe(
+      "Entrar com e-mail.\n\n## Critérios de aceite\n\n- Mostra erro\n- Bloqueia após 5 tentativas",
+    );
+    expect(after.description.match(/## Critérios de aceite/g)).toHaveLength(1);
+    expect(after.criteria.map((c) => [c.text, c.done])).toEqual([
+      ["Mostra erro", true],
+      ["Bloqueia após 5 tentativas", false],
+    ]);
+  });
+
+  test("the criteria section replaces itself in the middle of a description and leaves what follows", () => {
+    const text = "Intro\n\n## Critérios de aceite\n\n- velho\n\n## Notas\n\nfica";
+    expect(withCriteriaSection(text, ["novo"])).toBe("Intro\n\n## Critérios de aceite\n\n- novo\n\n## Notas\n\nfica");
+    expect(withCriteriaSection(text, [])).toBe("Intro\n\n## Notas\n\nfica");
+    expect(withCriteriaSection("", ["a"])).toBe("## Critérios de aceite\n\n- a");
   });
 });
