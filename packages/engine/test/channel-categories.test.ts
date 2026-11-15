@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { orgTopic } from "@agenteschat/adapters";
+import { holdEvents, orgTopic } from "@agenteschat/adapters";
 import { schema } from "@agenteschat/db";
 import {
+  announceLayout,
   ConflictError,
   createChannel,
   createChannelCategory,
   deleteChannelCategory,
   ForbiddenError,
+  findCategoryByName,
   listChannelCategories,
   listChannels,
   NotFoundError,
@@ -135,5 +137,32 @@ test("another org's category or channel is not found; every change tells the org
   const seen: unknown[] = [];
   f.pubsub.subscribe(orgTopic(f.org.id), (e) => seen.push(e));
   await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Suporte" }, { pubsub: f.pubsub });
+  expect(seen).toEqual([{ type: "org.broadcast", orgId: f.org.id, event: { type: "channels.layout" } }]);
+});
+
+test("finds a category by name ignoring case and spacing, and refuses an empty or too long name", async () => {
+  const livora = await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora" });
+  expect((await findCategoryByName(f.db, f.org.id, "  LIVORA "))?.id).toBe(livora.id);
+  expect(await findCategoryByName(f.db, f.org.id, "Nobody made this")).toBeNull();
+
+  const [foreignOrg] = await f.db.insert(schema.organizations).values({ name: "Other" }).returning();
+  await f.db.insert(schema.channelCategories).values({ orgId: foreignOrg?.id ?? "", name: "Secret" });
+  expect(await findCategoryByName(f.db, f.org.id, "secret")).toBeNull();
+
+  await expect(findCategoryByName(f.db, f.org.id, "   ")).rejects.toBeInstanceOf(ValidationError);
+  await expect(findCategoryByName(f.db, f.org.id, "x".repeat(41))).rejects.toBeInstanceOf(ValidationError);
+});
+
+test("announces the layout with no names in it", async () => {
+  const seen: unknown[] = [];
+  f.pubsub.subscribe(orgTopic(f.org.id), (e) => seen.push(e));
+  await announceLayout(f.org.id, { pubsub: f.pubsub });
+  expect(seen).toEqual([{ type: "org.broadcast", orgId: f.org.id, event: { type: "channels.layout" } }]);
+
+  seen.length = 0;
+  const held = holdEvents(f.pubsub);
+  await announceLayout(f.org.id, { pubsub: held.pubsub });
+  expect(seen).toEqual([]);
+  await held.flush();
   expect(seen).toEqual([{ type: "org.broadcast", orgId: f.org.id, event: { type: "channels.layout" } }]);
 });

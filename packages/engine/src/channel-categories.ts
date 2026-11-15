@@ -17,11 +17,11 @@ interface Options {
 }
 
 /** Everyone in the org refetches the sidebar's layout (no names in the event: private channels stay private). */
-async function layoutChanged(orgId: string, options: Options) {
+export async function announceLayout(orgId: string, options: Options) {
   await publishOrgEvent(options.pubsub, { type: "org.broadcast", orgId, event: { type: "channels.layout" } });
 }
 
-function cleanName(name: string) {
+export function cleanCategoryName(name: string) {
   const clean = name.trim().replace(/\s+/g, " ");
   if (!clean) throw new ValidationError("category name is empty");
   if (clean.length > CATEGORY_NAME_MAX)
@@ -36,6 +36,16 @@ async function requireFreeName(db: Executor, orgId: string, name: string, except
     .from(channelCategories)
     .where(and(eq(channelCategories.orgId, orgId), sql`lower(${channelCategories.name}) = lower(${name})`));
   if (row && row.id !== except) throw new ConflictError(`The category ${name} already exists`);
+}
+
+/** The org's category with this name (trimmed, ignoring case), or null. Throws when the name itself is not valid. */
+export async function findCategoryByName(db: Executor, orgId: string, name: string): Promise<ChannelCategory | null> {
+  const clean = cleanCategoryName(name);
+  const [row] = await db
+    .select()
+    .from(channelCategories)
+    .where(and(eq(channelCategories.orgId, orgId), sql`lower(${channelCategories.name}) = lower(${clean})`));
+  return row ?? null;
 }
 
 async function requireCategory(db: Executor, orgId: string, categoryId: string) {
@@ -125,7 +135,7 @@ export async function createChannelCategory(
   options: Options = {},
 ): Promise<ChannelCategory> {
   await requirePermission(db, actorId, orgId, "manage_channels");
-  const name = cleanName(input.name);
+  const name = cleanCategoryName(input.name);
   await requireFreeName(db, orgId, name);
   try {
     const category = await db.transaction(async (tx) => {
@@ -156,7 +166,7 @@ export async function createChannelCategory(
       }
       return row;
     });
-    await layoutChanged(orgId, options);
+    await announceLayout(orgId, options);
     return category;
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError(`The category ${name} already exists`);
@@ -175,7 +185,7 @@ export async function renameChannelCategory(
 ): Promise<ChannelCategory> {
   await requirePermission(db, actorId, orgId, "manage_channels");
   await requireCategory(db, orgId, categoryId);
-  const name = cleanName(input.name);
+  const name = cleanCategoryName(input.name);
   await requireFreeName(db, orgId, name, categoryId);
   try {
     const [row] = await db
@@ -184,7 +194,7 @@ export async function renameChannelCategory(
       .where(and(eq(channelCategories.orgId, orgId), eq(channelCategories.id, categoryId)))
       .returning();
     if (!row) throw new NotFoundError("Category not found");
-    await layoutChanged(orgId, options);
+    await announceLayout(orgId, options);
     return row;
   } catch (error) {
     if (isUniqueViolation(error)) throw new ConflictError(`The category ${name} already exists`);
@@ -210,7 +220,7 @@ export async function deleteChannelCategory(
       .delete(channelCategories)
       .where(and(eq(channelCategories.orgId, orgId), eq(channelCategories.id, categoryId)));
   });
-  await layoutChanged(orgId, options);
+  await announceLayout(orgId, options);
 }
 
 /** Moves a category before another one (null: to the end), renumbering them all (admins). */
@@ -245,7 +255,7 @@ export async function placeChannelCategory(
         .where(and(eq(channelCategories.orgId, orgId), eq(channelCategories.id, id)));
     }
   });
-  await layoutChanged(orgId, options);
+  await announceLayout(orgId, options);
 }
 
 /**
@@ -284,5 +294,5 @@ export async function placeChannel(
     ids.splice(at >= 0 ? at : ids.length, 0, channelId);
     await writeOrder(tx, orgId, input.categoryId, ids);
   });
-  await layoutChanged(orgId, options);
+  await announceLayout(orgId, options);
 }
