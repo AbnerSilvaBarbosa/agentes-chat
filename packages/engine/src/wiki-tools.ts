@@ -3,6 +3,8 @@ import { getAgentCached } from "./agents";
 import { agentRoom } from "./artifacts";
 import { cutText } from "./format";
 import { can, getMembership } from "./organizations";
+import { poScopeOf } from "./po-chat";
+import { specFolder } from "./po-spec-brief";
 import { chosenAudience, personBehindCall, routineCreatorOfCall, visibleToField, wikiActorOfCall } from "./requester";
 import { isRightHand } from "./right-hand";
 import { audienceOfConversation } from "./task-access";
@@ -62,6 +64,25 @@ const wikiEdit = (
         after: { version: p.version },
       };
 
+/**
+ * What a PO chat's wiki tools keep to (ADR 0185): the whole wiki is readable, but another company's `Specs/` pages are
+ * not, and what the chat writes goes to its own company's folder. Null in any other conversation.
+ */
+async function specsScope(ctx: ToolContext) {
+  const po = await poScopeOf(ctx.db, ctx.orgId, ctx.channelId);
+  return po ? { name: po.name, own: specFolder(po.name) } : null;
+}
+
+/** Whether `folder` is, or is under, another company's folder in `Specs/` (compared in any capitals). */
+function otherCompanysSpecs(folder: string, own: string) {
+  const f = folder.toLowerCase();
+  const mine = own.toLowerCase();
+  return f.startsWith("specs/") && f !== mine && !f.startsWith(`${mine}/`);
+}
+
+const otherSpecsRefusal = (po: { name: string; own: string }) =>
+  `This PO chat is about ${po.name}: it works only with that company's specs (${po.own}), not another company's.`;
+
 const heldRun = (ctx: ToolContext) => ({
   orgId: ctx.orgId,
   agentId: ctx.agentId,
@@ -109,7 +130,11 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
       async execute(input, ctx) {
         try {
           const actor = await wikiActorOfCall(ctx);
-          const { pages, held } = await searchWikiForRun(wiki(ctx), actor, ctx.orgId, str(input.query), 8);
+          const po = await specsScope(ctx);
+          // A PO chat drops another company's specs after the search, so a wider read keeps the 8 it would show.
+          const found = await searchWikiForRun(wiki(ctx), actor, ctx.orgId, str(input.query), po ? 40 : 8);
+          const { held } = found;
+          const pages = po ? found.pages.filter((p) => !otherCompanysSpecs(p.folder, po.own)).slice(0, 8) : found.pages;
           const note =
             held && (await sendHeldToDm({ db: ctx.db, pubsub: deps.pubsub }, heldRun(ctx))) ? RESTRICTED_HERE : "";
           if (pages.length === 0) return { content: note || "No wiki pages match." };
@@ -142,6 +167,13 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
       async execute(input, ctx) {
         try {
           const actor = await wikiActorOfCall(ctx);
+          const po = await specsScope(ctx);
+          if (po) {
+            // A page this run can't read falls through to the usual answer below.
+            const peek = await getWikiPage(ctx.db, actor, ctx.orgId, str(input.page)).catch(() => null);
+            if (peek && otherCompanysSpecs(peek.folder, po.own))
+              return { content: otherSpecsRefusal(po), isError: true };
+          }
           if (
             (await wikiPageHeld(ctx.db, actor, ctx.orgId, str(input.page))) &&
             (await sendHeldToDm({ db: ctx.db, pubsub: deps.pubsub }, heldRun(ctx)))
@@ -195,6 +227,9 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
         const actor = await writer(ctx);
         if (!actor) return { content: WIKI_WRITE_REFUSAL, isError: true };
         try {
+          const po = await specsScope(ctx);
+          if (po && str(input.folder).trim() && otherCompanysSpecs(cleanFolder(str(input.folder)), po.own))
+            return { content: otherSpecsRefusal(po), isError: true };
           const audience =
             (await chosenAudience(ctx, input.visible_to)) ?? (await audienceOfConversation(ctx.db, ctx.channelId));
           const p = await actWithUndo(
@@ -204,7 +239,7 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
                 audience,
                 title: str(input.title),
                 body: str(input.body),
-                folder: str(input.folder) || undefined,
+                folder: str(input.folder) || po?.own || undefined,
                 tags: Array.isArray(input.tags) ? (input.tags as string[]) : undefined,
                 note: str(input.note) || undefined,
               }),
@@ -253,6 +288,12 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
           }
           if (mode === "replace_section" && !str(input.section)) {
             return { content: "replace_section needs `section`.", isError: true };
+          }
+          const po = await specsScope(ctx);
+          if (po) {
+            const peek = await getWikiPage(ctx.db, actor, ctx.orgId, page).catch(() => null);
+            if (peek && otherCompanysSpecs(peek.folder, po.own))
+              return { content: otherSpecsRefusal(po), isError: true };
           }
           let before = 0;
           const p = await actWithUndo(
@@ -324,6 +365,8 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
             return { content: "A folder level can't be longer than 80 characters.", isError: true };
           }
           const folder = cleanFolder(str(input.folder));
+          const po = await specsScope(ctx);
+          if (po && otherCompanysSpecs(folder, po.own)) return { content: otherSpecsRefusal(po), isError: true };
           const where = folder ? `"${folder}"` : "the top level";
           const moved: string[] = [];
           const there: string[] = [];
@@ -332,6 +375,7 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
           for (const ref of refs) {
             try {
               const page = await getWikiPage(ctx.db, actor, ctx.orgId, ref);
+              if (po && otherCompanysSpecs(page.folder, po.own)) throw new Error(otherSpecsRefusal(po));
               if (seen.has(page.id)) continue;
               seen.add(page.id);
               if (page.folder === folder) {
@@ -400,6 +444,12 @@ export function createWikiToolSource(deps: Omit<WikiDeps, "db">): ToolSource {
         const actor = await writer(ctx);
         if (!actor) return { content: WIKI_WRITE_REFUSAL, isError: true };
         try {
+          const po = await specsScope(ctx);
+          if (po) {
+            const peek = await getWikiPage(ctx.db, actor, ctx.orgId, str(input.page)).catch(() => null);
+            if (peek && otherCompanysSpecs(peek.folder, po.own))
+              return { content: otherSpecsRefusal(po), isError: true };
+          }
           const targets = (input.to as string[]).map((t) => t.replace(/[[\]]/g, "").trim()).filter(Boolean);
           let before = 0;
           const p = await actWithUndo(
