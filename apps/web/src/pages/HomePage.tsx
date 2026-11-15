@@ -35,6 +35,7 @@ import { type ReactNode, type RefObject, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { useFirstRun } from "@/components/FirstRun";
+import { FactoryHome } from "@/components/factory/FactoryHome";
 import { useMissionsWaitingYou } from "@/components/missions/MissionWaiting";
 import { useNotificationOpener } from "@/components/NotificationOpen";
 import { Face, Headline, SystemFace } from "@/components/NotificationParts";
@@ -138,6 +139,9 @@ export function HomePage() {
           </span>
         </Link>
       )}
+
+      {/* The factory (ADR 0184): what waits for a person and a panel per company; nothing without a company. */}
+      <FactoryHome />
 
       {/* Being deleted, the workspace takes no message: the line on top says why. */}
       {askable.length > 0 && !org.deletion && <AskAgent agents={askable} composer={composer} />}

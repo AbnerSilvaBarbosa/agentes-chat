@@ -9,7 +9,7 @@ import { FactoryHome } from "@/components/factory/FactoryHome";
 import { FactoryPanels } from "@/components/factory/FactoryPanels";
 import { FactoryWaiting } from "@/components/factory/FactoryWaiting";
 import { createFakeApi, ORG_ID, seedState } from "./fake-api";
-import { renderPage, screen } from "./render";
+import { renderApp, renderPage, screen, settle } from "./render";
 
 afterEach(() => cleanup());
 
@@ -242,5 +242,29 @@ describe("the Fábrica block", () => {
     );
     expect(container.querySelector(".fh")).toBeNull();
     expect(screen().getByText("vizinho")).toBeTruthy();
+  });
+});
+
+describe("Fábrica on Início", () => {
+  test("sits below the greeting and above the ask composer", async () => {
+    const { api, board, column } = await factoryApi();
+    const made = await api.issues.create(ORG_ID, { title: "Revisar a tela", projectId: board.id });
+    await api.issues.update(ORG_ID, made.id, { columnId: column.id });
+    await renderApp(`/org/${ORG_ID}/home`, { api });
+    await settle(6);
+    const block = document.querySelector(".fh");
+    const ask = document.querySelector(".home-ask");
+    const greeting = document.querySelector(".ac-pagehead");
+    if (!block || !ask || !greeting) throw new Error("the page is missing a part");
+    expect(greeting.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(block.compareDocumentPosition(ask) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen().getByRole("heading", { name: /Esperando seu teste/ })).toBeTruthy();
+  });
+
+  test("a workspace without a company with a task shows Início as before", async () => {
+    await renderApp(`/org/${ORG_ID}/home`, { api: createFakeApi(seedState()) });
+    await settle(6);
+    expect(document.querySelector(".fh")).toBeNull();
+    expect(document.querySelector(".home-ask")).not.toBeNull();
   });
 });
