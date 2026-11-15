@@ -3619,6 +3619,8 @@ export interface Issue {
   backgroundWork?: WorkView | null;
   /** Its conversation (ADR 0145), once opened or written: a thread of its own channel. */
   conversation?: IssueConversation | null;
+  /** The wiki page holding its spec (ADR 0185); `title` is null when the page is restricted. */
+  specPage?: { id: string; slug: string; title: string | null } | null;
   /** The issue this one is a sub-issue of. */
   parentIssueId?: string | null;
   /** On the detail: its sub-issues. */

@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { countQueries, eq, schema } from "@agenteschat/db";
 import {
   applyColumnTemplate,
+  createIssue,
   createIssueColumn,
   createIssueProject,
   createIssueSpace,
+  createWikiPage,
+  deleteWikiPage,
+  getIssue,
   listColumnTemplates,
+  listIssueActivity,
+  listIssues,
   specColumns,
+  updateIssue,
 } from "../src";
 import { type Fixture, setup } from "./fixtures";
 
@@ -96,5 +104,88 @@ describe("the columns a spec moves a card through", () => {
     expect(specify.projectId).toBeNull();
     expect(specify.stage).toBe("todo");
     expect(prioritized).toBeNull();
+  });
+});
+
+describe("a card links its spec page", () => {
+  const wikiDeps = () => ({ db: f.db, pubsub: f.pubsub, search: f.context, artifacts: f.artifactDeps });
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+  const card = (title = "Cadastro") => createIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, { title });
+  const page = (title: string) => createWikiPage(wikiDeps(), owner(), f.org.id, { title, body: "Spec." });
+
+  test("a card with no spec has no specPage, and linking one shows its id, slug and title", async () => {
+    f = await setup();
+    const issue = await card();
+    expect(issue.specPage).toBeNull();
+    const spec = await page("Spec do cadastro");
+    const linked = await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, issue.id, {
+      specPageId: spec.id,
+    });
+    expect(linked.specPage).toEqual({ id: spec.id, slug: spec.slug, title: "Spec do cadastro" });
+    expect((await getIssue(f.db, owner(), f.org.id, { id: issue.id })).specPage?.slug).toBe(spec.slug);
+  });
+
+  test("linking writes one spec_linked event and a repeat writes none; null unlinks", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const issue = await card();
+    const spec = await page("Spec A");
+    await updateIssue(deps, owner(), f.org.id, issue.id, { specPageId: spec.id });
+    await updateIssue(deps, owner(), f.org.id, issue.id, { specPageId: spec.id });
+    const events = () =>
+      listIssueActivity(f.db, owner(), f.org.id, issue.id).then((a) => a.filter((x) => x.event === "spec_linked"));
+    expect(await events()).toHaveLength(1);
+    const cleared = await updateIssue(deps, owner(), f.org.id, issue.id, { specPageId: null });
+    expect(cleared.specPage).toBeNull();
+    expect(await events()).toHaveLength(2);
+  });
+
+  test("a page that does not exist in the workspace is refused and the card keeps no link", async () => {
+    f = await setup();
+    const issue = await card();
+    await expect(
+      updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, issue.id, {
+        specPageId: "019e0000-0000-7000-8000-000000000000",
+      }),
+    ).rejects.toThrow();
+    expect((await getIssue(f.db, owner(), f.org.id, { id: issue.id })).specPage).toBeNull();
+  });
+
+  test("a trashed page reads as no spec, and a restricted page keeps its title out", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const a = await card("Um");
+    const b = await card("Dois");
+    const gone = await page("Apagada");
+    const secret = await page("Segredo");
+    await updateIssue(deps, owner(), f.org.id, a.id, { specPageId: gone.id });
+    await updateIssue(deps, owner(), f.org.id, b.id, { specPageId: secret.id });
+    await deleteWikiPage(wikiDeps(), owner(), f.org.id, gone.slug);
+    await f.db.update(schema.wikiPages).set({ restricted: true }).where(eq(schema.wikiPages.id, secret.id));
+    expect((await getIssue(f.db, owner(), f.org.id, { id: a.id })).specPage).toBeNull();
+    expect((await getIssue(f.db, owner(), f.org.id, { id: b.id })).specPage).toEqual({
+      id: secret.id,
+      slug: secret.slug,
+      title: null,
+    });
+  });
+
+  test("a list of 200 linked cards reads its pages with the queries of a list of 2", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const spec = await page("Spec comum");
+    const first = await card("Base");
+    await updateIssue(deps, owner(), f.org.id, first.id, { specPageId: spec.id });
+    const [row] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, first.id));
+    if (!row) throw new Error("no row");
+    const two = await countQueries(() => listIssues(f.db, owner(), f.org.id));
+    const { id: _id, number, ...rest } = row;
+    await f.db
+      .insert(schema.issues)
+      .values(Array.from({ length: 199 }, (_, i) => ({ ...rest, number: number + 1 + i, title: `Copia ${i}` })));
+    const many = await countQueries(() => listIssues(f.db, owner(), f.org.id, { limit: 500 }));
+    expect(many.result).toHaveLength(200);
+    expect(many.result.every((c) => c.specPage?.title === "Spec comum")).toBe(true);
+    expect(many.queries).toBe(two.queries);
   });
 });

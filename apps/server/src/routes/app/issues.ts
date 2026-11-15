@@ -267,6 +267,10 @@ const Issue = z
     conversation: Conversation.nullable().openapi({
       description: "Its conversation (ADR 0145), once opened or written: a thread the chat's routes read and post to.",
     }),
+    specPage: z.object({ id: z.uuid(), slug: z.string(), title: z.string().nullable() }).nullable().openapi({
+      description:
+        "The wiki page holding its spec (ADR 0185); the title is null when the page is restricted, the field null when unset.",
+    }),
     createdAt: z.string(),
     updatedAt: z.string(),
   })

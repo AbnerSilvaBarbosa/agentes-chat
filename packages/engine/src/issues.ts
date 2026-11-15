@@ -124,6 +124,8 @@ export interface IssueView {
   backgroundWork: WorkView | null;
   /** Its conversation (ADR 0145), once someone wrote or opened it: replies, who took part, an agent at work. */
   conversation: TaskConversationSummary | null;
+  /** The wiki page that holds its spec (ADR 0185); `title` is null for a restricted page, the whole field when unset or trashed. */
+  specPage: { id: string; slug: string; title: string | null } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -209,6 +211,8 @@ export type IssuePatch = Partial<{
   projectId: string | null;
   /** Null removes it. */
   githubUrl: string | null;
+  /** The wiki page holding its spec (ADR 0185); null unlinks. */
+  specPageId: string | null;
   /**
    * The whole list of acceptance criteria, in order: an `id` keeps that criterion (and whether it is checked), one
    * without is new, and a criterion left out is removed.
@@ -574,13 +578,14 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     : [];
   const byId = new Map(files.map((f) => [f.id, f]));
   const orgId = rows[0]?.orgId;
-  const [columns, tied, projects] = await Promise.all([
+  const [columns, tied, projects, specPages] = await Promise.all([
     orgId ? allColumns(db, orgId) : [],
     tiedPeople(db, rows),
     projectsById(
       db,
       rows.map((r) => r.projectId),
     ),
+    specPagesOf(db, rows),
   ]);
   return rows.map((r) => ({
     id: r.id,
@@ -611,9 +616,28 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     blocked: r.blocked ?? null,
     backgroundWork: works.get(r.id) ?? null,
     conversation: conversations.get(r.id) ?? null,
+    specPage: (r.specPageId && specPages.get(r.specPageId)) || null,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
   }));
+}
+
+/** The spec pages these cards link, in one query: a restricted page keeps its title out, a trashed one is not there. */
+async function specPagesOf(db: Database, rows: IssueRow[]) {
+  const ids = [...new Set(rows.flatMap((r) => (r.specPageId ? [r.specPageId] : [])))];
+  const out = new Map<string, { id: string; slug: string; title: string | null }>();
+  if (ids.length === 0) return out;
+  const pages = await db
+    .select({
+      id: schema.wikiPages.id,
+      slug: schema.wikiPages.slug,
+      title: schema.wikiPages.title,
+      restricted: schema.wikiPages.restricted,
+    })
+    .from(schema.wikiPages)
+    .where(and(inArray(schema.wikiPages.id, ids), isNull(schema.wikiPages.deletedAt)));
+  for (const p of pages) out.set(p.id, { id: p.id, slug: p.slug, title: p.restricted ? null : p.title });
+  return out;
 }
 
 /** The people of the private conversations these tasks are tied to, by channel. */
@@ -1200,6 +1224,27 @@ export async function updateIssue(
       text: project ? `moved it to the project ${project.name}` : "took it out of its project",
       event: "project_changed",
       data: { project: project?.name ?? null },
+    });
+  }
+  if (patch.specPageId !== undefined && patch.specPageId !== current.specPageId) {
+    if (patch.specPageId) {
+      const [page] = await db
+        .select({ id: schema.wikiPages.id })
+        .from(schema.wikiPages)
+        .where(
+          and(
+            eq(schema.wikiPages.id, patch.specPageId),
+            eq(schema.wikiPages.orgId, orgId),
+            isNull(schema.wikiPages.deletedAt),
+          ),
+        );
+      if (!page) throw new NotFoundError("Wiki page not found");
+    }
+    set.specPageId = patch.specPageId;
+    events.push({
+      text: patch.specPageId ? "linked the spec page" : "removed the spec link",
+      event: "spec_linked",
+      data: { pageId: patch.specPageId },
     });
   }
   if (patch.githubUrl !== undefined) {
