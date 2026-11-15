@@ -1814,6 +1814,13 @@
       "when": 1794685800000,
       "tag": "0260_tarefas-space-image",
       "breakpoints": true
+    },
+    {
+      "idx": 261,
+      "version": "7",
+      "when": 1794705496388,
+      "tag": "0261_factory-home",
+      "breakpoints": true
     }
   ]
 }

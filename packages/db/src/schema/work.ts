@@ -55,6 +55,8 @@ export const issueColumns = pgTable(
     projectId: uuid().references((): AnyPgColumn => issueProjects.id, { onDelete: "cascade" }),
     /** Order inside its stage. */
     position: doublePrecision().notNull(),
+    /** A task sitting here waits for a person to act on it; Início lists it (ADR 0184). */
+    waitsForPerson: boolean().notNull().default(false),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index().on(t.orgId, t.stage, t.position), index().on(t.projectId)],
@@ -163,6 +165,11 @@ export const issues = pgTable(
     columnId: uuid().references(() => issueColumns.id, { onDelete: "set null" }),
     /** Order inside its column, lowest first; a move by the system puts it on top (minus the time). */
     boardRank: doublePrecision().notNull().default(0),
+    /**
+     * Since when it sits in its column (ADR 0184). Kept by the `issues_column_since` trigger, which resets it when the
+     * status, the column or the board changes, so no writer has to remember.
+     */
+    columnSince: timestamp({ withTimezone: true }).notNull().defaultNow(),
     priority: issuePriorityEnum().notNull().default("normal"),
     /** Its project; deleting the project clears it, the task stays. */
     projectId: uuid().references(() => issueProjects.id, { onDelete: "set null" }),
