@@ -18,7 +18,7 @@ import { agentsByHandle, getAgentCached } from "./agents";
 import type { AiStatusDeps } from "./ai-status";
 import { AGENT_LOOK } from "./appearance";
 import { listApprovals } from "./approvals";
-import { createChannelCategory, findCategoryByName } from "./channel-categories";
+import { announceLayout, cleanCategoryName, createChannelCategory, findCategoryByName } from "./channel-categories";
 import { addChannelMember, createChannel, listChannels } from "./channels";
 import { findMember } from "./chat-tools";
 import { CONNECTOR_CATALOG } from "./connectors/catalog";
@@ -28,6 +28,7 @@ import { cardPlace, NO_PERSON_READS } from "./consultations";
 import { ownWords } from "./context/learn";
 import { decideProposal, proposeSettings, type SettingsProposalCard } from "./context/proposals";
 import type { ContextDeps } from "./context/summaries";
+import { ConflictError } from "./errors";
 import { publishMessageCreated } from "./events";
 import { firstOf } from "./format";
 import { insertMessage, messageView } from "./messages";
@@ -147,7 +148,7 @@ export const MAX_CARDS_PER_RUN_RIGHT_HAND = 10;
 export const SETTINGS_PROPOSAL_CARD = "settings_proposal";
 /** An agent's own settings card's `bodyCode` (`chat.body.settings_request`): no names, it is the author's. */
 export const SETTINGS_REQUEST_CARD = "settings_request";
-export const MAX_CHANNELS_PER_RUN = 5;
+export const MAX_CHANNELS_PER_RUN = 10;
 /** Categories one run may make, alone or with a channel: a burst of calls must not reshape the sidebar (ADR 0080). */
 export const MAX_CATEGORIES_PER_RUN = 3;
 /** A Connect card's `bodyCode` (the apps say it with `chat.body.action_connect_ai`). */
@@ -482,7 +483,7 @@ export function createSetupToolSource(deps: {
     {
       name: CREATE_CHANNEL_TOOL,
       description:
-        "Create a channel when a person asks for one, with their rights, and add people (@handle, email or name) and agents (@handles) to it; the person who asked is always in it. No permission needed: the person sees it under your reply with Undo.",
+        "Create a channel when a person asks for one, with the person's rights, and add people (@handle, email or name) and agents (@handles) to it; the person who asked is always in it. It needs a request from a person in the current message. `category` starts it inside a sidebar category by name, making the category first when there is none (that needs the right to manage channels). No permission needed: the person sees it under your reply with Undo, which archives the channel and removes the category it made.",
       scope: SETUP_SCOPE,
       inputSchema: {
         type: "object",
@@ -500,6 +501,13 @@ export function createSetupToolSource(deps: {
             items: { type: "string", minLength: 1, maxLength: 64 },
             maxItems: 10,
             description: "Include yourself if you should be there.",
+          },
+          category: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            description:
+              "A sidebar category's name (1 to 40 characters): the channel goes at its end; created if missing.",
           },
         },
         required: ["name"],
@@ -522,6 +530,24 @@ export function createSetupToolSource(deps: {
           if ((made?.n ?? 0) >= MAX_CHANNELS_PER_RUN) {
             return { content: `You already created ${MAX_CHANNELS_PER_RUN} channels in this turn.`, isError: true };
           }
+          // The category: found by name, or made first (the person's right to manage channels, checked before any write).
+          let placeIn: { id: string; name: string } | null = null;
+          let newCategory: string | null = null;
+          if (input.category !== undefined) {
+            const wanted = str(input.category);
+            const found = await findCategoryByName(ctx.db, ctx.orgId, wanted);
+            if (found) placeIn = { id: found.id, name: found.name };
+            else {
+              if (!(await mayMakeCategories(ctx, requester))) return NO_CATEGORY_RIGHT;
+              if ((await categoriesMadeInRun(ctx)) >= MAX_CATEGORIES_PER_RUN) {
+                return {
+                  content: `You already created ${MAX_CATEGORIES_PER_RUN} categories in this turn.`,
+                  isError: true,
+                };
+              }
+              newCategory = cleanCategoryName(wanted);
+            }
+          }
           const agents = await agentsByHandle(ctx.db, ctx.orgId, input.agents);
           if (agents.missing.length > 0) return noAgents(ctx, agents.missing);
           const people = new Map<string, string>();
@@ -536,16 +562,39 @@ export function createSetupToolSource(deps: {
             if (person && person.userId !== requester) people.set(person.userId, person.name);
           }
           const events = holdEvents(deps.pubsub);
+          let madeCategory = false;
           const channel = await actWithUndo(
             ctx,
             async (db) => {
+              madeCategory = false;
+              let into = placeIn;
+              if (newCategory) {
+                try {
+                  const made = await createChannelCategory(db, requester, ctx.orgId, { name: newCategory }, events);
+                  into = { id: made.id, name: made.name };
+                  madeCategory = true;
+                } catch (error) {
+                  // A parallel call of this run made it first: it is the category now.
+                  if (!(error instanceof ConflictError)) throw error;
+                  const again = await findCategoryByName(db, ctx.orgId, newCategory);
+                  if (!again) throw error;
+                  into = { id: again.id, name: again.name };
+                }
+              }
+              placeIn = into;
               const created = await createChannel(
                 db,
                 requester,
                 ctx.orgId,
-                { name: str(input.name).trim().replace(/^#/, ""), topic: str(input.topic).trim() },
+                {
+                  name: str(input.name).trim().replace(/^#/, ""),
+                  topic: str(input.topic).trim(),
+                  categoryId: into?.id ?? null,
+                },
                 events,
               );
+              // `createChannel` tells apps the list changed; the sidebar's layout is told here.
+              if (into) await announceLayout(ctx.orgId, events);
               // Agents first: only they can be refused (their owner or an admin adds them), and a refusal
               // undoes the whole channel before anyone was told they're in it.
               for (const a of agents.rows) {
@@ -559,16 +608,29 @@ export function createSetupToolSource(deps: {
             (created) => ({
               kind: "channel.created",
               target: { type: "channel", id: created.id, title: created.name },
-              params: { name: created.name },
+              params: {
+                name: created.name,
+                ...(placeIn ? { category: placeIn.name } : {}),
+                ...(madeCategory ? { categoryCreated: true } : {}),
+              },
               before: null,
-              after: { name: created.name },
+              after: {
+                name: created.name,
+                ...(placeIn ? { categoryId: placeIn.id, categoryName: placeIn.name } : {}),
+                ...(madeCategory ? { categoryCreated: true } : {}),
+              },
             }),
           );
           await events.flush();
           const members = [...people.values(), ...agents.rows.map((a) => `@${a.handle}`)];
           return {
-            content: `Created #${channel.name}${members.length ? ` with ${members.join(", ")}` : ""}.`,
-            data: { channel: { id: channel.id, name: channel.name } },
+            content: `Created #${channel.name}${members.length ? ` with ${members.join(", ")}` : ""}${
+              placeIn ? ` in the category "${placeIn.name}"${madeCategory ? " (made now)" : ""}` : ""
+            }.`,
+            data: {
+              channel: { id: channel.id, name: channel.name },
+              ...(placeIn ? { category: { id: placeIn.id, name: placeIn.name } } : {}),
+            },
           };
         } catch (error) {
           return failed(error);

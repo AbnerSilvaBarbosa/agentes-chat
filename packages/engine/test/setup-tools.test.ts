@@ -484,6 +484,7 @@ describe("create_channel", () => {
   });
 
   test(`at most ${MAX_CHANNELS_PER_RUN} channels per run`, async () => {
+    expect(MAX_CHANNELS_PER_RUN).toBe(10);
     f = await setup();
     const ctx = await runFor(f, f.owner.id, "cria seis canais");
     for (let i = 0; i < MAX_CHANNELS_PER_RUN; i++) {
@@ -646,6 +647,9 @@ describe("create_channel_category", () => {
     const ctx = await runFor(f, f.owner.id, "cria uma categoria");
     const granted = await gatewayOf(f).granted(ctx);
     expect(granted.map((t) => t.name)).toContain("create_channel_category");
+    const channel = granted.find((t) => t.name === "create_channel");
+    const schemaOf = channel?.inputSchema as { properties: Record<string, unknown> };
+    expect(Object.keys(schemaOf.properties)).toContain("category");
   });
 
   test("create_channel_category is elsewhere and a routine's run is refused it", () => {
@@ -673,13 +677,186 @@ describe("create_channel_category", () => {
     f = await setup();
     const ctx = await runFor(f, f.owner.id, "cria uma categoria");
     const granted = await gatewayOf(f).granted(ctx);
-    for (const name of ["create_channel_category"]) {
+    for (const name of ["create_channel_category", "create_channel"]) {
       const description = granted.find((t) => t.name === name)?.description ?? "";
       expect(description).toContain("person's rights");
       expect(description).toContain("Undo");
       expect(description).toContain("person");
       expect(description).toContain("current message");
     }
+  });
+});
+
+describe("create_channel with a category", () => {
+  const inCategory = async (fx: Fixture, categoryName: string) => {
+    const category = (await categoriesOf(fx)).find((c) => c.name === categoryName);
+    return (await listChannels(fx.db, fx.owner.id, fx.org.id))
+      .filter((c) => c.categoryId === category?.id)
+      .map((c) => c.name);
+  };
+
+  test("puts the channel at the end of an existing category", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    const first = await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    const second = await createChannel(f.db, f.owner.id, f.org.id, { name: "atendimento" });
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora", channelIds: [first.id, second.id] });
+    // Bia may create channels, not categories: an existing one is hers to use.
+    const ctx = await runFor(f, bia.id, "cria o canal suporte na categoria Livora");
+    const out = await call(f, ctx, "create_channel", { name: "suporte", category: " livora " });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('in the category "Livora"');
+    expect(await inCategory(f, "Livora")).toEqual(["vendas", "atendimento", "suporte"]);
+    expect(await categoriesOf(f)).toHaveLength(1);
+  });
+
+  test("makes a missing category first and reports both", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas na categoria Livora");
+    const out = await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    expect(out).toMatchObject({
+      content: 'Created #vendas in the category "Livora" (made now).',
+      data: { channel: { name: "vendas" }, category: { name: "Livora" } },
+    });
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
+    expect(await inCategory(f, "Livora")).toEqual(["vendas"]);
+  });
+
+  test("records one channel.created receipt for the channel and its new category", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas na categoria Livora");
+    await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    const rows = await receiptsOf(f, ctx);
+    expect(rows).toHaveLength(1);
+    const [category] = await categoriesOf(f);
+    expect(rows[0]).toMatchObject({
+      kind: "channel.created",
+      params: { name: "vendas", category: "Livora", categoryCreated: true },
+      after: { name: "vendas", categoryId: category?.id, categoryName: "Livora", categoryCreated: true },
+    });
+  });
+
+  test("without a category it behaves as before", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas");
+    expect(await call(f, ctx, "create_channel", { name: "vendas" })).toMatchObject({
+      content: "Created #vendas.",
+      data: { channel: { name: "vendas" } },
+    });
+    const rows = await receiptsOf(f, ctx);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "channel.created", params: { name: "vendas" }, after: { name: "vendas" } });
+    expect(await categoriesOf(f)).toEqual([]);
+    expect((await channelNamed(f, "vendas"))?.categoryId).toBeNull();
+  });
+
+  test("refuses a new category without manage_channels and creates neither", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    const ctx = await runFor(f, bia.id, "cria o canal vendas na categoria Livora");
+    expect(await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" })).toEqual({
+      content: "You can't create categories: it needs the right to manage channels. Nothing was created.",
+      isError: true,
+    });
+    expect(await categoriesOf(f)).toEqual([]);
+    expect(await channelNamed(f, "vendas")).toBeUndefined();
+    expect(await receiptsOf(f, ctx)).toEqual([]);
+  });
+
+  test("a taken channel name leaves no new category behind", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria o canal general na categoria Livora");
+    expect(await call(f, ctx, "create_channel", { name: "general", category: "Livora" })).toMatchObject({
+      isError: true,
+      content: "Failed: #general already exists",
+    });
+    expect(await call(f, ctx, "create_channel", { name: "Nome Ruim", category: "Livora" })).toMatchObject({
+      isError: true,
+    });
+    expect(await categoriesOf(f)).toEqual([]);
+    expect(await receiptsOf(f, ctx)).toEqual([]);
+  });
+
+  test("three channels in turn with the same new category make it once", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria vendas, suporte e financeiro na categoria Livora");
+    for (const name of ["vendas", "suporte", "financeiro"])
+      expect((await call(f, ctx, "create_channel", { name, category: "Livora" })).isError).toBeUndefined();
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
+    expect((await inCategory(f, "Livora")).sort()).toEqual(["financeiro", "suporte", "vendas"]);
+    const rows = await receiptsOf(f, ctx);
+    expect(rows.map((r) => r.kind)).toEqual(["channel.created", "channel.created", "channel.created"]);
+    expect(rows.map((r) => (r.params as { categoryCreated?: boolean }).categoryCreated === true)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  test("a category made earlier in the run is reused by create_channel whatever the case", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora e um canal nela");
+    await call(f, ctx, "create_channel_category", { name: "Livora" });
+    const out = await call(f, ctx, "create_channel", { name: "vendas", category: "LIVORA" });
+    expect(out.isError).toBeUndefined();
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
+    expect(await inCategory(f, "Livora")).toEqual(["vendas"]);
+    const rows = await receiptsOf(f, ctx);
+    expect(rows.map((r) => r.kind)).toEqual(["channel_category.created", "channel.created"]);
+    expect(rows[1]?.params).toEqual({ name: "vendas", category: "Livora" });
+  });
+
+  test("two parallel calls with the same new category make it once", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria vendas e suporte na categoria Livora");
+    const [a, b] = await Promise.all([
+      call(f, ctx, "create_channel", { name: "vendas", category: "Livora" }),
+      call(f, ctx, "create_channel", { name: "suporte", category: "livora" }),
+    ]);
+    expect([a.isError, b.isError]).toEqual([undefined, undefined]);
+    expect(await categoriesOf(f)).toHaveLength(1);
+    expect((await inCategory(f, "Livora")).sort()).toEqual(["suporte", "vendas"]);
+    const made = (await receiptsOf(f, ctx)).filter((r) => (r.params as { categoryCreated?: boolean }).categoryCreated);
+    expect(made).toHaveLength(1);
+  });
+
+  test("sends the layout broadcast after the channel is placed", async () => {
+    f = await setup();
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora" });
+    const placedWhenTold: Promise<string[]>[] = [];
+    const told: string[] = [];
+    f.pubsub.subscribe(orgTopic(f.org.id), (e) => {
+      const event = (e as { event?: { type?: string } }).event;
+      if (event?.type === "channels.layout") {
+        told.push("layout");
+        placedWhenTold.push(
+          listChannels(f.db, f.owner.id, f.org.id).then((all) =>
+            all.filter((c) => c.categoryId !== null).map((c) => c.name),
+          ),
+        );
+      }
+      if (event?.type === "channels.changed") told.push("changed");
+    });
+    const ctx = await runFor(f, f.owner.id, "cria o canal vendas na categoria Livora");
+    await call(f, ctx, "create_channel", { name: "vendas", category: "Livora" });
+    expect(told.filter((t) => t === "layout")).toHaveLength(1);
+    expect(await Promise.all(placedWhenTold)).toEqual([["vendas"]]);
+  });
+
+  test("refuses the fourth new category of a run, creating no channel for it", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria canais em quatro categorias");
+    for (let i = 0; i < MAX_CATEGORIES_PER_RUN; i++)
+      expect(
+        (await call(f, ctx, "create_channel", { name: `canal-${i}`, category: `Cat ${i}` })).isError,
+      ).toBeUndefined();
+    expect(await call(f, ctx, "create_channel", { name: "canal-extra", category: "Cat extra" })).toEqual({
+      content: `You already created ${MAX_CATEGORIES_PER_RUN} categories in this turn.`,
+      isError: true,
+    });
+    expect(await channelNamed(f, "canal-extra")).toBeUndefined();
+    // An existing one is still open to it.
+    expect((await call(f, ctx, "create_channel", { name: "canal-4", category: "cat 0" })).isError).toBeUndefined();
   });
 });
 
