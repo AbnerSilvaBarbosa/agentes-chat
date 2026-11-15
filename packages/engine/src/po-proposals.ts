@@ -1,10 +1,13 @@
 import type { PubSub } from "@agenteschat/adapters";
-import { and, type Database, type Executor, eq, schema, sql } from "@agenteschat/db";
-import { ValidationError } from "./errors";
+import { and, type Database, type Executor, eq, lt, or, schema, sql } from "@agenteschat/db";
+import { ForbiddenError, NotFoundError, ValidationError } from "./errors";
 import { publishChannelEvent, publishMessageCreated } from "./events";
 import { projectByName } from "./issue-projects";
+import { createIssue } from "./issues";
 import { insertMessage, messageView } from "./messages";
+import { requireActiveMembership } from "./organizations";
 import { poScopeOf } from "./po-chat";
+import { specColumns } from "./po-columns";
 import { bodyCode } from "./run-tools";
 import { replyThreadOf } from "./runs";
 import { taskSeenSql } from "./task-access";
@@ -198,4 +201,129 @@ export async function proposeCard(
   });
   if (deps.pubsub) await publishMessageCreated(deps.pubsub, messageView(made.card));
   return made.view;
+}
+
+/** What a person may change on a proposal before creating it. */
+export interface ProposalEdits {
+  title?: string;
+  summary?: string;
+  criteria?: string[];
+  projectId?: string;
+}
+
+/** A confirm that began this long ago and never finished (a crash after the claim) can be claimed again. */
+const STALE_CLAIM = sql`now() - interval '2 minutes'`;
+
+const decided = () => new ValidationError("This proposal was already decided", "card_proposal.decided");
+
+async function ownProposal(db: Database, userId: string, orgId: string, id: string): Promise<ProposalRow> {
+  const [row] = await db
+    .select()
+    .from(poCardProposals)
+    .where(and(eq(poCardProposals.id, id), eq(poCardProposals.orgId, orgId)));
+  if (!row) throw new NotFoundError("Proposal not found");
+  await requireActiveMembership(db, userId, orgId);
+  // The chat is the person's own DM: only who asked decides, administrators included.
+  if (row.requesterUserId !== userId) throw new ForbiddenError("Only the person who asked can decide this");
+  return row;
+}
+
+/**
+ * The person who asked confirms: the card is created as them, in the board's "Especificar" column (ADR 0185), with the
+ * edits they made. One conditional update claims the proposal, so a second Criar, a Descartar or two Criar at once find
+ * no row and are refused (`card_proposal.decided`): one card at most. The card's own refusal (no right to post, an
+ * archived board) puts the claim back and the proposal stays pending, so another board can be picked.
+ */
+export async function confirmCardProposal(
+  deps: PoDeps,
+  userId: string,
+  orgId: string,
+  id: string,
+  edits: ProposalEdits = {},
+): Promise<CardProposalView> {
+  const { db } = deps;
+  const current = await ownProposal(db, userId, orgId, id);
+  const fields = cleanProposal({
+    title: edits.title ?? current.title,
+    summary: edits.summary ?? current.summary,
+    criteria: edits.criteria ?? current.criteria,
+  });
+  if (edits.projectId && edits.projectId !== current.projectId) {
+    const [board] = await db
+      .select({ id: issueProjects.id })
+      .from(issueProjects)
+      .where(
+        and(
+          eq(issueProjects.id, edits.projectId),
+          eq(issueProjects.orgId, orgId),
+          eq(issueProjects.spaceId, current.spaceId),
+        ),
+      );
+    if (!board) throw new ValidationError("That board is not in this company");
+  }
+  const [claimed] = await db
+    .update(poCardProposals)
+    .set({
+      status: "creating",
+      decidedByUserId: userId,
+      decidedAt: sql`now()`,
+      ...fields,
+      ...(edits.projectId ? { projectId: edits.projectId } : {}),
+    })
+    .where(
+      and(
+        eq(poCardProposals.id, id),
+        eq(poCardProposals.orgId, orgId),
+        or(
+          eq(poCardProposals.status, "pending"),
+          and(eq(poCardProposals.status, "creating"), lt(poCardProposals.decidedAt, STALE_CLAIM)),
+        ),
+      ),
+    )
+    .returning();
+  if (!claimed) throw decided();
+  let done: ProposalRow | undefined;
+  try {
+    const { specify } = await specColumns(db, orgId, claimed.projectId);
+    const issue = await createIssue(deps, { type: "person", userId }, orgId, {
+      title: claimed.title,
+      description: claimed.summary,
+      criteria: claimed.criteria,
+      projectId: claimed.projectId,
+      columnId: specify.id,
+    });
+    [done] = await db
+      .update(poCardProposals)
+      .set({ status: "confirmed", issueId: issue.id })
+      .where(and(eq(poCardProposals.id, id), eq(poCardProposals.status, "creating")))
+      .returning();
+  } catch (error) {
+    const [back] = await db
+      .update(poCardProposals)
+      .set({ status: "pending" })
+      .where(and(eq(poCardProposals.id, id), eq(poCardProposals.status, "creating")))
+      .returning();
+    // Written on purpose after the claim went back: the card shows the edits that were refused.
+    if (back) await syncProposalCard(deps, back).catch(() => undefined);
+    throw error;
+  }
+  // The card exists: a failure to show it is not a refusal of the confirm.
+  return syncProposalCard(deps, done ?? (await ownProposal(db, userId, orgId, id)));
+}
+
+/** The person who asked discards the proposal: nothing is created. A decided proposal is refused. */
+export async function dismissCardProposal(
+  deps: PoDeps,
+  userId: string,
+  orgId: string,
+  id: string,
+): Promise<CardProposalView> {
+  await ownProposal(deps.db, userId, orgId, id);
+  const [row] = await deps.db
+    .update(poCardProposals)
+    .set({ status: "dismissed", decidedByUserId: userId, decidedAt: sql`now()` })
+    .where(and(eq(poCardProposals.id, id), eq(poCardProposals.orgId, orgId), eq(poCardProposals.status, "pending")))
+    .returning();
+  if (!row) throw decided();
+  return syncProposalCard(deps, row);
 }
