@@ -129,6 +129,29 @@ export async function factoryHome(
       order by g.waiting desc, lower(s.name), s.id
       limit ${FACTORY_COMPANIES_MAX}`),
   );
+  // The tasks in flagged columns, longest waiting first: a workspace that flagged none reads nothing.
+  const waitingRows = flagged
+    ? rowsOf<{
+        id: string;
+        number: number;
+        title: string;
+        status: WaitingTask["stage"];
+        space_id: string;
+        space_name: string;
+        project_id: string;
+        project_name: string;
+        column_name: string | null;
+        column_since: Date | string;
+        total: number;
+      }>(
+        await db.execute(sql`with ${liveTasks(userId, orgId, true)}
+      select id, number, title, status, space_id, space_name, project_id, project_name, column_name,
+        column_since, (count(*) over ())::int as total
+      from live where waiting
+      order by column_since asc, number asc, id asc
+      limit ${FACTORY_WAITING_MAX}`),
+      )
+    : [];
   return {
     companies: panels.map((p) => ({
       id: p.id,
@@ -140,6 +163,20 @@ export async function factoryHome(
       waiting: p.waiting,
     })),
     companiesTotal: panels[0]?.total ?? 0,
-    waiting: { total: 0, items: [] },
+    waiting: {
+      total: waitingRows[0]?.total ?? 0,
+      items: waitingRows.map((r) => ({
+        id: r.id,
+        number: r.number,
+        title: r.title,
+        stage: r.status,
+        spaceId: r.space_id,
+        spaceName: r.space_name,
+        projectId: r.project_id,
+        projectName: r.project_name,
+        columnName: r.column_name,
+        since: new Date(r.column_since).toISOString(),
+      })),
+    },
   };
 }

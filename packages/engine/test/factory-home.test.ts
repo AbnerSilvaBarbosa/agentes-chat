@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { eq, schema } from "@agenteschat/db";
-import { companyDashboard, factoryHome } from "../src";
+import { companyDashboard, deleteIssueColumn, factoryHome, updateIssue } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
@@ -237,5 +237,202 @@ describe("factoryHome panels", () => {
     expect(home.companiesTotal).toBe(23);
     expect(home.companies[0]?.name).toBe("Empresa 00");
     expect(home.companies[19]?.name).toBe("Empresa 19");
+  });
+});
+
+describe("factoryHome waiting list", () => {
+  /** A workspace column that waits for a person, in the review stage. */
+  const flagged = async (name = "Teste humano", projectId: string | null = null) => {
+    const [col] = await f.db
+      .insert(schema.issueColumns)
+      .values({ orgId: f.org.id, projectId, stage: "in_review", name, position: 5, waitsForPerson: true })
+      .returning();
+    return must(col);
+  };
+  const waits = (columnId: string, daysAgo: number) => ({
+    status: "in_review" as const,
+    columnId,
+    columnSince: ago(daysAgo),
+  });
+
+  test("lists the tasks in flagged columns longest waiting first", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const b = await company("Beta");
+    const col = await flagged();
+    const fresh = await a.task({ title: "Recente", ...waits(col.id, 1) });
+    const oldest = await b.task({ title: "Antiga", ...waits(col.id, 9) });
+    const middle = await a.task({ title: "Meio", ...waits(col.id, 4) });
+    // Same moment: the lower number first.
+    const tieB = await a.task({ title: "Empate B", ...waits(col.id, 2) });
+    const tieA = await b.task({ title: "Empate A", ...waits(col.id, 2) });
+    await a.task({ title: "Fora", status: "in_progress" });
+    const { waiting } = await read();
+    expect(waiting.total).toBe(5);
+    expect(waiting.items.map((i) => i.id)).toEqual([oldest.id, middle.id, tieB.id, tieA.id, fresh.id]);
+    expect(waiting.items[0]).toEqual({
+      id: oldest.id,
+      number: oldest.number,
+      title: "Antiga",
+      stage: "in_review",
+      spaceId: b.spaceId,
+      spaceName: "Beta",
+      projectId: b.first.id,
+      projectName: "Entregas",
+      columnName: "Teste humano",
+      since: ago(9).toISOString(),
+    });
+  });
+
+  test("reports since from the last status change or column move", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const a = await company("Alfa");
+    const col = await flagged("Teste humano");
+    const other = await flagged("Aprovação");
+    const task = await a.task({ title: "Tela", ...waits(col.id, 9) });
+    const sinceOf = async () => must((await read()).waiting.items.find((i) => i.id === task.id)).since;
+    expect(await sinceOf()).toBe(ago(9).toISOString());
+
+    // A comment, a title and a priority edit leave it alone.
+    await updateIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, task.id, {
+      title: "Tela nova",
+      priority: "high",
+    });
+    expect(await sinceOf()).toBe(ago(9).toISOString());
+
+    // A move to another column of the same stage restarts it.
+    await updateIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, task.id, { columnId: other.id });
+    const moved = new Date(await sinceOf()).getTime();
+    expect(Date.now() - moved).toBeLessThan(60_000);
+    expect(moved).toBeGreaterThan(ago(1).getTime() - 86_400_000 * 100);
+
+    // A status change away and back restarts it again.
+    await f.db
+      .update(schema.issues)
+      .set({ columnSince: ago(9) })
+      .where(eq(schema.issues.id, task.id));
+    await updateIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, task.id, { status: "in_progress" });
+    await updateIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, task.id, { columnId: col.id });
+    expect(Date.now() - new Date(await sinceOf()).getTime()).toBeLessThan(60_000);
+  });
+
+  test("lists five and the total when more wait", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const col = await flagged();
+    const made = [];
+    for (let i = 0; i < 8; i++) made.push(await a.task(waits(col.id, 20 - i)));
+    const { waiting } = await read();
+    expect(waiting.total).toBe(8);
+    expect(waiting.items.map((i) => i.id)).toEqual(made.slice(0, 5).map((t) => t.id));
+  });
+
+  test("never lists a task the viewer may not see", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const col = await flagged();
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    const open = await a.task(waits(col.id, 3));
+    const mine = await a.task({ ...waits(col.id, 5), restricted: true, audienceUserIds: [member.id] });
+    const theirs = await a.task({ ...waits(col.id, 6), restricted: true, audienceUserIds: [f.owner.id] });
+    const asMember = (await read(member.id)).waiting;
+    expect(asMember.total).toBe(2);
+    expect(asMember.items.map((i) => i.id)).toEqual([mine.id, open.id]);
+    const asOwner = (await read()).waiting;
+    expect(asOwner.items.map((i) => i.id)).toEqual([theirs.id, mine.id, open.id]);
+  });
+
+  test("never lists a canceled task or one on an archived board or company", async () => {
+    f = await setup();
+    const a = await company("Alfa");
+    const gone = await company("Arquivada");
+    const archivedBoard = await a.board("Antigo");
+    const col = await flagged();
+    const live = await a.task(waits(col.id, 3));
+    await a.task({ ...waits(col.id, 4), status: "canceled" });
+    await a.task({ ...waits(col.id, 5), projectId: archivedBoard.id });
+    await gone.task(waits(col.id, 6));
+    // A done task in a flagged column of the done stage never waits.
+    const doneCol = await f.db
+      .insert(schema.issueColumns)
+      .values({ orgId: f.org.id, stage: "done", name: "Fechado", position: 5, waitsForPerson: true })
+      .returning();
+    await a.task({ status: "done", columnId: must(doneCol[0]).id, columnSince: ago(8) });
+    await f.db
+      .update(schema.issueProjects)
+      .set({ archivedAt: NOW })
+      .where(eq(schema.issueProjects.id, archivedBoard.id));
+    await f.db.update(schema.issueSpaces).set({ archivedAt: NOW }).where(eq(schema.issueSpaces.id, gone.spaceId));
+    const { waiting } = await read();
+    expect(waiting.total).toBe(1);
+    expect(waiting.items.map((i) => i.id)).toEqual([live.id]);
+  });
+
+  test("drops a task moved out of a flagged column and one whose column was deleted", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const a = await company("Alfa");
+    const col = await flagged("Teste humano");
+    const plain = must(
+      (await f.db.select().from(schema.issueColumns).where(eq(schema.issueColumns.orgId, f.org.id))).find(
+        (c) => c.stage === "in_progress" && !c.waitsForPerson,
+      ) ??
+        (
+          await f.db
+            .insert(schema.issueColumns)
+            .values({ orgId: f.org.id, stage: "in_progress", position: 0 })
+            .returning()
+        )[0],
+    );
+    const movedOut = await a.task(waits(col.id, 3));
+    const deleted = await a.task(waits(col.id, 4));
+    const stays = await a.task(waits(col.id, 5));
+    expect((await read()).waiting.total).toBe(3);
+
+    await updateIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, movedOut.id, { columnId: plain.id });
+    expect((await read()).waiting.items.map((i) => i.id)).toEqual([stays.id, deleted.id]);
+
+    // Deleting the column sends its tasks to another column of the stage, which is not flagged.
+    const review = await f.db
+      .insert(schema.issueColumns)
+      .values({ orgId: f.org.id, stage: "in_review", position: 0 })
+      .returning();
+    await deleteIssueColumn(deps, f.owner.id, f.org.id, col.id, must(review[0]).id);
+    const after = (await read()).waiting;
+    expect(after.total).toBe(0);
+    expect(after.items).toEqual([]);
+  });
+
+  test("computes 1000 tasks in 10 companies in under 500 ms", async () => {
+    f = await setup();
+    const col = await flagged();
+    const companies = [];
+    for (let i = 0; i < 10; i++) companies.push(await company(`Empresa ${i}`));
+    const statuses: Status[] = ["todo", "in_progress", "in_review", "done"];
+    const rows = [];
+    for (let i = 0; i < 1000; i++) {
+      const c = must(companies[i % 10]);
+      const status = must(statuses[i % 4]);
+      rows.push({
+        orgId: f.org.id,
+        number: ++counter,
+        title: `Task ${i}`,
+        projectId: c.first.id,
+        status,
+        columnId: status === "in_review" && i % 8 === 2 ? col.id : null,
+        createdByType: "person" as const,
+        createdById: f.owner.id,
+        createdAt: ago(40),
+      });
+    }
+    await f.db.insert(schema.issues).values(rows);
+    await read();
+    const start = performance.now();
+    const home = await read();
+    const took = performance.now() - start;
+    expect(home.companiesTotal).toBe(10);
+    expect(home.waiting.total).toBeGreaterThan(0);
+    expect(took).toBeLessThan(500);
   });
 });
