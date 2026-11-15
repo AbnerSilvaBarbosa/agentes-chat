@@ -15,6 +15,7 @@ import type { MachineTaskView } from "./machine-tasks";
 import { oneLine } from "./mail/text";
 import type { MessageMemory } from "./message-memories";
 import type { MessageView, ReactionCount } from "./messages";
+import type { CardProposalView } from "./po-proposals";
 import { stripSentinel } from "./reply-policy";
 import type { TeamProposalCard } from "./team-proposals";
 import { redactCredentials } from "./tool-detail";
@@ -523,6 +524,14 @@ export type ChannelEvent =
       threadId: string | null;
       messageId: string;
       proposal: CalendarProposalView;
+    }
+  /** A PO's card proposal was decided or its spec moved on (ADR 0185): its card (`meta.cardProposal`) as it is now. */
+  | {
+      type: "card.proposal.updated";
+      channelId: string;
+      threadId: string | null;
+      messageId: string;
+      proposal: CardProposalView;
     }
   /** An event (or some of its occurrences: `scope`) was deleted. */
   | {

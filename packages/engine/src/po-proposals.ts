@@ -1,0 +1,201 @@
+import type { PubSub } from "@agenteschat/adapters";
+import { and, type Database, type Executor, eq, schema, sql } from "@agenteschat/db";
+import { ValidationError } from "./errors";
+import { publishChannelEvent, publishMessageCreated } from "./events";
+import { projectByName } from "./issue-projects";
+import { insertMessage, messageView } from "./messages";
+import { poScopeOf } from "./po-chat";
+import { bodyCode } from "./run-tools";
+import { replyThreadOf } from "./runs";
+import { taskSeenSql } from "./task-access";
+
+const { issues, issueProjects, messages, poCardProposals } = schema;
+
+export type ProposalRow = typeof poCardProposals.$inferSelect;
+
+export interface PoDeps {
+  db: Database;
+  pubsub?: PubSub;
+}
+
+/** The most criteria a proposal holds, and the longest one (the card's own limits, `createIssue`). */
+export const PROPOSAL_LIMITS = { title: 300, summary: 20_000, criteria: 30, criterion: 500 };
+
+/**
+ * A PO's proposed card as the chat shows it (ADR 0185), kept in the card message's `meta.cardProposal` and rewritten by
+ * `syncProposalCard`. `creating` (a confirm in flight) shows as `pending`.
+ */
+export interface CardProposalView {
+  id: string;
+  agentId: string;
+  requesterUserId: string;
+  spaceId: string;
+  title: string;
+  summary: string;
+  criteria: string[];
+  project: { id: string; name: string };
+  status: "pending" | "confirmed" | "dismissed";
+  duplicateOf: { number: number; title: string } | null;
+  issue: { id: string; number: number } | null;
+  spec: {
+    state: "queued" | "running" | "done" | "failed" | "stopped";
+    page: { slug: string; title: string } | null;
+    error: string | null;
+  } | null;
+}
+
+/** A proposal's text fields as they are stored: trimmed, within the card's limits, blank criteria dropped. */
+export function cleanProposal(input: { title: string; summary?: string; criteria?: string[] }) {
+  const title = input.title.trim();
+  if (!title) throw new ValidationError("title is required");
+  if (title.length > PROPOSAL_LIMITS.title)
+    throw new ValidationError(`title is at most ${PROPOSAL_LIMITS.title} characters`);
+  const summary = (input.summary ?? "").trim();
+  if (summary.length > PROPOSAL_LIMITS.summary)
+    throw new ValidationError(`summary is at most ${PROPOSAL_LIMITS.summary} characters`);
+  const criteria = (input.criteria ?? []).map((c) => c.trim()).filter(Boolean);
+  if (criteria.length > PROPOSAL_LIMITS.criteria)
+    throw new ValidationError(`at most ${PROPOSAL_LIMITS.criteria} criteria`);
+  if (criteria.some((c) => c.length > PROPOSAL_LIMITS.criterion))
+    throw new ValidationError(`a criterion is at most ${PROPOSAL_LIMITS.criterion} characters`);
+  return { title, summary, criteria };
+}
+
+/** The proposal as the chat shows it: the board's and the duplicate's names and the card's number are read now. */
+export async function cardProposalView(db: Executor, row: ProposalRow): Promise<CardProposalView> {
+  const [project] = await db
+    .select({ id: issueProjects.id, name: issueProjects.name })
+    .from(issueProjects)
+    .where(eq(issueProjects.id, row.projectId));
+  const lookup = async (id: string | null) => {
+    if (!id) return null;
+    const [i] = await db
+      .select({ id: issues.id, number: issues.number, title: issues.title })
+      .from(issues)
+      .where(eq(issues.id, id));
+    return i ?? null;
+  };
+  const [duplicate, created] = await Promise.all([lookup(row.duplicateOfIssueId), lookup(row.issueId)]);
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    requesterUserId: row.requesterUserId,
+    spaceId: row.spaceId,
+    title: row.title,
+    summary: row.summary,
+    criteria: row.criteria,
+    project: project ?? { id: row.projectId, name: "" },
+    status: row.status === "creating" ? "pending" : (row.status as "pending" | "confirmed" | "dismissed"),
+    duplicateOf: duplicate ? { number: duplicate.number, title: duplicate.title } : null,
+    issue: created ? { id: created.id, number: created.number } : null,
+    // The state follows the spec run (queued, running, done...); the page joins when a spec is attached.
+    spec: row.specState
+      ? { state: row.specState as NonNullable<CardProposalView["spec"]>["state"], page: null, error: row.specError }
+      : null,
+  };
+}
+
+/**
+ * The proposal's card in its conversation follows its decision, at once for who has it open: the one writer of
+ * `meta.cardProposal`, called by every step that changes the proposal.
+ */
+export async function syncProposalCard(deps: PoDeps, row: ProposalRow): Promise<CardProposalView> {
+  const view = await cardProposalView(deps.db, row);
+  if (!row.messageId) return view;
+  const [card] = await deps.db
+    .update(messages)
+    .set({ meta: sql`jsonb_set(${messages.meta}, '{cardProposal}', ${JSON.stringify(view)}::jsonb)` })
+    .where(and(eq(messages.id, row.messageId), eq(messages.orgId, row.orgId)))
+    .returning({ channelId: messages.channelId, threadId: messages.threadId });
+  if (card)
+    await publishChannelEvent(deps.pubsub, {
+      type: "card.proposal.updated",
+      channelId: card.channelId,
+      threadId: card.threadId,
+      messageId: row.messageId,
+      proposal: view,
+    });
+  return view;
+}
+
+/**
+ * The PO proposes a card in a PO chat (ADR 0185). Nothing is created: a row waits and a card in the conversation lets
+ * the person who asked confirm, edit or discard it. Several proposals can wait in one chat. A title equal to an open
+ * card of the company that the requester sees is named on the card, never one they cannot see.
+ */
+export async function proposeCard(
+  deps: PoDeps,
+  run: {
+    orgId: string;
+    agentId: string;
+    runId: string;
+    channelId: string;
+    threadRootId: string;
+    triggerMessageId: string;
+  },
+  input: { title: string; summary?: string; criteria?: string[]; board: string },
+): Promise<CardProposalView> {
+  const { db } = deps;
+  const scope = await poScopeOf(db, run.orgId, run.channelId);
+  if (!scope) throw new ValidationError("A card is proposed in a PO chat only");
+  const [trigger] = await db
+    .select({ userId: messages.authorUserId })
+    .from(messages)
+    .where(and(eq(messages.id, run.triggerMessageId), eq(messages.orgId, run.orgId)));
+  if (!trigger?.userId) throw new ValidationError("Only a person's request can lead to a card proposal");
+  const requester = trigger.userId;
+  const fields = cleanProposal(input);
+  // One live board of this company: an archived, foreign or unknown name is refused with the names that exist.
+  const board = await projectByName(deps, run.orgId, input.board, "task", scope.spaceId);
+  if (board.spaceId !== scope.spaceId) throw new ValidationError(`That board is not in ${scope.name}`);
+
+  const [duplicate] = await db
+    .select({ id: issues.id })
+    .from(issues)
+    .innerJoin(issueProjects, eq(issueProjects.id, issues.projectId))
+    .where(
+      and(
+        eq(issues.orgId, run.orgId),
+        eq(issueProjects.spaceId, scope.spaceId),
+        sql`${issues.status} not in ('done', 'canceled')`,
+        sql`lower(${issues.title}) = lower(${fields.title})`,
+        taskSeenSql("issues", sql`${requester}::text`),
+      ),
+    )
+    .limit(1);
+
+  const made = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(poCardProposals)
+      .values({
+        orgId: run.orgId,
+        agentId: run.agentId,
+        runId: run.runId,
+        requesterUserId: requester,
+        channelId: run.channelId,
+        spaceId: scope.spaceId,
+        projectId: board.id,
+        ...fields,
+        duplicateOfIssueId: duplicate?.id ?? null,
+      })
+      .returning();
+    if (!row) throw new Error("proposal insert returned nothing");
+    const view = await cardProposalView(tx, row);
+    const card = await insertMessage(tx, {
+      orgId: run.orgId,
+      channelId: run.channelId,
+      threadId: replyThreadOf(run),
+      author: { type: "agent", agentId: run.agentId, runId: run.runId, hop: 1 },
+      body: `Card proposal: ${row.title}`,
+      meta: { cardProposalId: row.id, cardProposal: view, ...bodyCode("card_proposal", { title: row.title }) },
+    });
+    const [linked] = await tx
+      .update(poCardProposals)
+      .set({ messageId: card.id })
+      .where(eq(poCardProposals.id, row.id))
+      .returning();
+    return { row: linked ?? row, card, view };
+  });
+  if (deps.pubsub) await publishMessageCreated(deps.pubsub, messageView(made.card));
+  return made.view;
+}

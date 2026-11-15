@@ -158,3 +158,30 @@ export async function openPoChat(
     await publishUserEvent(options.pubsub, orgId, actorId, { type: "channels.changed" });
   return answer(channel.id);
 }
+
+/**
+ * The company a conversation is a PO chat of (ADR 0185), read from the channel's key through the per-process channel
+ * cache: the one thing the PO's tools and context ask. Null in any other conversation, so no other chat changes.
+ */
+export async function poScopeOf(
+  db: Database,
+  orgId: string,
+  channelId: string,
+): Promise<{ spaceId: string; name: string } | null> {
+  // The channel cache `getChannelCached` fills (same key and loader): `context.ts` can't be imported from here without
+  // a cycle through the wiki's search registration.
+  const channel = (await caches.channels.getOrLoad(`${orgId}:${channelId}`, async () => {
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(and(eq(channels.id, channelId), eq(channels.orgId, orgId)));
+    return row ?? null;
+  })) as typeof channels.$inferSelect | null;
+  const key = channel?.kind === "dm" ? parsePoChatKey(channel.dmKey) : null;
+  if (!key) return null;
+  const [space] = await db
+    .select({ id: issueSpaces.id, name: issueSpaces.name })
+    .from(issueSpaces)
+    .where(and(eq(issueSpaces.id, key.spaceId), eq(issueSpaces.orgId, orgId)));
+  return space ? { spaceId: space.id, name: space.name } : null;
+}
