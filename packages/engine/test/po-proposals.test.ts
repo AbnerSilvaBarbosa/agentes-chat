@@ -19,6 +19,7 @@ import {
   type PoDeps,
   proposeCard,
   updateIssueProject,
+  updateIssueSpace,
 } from "../src";
 import { REFUSALS, toolPolicy } from "../src/tools/run-policy";
 import { addMember, type Fixture, setup } from "./fixtures";
@@ -356,6 +357,28 @@ describe("a person confirms or discards a proposal", () => {
     const view = await confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id, { projectId: other.id });
     expect(view.status).toBe("confirmed");
     expect(await f.db.select().from(schema.issues)).toHaveLength(1);
+  });
+
+  test("an archived company refuses and the proposal stays pending", async () => {
+    f = await setup();
+    const { deps, company, ctx } = await poRun(f);
+    const proposal = await proposeCard(deps, ctx, { title: "Empresa arquivada", board: "Entregas" });
+    const other = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Outra", spaceId: company.id });
+    await updateIssueSpace(deps, f.owner.id, f.org.id, company.id, { archived: true });
+    await expect(confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id)).rejects.toMatchObject({
+      code: "issue_space.archived",
+    });
+    // An edit naming another board of that company is refused the same way.
+    await expect(
+      confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id, { projectId: other.id }),
+    ).rejects.toMatchObject({ code: "issue_space.archived" });
+    expect(await f.db.select().from(schema.issues)).toHaveLength(0);
+    const row = await proposalRow(proposal.id);
+    expect(row.status).toBe("pending");
+    expect(row.projectId).not.toBe(other.id);
+    // Restored, the same proposal goes through.
+    await updateIssueSpace(deps, f.owner.id, f.org.id, company.id, { archived: false });
+    expect((await confirmCardProposal(deps, f.owner.id, f.org.id, proposal.id)).status).toBe("confirmed");
   });
 
   test("a member without the right to post is refused and nothing is created", async () => {

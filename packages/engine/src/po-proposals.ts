@@ -259,6 +259,13 @@ export async function confirmCardProposal(
 ): Promise<CardProposalView> {
   const { db } = deps;
   const current = await ownProposal(db, userId, orgId, id);
+  // The same refusal as opening the chat: an archived company takes no new card, and the proposal stays pending.
+  const [space] = await db
+    .select({ archivedAt: schema.issueSpaces.archivedAt })
+    .from(schema.issueSpaces)
+    .where(and(eq(schema.issueSpaces.id, current.spaceId), eq(schema.issueSpaces.orgId, orgId)));
+  if (!space) throw new NotFoundError("Company not found");
+  if (space.archivedAt) throw new ValidationError("That company is archived", "issue_space.archived");
   const fields = cleanProposal({
     title: edits.title ?? current.title,
     summary: edits.summary ?? current.summary,
