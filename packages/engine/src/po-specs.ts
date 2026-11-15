@@ -1,5 +1,5 @@
 import type { PubSub } from "@agenteschat/adapters";
-import { and, asc, type Database, eq, inArray, isNull, or, schema, sql } from "@agenteschat/db";
+import { and, asc, type Database, eq, inArray, isNull, notInArray, or, schema, sql } from "@agenteschat/db";
 import { publishChannelEvent, publishMessageCreated } from "./events";
 import { updateIssue } from "./issues";
 import { insertMessage, type MessageView, messageView } from "./messages";
@@ -138,11 +138,22 @@ async function startNextSpec(deps: SpecDeps, spaceId: string): Promise<Step> {
   }
 }
 
+/**
+ * The runs of a company's specs that are working. One waiting on a person or an approval is not working: it holds no
+ * slot, or three questions to a person would starve the queue until someone answers (ADR 0185).
+ */
 const runningIn = async (db: Pick<Database, "select">, spaceId: string) => {
   const [r] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(poCardProposals)
-    .where(and(eq(poCardProposals.spaceId, spaceId), eq(poCardProposals.specState, "running")));
+    .leftJoin(agentRuns, eq(agentRuns.id, poCardProposals.specRunId))
+    .where(
+      and(
+        eq(poCardProposals.spaceId, spaceId),
+        eq(poCardProposals.specState, "running"),
+        or(isNull(agentRuns.id), notInArray(agentRuns.status, ["waiting_input", "waiting_approval"])),
+      ),
+    );
   return r?.n ?? 0;
 };
 

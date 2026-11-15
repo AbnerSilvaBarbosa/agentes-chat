@@ -69,8 +69,8 @@ into the description and the card's checklist. `settleSpecRun` is called from th
 passes (`onConsultedRunFinished`, also stop and recovery): a run that ends done with a page moves the card to
 "Priorizado" only while it is still in "Especificar", comments the link and tells the PO chat; any other ending leaves
 the card where it is with the reason. Either way the next queued spec starts. A `specs` tick every minute settles runs
-that ended unheard and starts held specs. A spec run that waits on a person holds its slot, so the brief forbids
-questions; a timeout is left for later.
+that ended unheard and starts held specs. A spec run that waits on a person or an approval holds no slot (only working runs count toward the three, so three
+questions never starve the queue), and the brief still forbids questions; a timeout is left for later.
 
 ### 6. The wiki scope by folder
 

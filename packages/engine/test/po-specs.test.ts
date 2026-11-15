@@ -742,6 +742,33 @@ describe("a finished spec run moves its card", () => {
     expect(running).toHaveLength(3);
   });
 
+  test("a spec run waiting on a person or an approval holds no slot", async () => {
+    f = await setup();
+    const c = await specCompany("Acme", "pipeline");
+    const [a, b, d] = await started(c, ["A", "B", "C"]);
+    const [fourth] = [await c.queue("D")];
+    if (!a?.run || !b?.run || !d?.run) throw new Error("none");
+    await pumpSpecs(c.deps, c.company.id);
+    // Three work: the fourth waits.
+    expect((await c.state(fourth.row.id))?.specState).toBe("queued");
+
+    // Three wait on a person (and one of them on an approval): the queue is not starved.
+    for (const [run, status] of [
+      [a.run, "waiting_input"],
+      [b.run, "waiting_input"],
+      [d.run, "waiting_approval"],
+    ] as const)
+      await f.db.update(schema.agentRuns).set({ status }).where(eq(schema.agentRuns.id, run.id));
+    expect(await pumpSpecs(c.deps, c.company.id)).toBe(1);
+    expect((await c.state(fourth.row.id))?.specState).toBe("running");
+    // The ones that wait keep their rows and their place: nothing was settled for them.
+    expect((await c.state(a.row.id))?.specState).toBe("running");
+
+    // One that was waiting ends: it settles as any ending does.
+    await end(a.run, "failed", "boom");
+    expect((await c.state(a.row.id))?.specState).toBe("failed");
+  });
+
   test("never moves a card to Ready for dev", async () => {
     f = await setup();
     // With a Priorizado column: that is where it goes.
