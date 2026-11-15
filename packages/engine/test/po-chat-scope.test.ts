@@ -252,3 +252,148 @@ describe("the PO chat block in a run's context", () => {
     expect(text).not.toContain("# Your company in this chat: Acme");
   });
 });
+
+describe("the card tools keep to the company in scope", () => {
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+
+  /** Acme (the PO chat's company) and Beta, a card on each, and one on no board. */
+  async function twoCompanies() {
+    const { company, chat } = await workspace(f);
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const beta = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Beta" });
+    await createIssueProject(deps, f.owner.id, f.org.id, { name: "Lancamentos", spaceId: beta.id });
+    const [acmeBoard, betaBoard] = [
+      (await f.db.select().from(schema.issueProjects)).find((p) => p.spaceId === company.id),
+      (await f.db.select().from(schema.issueProjects)).find((p) => p.spaceId === beta.id),
+    ];
+    if (!acmeBoard || !betaBoard) throw new Error("no boards");
+    const mine = await createIssue(deps, owner(), f.org.id, { title: "Tela de login", projectId: acmeBoard.id });
+    const theirs = await createIssue(deps, owner(), f.org.id, { title: "Campanha de Natal", projectId: betaBoard.id });
+    const loose = await createIssue(deps, owner(), f.org.id, { title: "Sem quadro nenhum" });
+    const source = createIssueToolSource(f.artifactDeps);
+    const inPo = await runIn(f, chat.channelId);
+    const call = async (name: string, input: Record<string, unknown>) => {
+      const tool = (await source.tools(inPo)).find((t) => t.name === name);
+      if (!tool) throw new Error(`no ${name}`);
+      return tool.execute(input, inPo);
+    };
+    return { deps, company, beta, mine, theirs, loose, call, source };
+  }
+
+  test("list_issues in a PO chat keeps to the company", async () => {
+    f = await setup();
+    const { mine, call } = await twoCompanies();
+    const all = await call("list_issues", {});
+    expect(all.content).toContain("Tela de login");
+    expect(all.content).not.toContain("Campanha de Natal");
+    expect(all.content).not.toContain("Sem quadro nenhum");
+
+    // Naming the company in scope, in any capitals, is the same list.
+    const named = await call("list_issues", { company: "acme" });
+    expect(named.content).toContain(`#${mine.number}`);
+    expect(named.content).not.toContain("Campanha de Natal");
+
+    // Naming another company is refused, naming the one in scope, and shows none of its cards.
+    const other = await call("list_issues", { company: "Beta" });
+    expect(other.isError).toBe(true);
+    expect(other.content).toContain("Acme");
+    expect(other.content).not.toContain("Campanha de Natal");
+
+    // A board of another company is not found here, and the answer does not offer it.
+    const board = await call("list_issues", { project: "Lancamentos" });
+    expect(board.isError).toBe(true);
+    expect(board.content).not.toContain("Campanha de Natal");
+    expect((await call("list_issues", { project: "Entregas" })).content).toContain("Tela de login");
+    // "No board" would list cards outside the company.
+    const none = await call("list_issues", { project: "none" });
+    expect(none.isError).toBe(true);
+    expect(none.content).not.toContain("Sem quadro nenhum");
+  });
+
+  test("list_boards, card reads and company names keep to the company", async () => {
+    f = await setup();
+    const { mine, theirs, loose, call } = await twoCompanies();
+    const boards = await call("list_boards", {});
+    expect(boards.content).toContain("Acme");
+    expect(boards.content).toContain("Entregas");
+    expect(boards.content).not.toContain("Beta");
+    expect(boards.content).not.toContain("Lancamentos");
+
+    // A card of another company, or with no board, is not in this company, for a read, an update and a comment.
+    for (const other of [theirs, loose]) {
+      for (const [tool, input] of [
+        ["list_issues", { issue: `#${other.number}` }],
+        ["update_issue", { issue: `#${other.number}`, title: "Mudado pelo PO" }],
+        ["comment_issue", { issue: `#${other.number}`, text: "Oi" }],
+      ] as const) {
+        const refused = await call(tool, input);
+        expect(refused.isError).toBe(true);
+        expect(refused.content).toContain("not in this company");
+      }
+    }
+    const rows = await f.db.select().from(schema.issues);
+    expect(rows.find((r) => r.id === theirs.id)?.title).toBe("Campanha de Natal");
+    expect(rows.find((r) => r.id === loose.id)?.title).toBe("Sem quadro nenhum");
+    expect(await f.db.select().from(schema.issueActivity)).not.toContainEqual(
+      expect.objectContaining({ issueId: theirs.id, text: "Oi" }),
+    );
+
+    // The card of the company reads and changes as before.
+    expect((await call("list_issues", { issue: `#${mine.number}` })).content).toContain("Tela de login");
+    expect((await call("update_issue", { issue: `#${mine.number}`, priority: "high" })).isError).toBeFalsy();
+
+    // Moving it to a board of another company, or by naming that company, is refused; so is "no board".
+    for (const input of [
+      { project: "Lancamentos" },
+      { project: "Lancamentos", company: "Beta" },
+      { project: "none" },
+    ]) {
+      const refused = await call("update_issue", { issue: `#${mine.number}`, ...input });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).not.toContain("Campanha");
+    }
+    const [after] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, mine.id));
+    expect(after?.projectId).not.toBeNull();
+    const board = (
+      await f.db
+        .select()
+        .from(schema.issueProjects)
+        .where(eq(schema.issueProjects.id, after?.projectId ?? ""))
+    )[0];
+    expect(board?.name).toBe("Entregas");
+
+    // An unknown company is refused without listing the others.
+    const unknown = await call("update_issue", { issue: `#${mine.number}`, project: "Entregas", company: "Gama" });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content).not.toContain("Beta");
+  });
+
+  test("list_issues says spec or no spec in a PO chat", async () => {
+    f = await setup();
+    const { deps, mine, call, source } = await twoCompanies();
+    const second = await createIssue(deps, owner(), f.org.id, {
+      title: "Cadastro de clientes",
+      projectId: mine.project?.id,
+    });
+    const page = await createWikiPage({ db: f.db, pubsub: f.pubsub, search: f.context }, owner(), f.org.id, {
+      title: "Spec do login",
+      body: "Spec.",
+    });
+    await updateIssue(deps, owner(), f.org.id, mine.id, { specPageId: page.id });
+
+    const lines = (await call("list_issues", {})).content.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.includes("Tela de login"))).toEndWith("spec: [[Spec do login]]");
+    expect(lines.find((l) => l.includes("Cadastro de clientes"))).toEndWith("no spec");
+    expect(second.specPage).toBeNull();
+
+    // Outside a PO chat the line says `spec:` only when linked and is otherwise as before.
+    const general = await runIn(f, f.general.id);
+    const list = (await source.tools(general)).find((t) => t.name === "list_issues");
+    const plain = (await list?.execute({ project: "Entregas" }, general))?.content.split("\n") ?? [];
+    expect(plain.find((l) => l.includes("Tela de login"))).toEndWith("spec: [[Spec do login]]");
+    const unlinked = plain.find((l) => l.includes("Cadastro de clientes")) ?? "";
+    expect(unlinked).toMatch(/ id=[0-9a-f-]{36}$/);
+    expect(unlinked).not.toContain("spec");
+  });
+});
