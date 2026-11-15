@@ -1,6 +1,6 @@
 # 0061. No AI connected, and agents that set up the workspace
 
-- Status: Accepted; amended 2026-11-04 (§5, a plan's panel never waits with no end; §5, the real reason a plan can't sign in yet)
+- Status: Accepted; amended 2026-11-04 (§5, a plan's panel never waits with no end; §5, the real reason a plan can't sign in yet); amended 2026-11-14 (§8, `create_channel_category` and `create_channel`'s `category`, ADR 0080 §8)
 - Date: 2026-10-24
 - Extends: ADR 0032 (brains and the fallback to the model), ADR 0037 (act with undo), ADR 0041 (plan sign-ins on a computer), ADR 0043 (tool groups chosen by the judge), ADR 0053 (who is behind a run)
 - Out of scope for now: invitation and app cards, agents creating agents or changing their own brain, plan sign-in from the phone app
@@ -100,6 +100,7 @@ The key step gets "Conectar depois". The agents are created without one, and the
 **Direct actions.** Internal, reversible ones act directly, with an Undo receipt (ADR 0037):
 
 - `create_channel` acts as the person behind the run, with that person's rights, and adds the people and agents asked for. Adding an agent needs its owner or an admin; one refused, nothing is created. Undo archives the channel (`channel.created`), unless someone already wrote there (it would hide their messages); Redo brings it back.
+- `create_channel_category` makes a sidebar category the same way (the person's `manage_channels`, an Undo that deletes it), and `create_channel`'s `category` field starts a channel inside one, making the category first when it is missing, as one receipt (ADR 0080 §8).
 
 **The tools:**
 
@@ -111,7 +112,7 @@ The key step gets "Conectar depois". The agents are created without one, and the
 **The group:**
 
 - Tool groups follow the scope prefix, and an empty scope is a core group listed in every run. So the tools get a scope prefix of their own, `setup:`, granted to agents by default. The judge (ADR 0043) loads them only when a message is about setting up.
-- At most 3 cards and 5 channels per run.
+- At most 3 cards, 10 channels and 3 categories per run (the channels cap was 5 until ADR 0080 §8).
 - The tools check their input (emails, the catalog's ids) and never receive or return secrets.
 
 ## Consequences
