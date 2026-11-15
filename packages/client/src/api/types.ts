@@ -3753,13 +3753,15 @@ export interface IssueColumn {
   position: number;
   /** The board it belongs to; null: the workspace's own set, which a board uses until it has its own. */
   projectId: string | null;
+  /** A task sitting here waits for a person to act on it: Início lists it (ADR 0184). */
+  waitsForPerson: boolean;
 }
 
 /** A set of columns a board can be made from: saved once, used by every board that wants it. */
 export interface IssueColumnTemplate {
   id: string;
   name: string;
-  columns: { name: string; stage: IssueStatus }[];
+  columns: { name: string; stage: IssueStatus; waitsForPerson?: boolean }[];
   /** One of the two the workspace started with. */
   seeded: boolean;
 }

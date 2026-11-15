@@ -221,7 +221,14 @@ const SEEDED_TEMPLATES: IssueColumnTemplate[] = [
 ];
 /** Every org starts with one unnamed column per stage (ids `col-<stage>`). */
 const defaultColumns = (): IssueColumn[] =>
-  STAGES.map((stage) => ({ id: `col-${stage}`, stage, name: null, position: 0, projectId: null }));
+  STAGES.map((stage) => ({
+    id: `col-${stage}`,
+    stage,
+    name: null,
+    position: 0,
+    projectId: null,
+    waitsForPerson: false,
+  }));
 /** Board order: by stage, then position. */
 const boardOrder = (cols: IssueColumn[]) =>
   [...cols].sort((a, b) => STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage) || a.position - b.position);
@@ -770,6 +777,7 @@ export function createMockPlanning(
           name: input.name.trim(),
           position: 0,
           projectId: input.projectId ?? null,
+          waitsForPerson: false,
         };
         const after = input.afterId ? s.columns.find((c) => c.id === input.afterId) : undefined;
         const at =
@@ -794,6 +802,23 @@ export function createMockPlanning(
           s.columns = boardOrder(s.columns);
           renumber(s.columns, from);
           renumber(s.columns, patch.stage);
+        }
+        if (patch.waitsForPerson !== undefined) {
+          // As the server does: a board that still follows the workspace's columns gets its own copy first, its
+          // tasks pointing at the copy of the column they were in, and the copy is the one flagged.
+          const board = patch.projectId ?? null;
+          let target = col;
+          if (col.projectId === null && board && !s.columns.some((c) => c.projectId === board)) {
+            const base = boardOrder(s.columns.filter((c) => c.projectId === null));
+            const copies = base.map((c) => ({ ...c, id: mockId("col"), projectId: board }));
+            for (const [k, c] of base.entries()) {
+              for (const i of s.issues)
+                if (i.project?.id === board && i.columnId === c.id) i.columnId = copies[k]?.id ?? null;
+            }
+            s.columns.push(...copies);
+            target = copies[base.indexOf(col)] ?? col;
+          }
+          target.waitsForPerson = patch.waitsForPerson;
         }
         if (patch.index !== undefined) {
           const sib = s.columns.filter((c) => c.stage === col.stage && c !== col);
@@ -925,7 +950,11 @@ export function createMockPlanning(
           id: mockId("tpl"),
           name: input.name,
           seeded: false,
-          columns: s.columns.map((c) => ({ name: c.name ?? c.stage, stage: c.stage })),
+          columns: s.columns.map((c) => ({
+            name: c.name ?? c.stage,
+            stage: c.stage,
+            ...(c.waitsForPerson ? { waitsForPerson: true } : {}),
+          })),
         };
       },
       applyColumnTemplate: async (orgId, projectId, templateId) => {
@@ -935,7 +964,14 @@ export function createMockPlanning(
         if (!template) throw new MockNotFoundError("Modelo não encontrado.");
         s.columns = s.columns.filter((c) => c.projectId !== projectId);
         for (const [i, c] of template.columns.entries())
-          s.columns.push({ id: mockId("col"), stage: c.stage, name: c.name, position: i, projectId });
+          s.columns.push({
+            id: mockId("col"),
+            stage: c.stage,
+            name: c.name,
+            position: i,
+            projectId,
+            waitsForPerson: c.waitsForPerson === true,
+          });
         return clone(boardOrder(s.columns.filter((c) => c.projectId === projectId)));
       },
       createColumnTemplate: async (_orgId, input) => {

@@ -8,6 +8,7 @@ const col = (id: string, stage: IssueStatus, position = 0, name: string | null =
   name,
   projectId: null,
   position,
+  waitsForPerson: false,
 });
 const defaults = [
   col("todo", "todo"),

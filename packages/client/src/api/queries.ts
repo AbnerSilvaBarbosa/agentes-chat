@@ -4281,7 +4281,14 @@ export function useIssueColumnAction(orgId: string, projectId?: string | null) {
     mutationFn: (
       action:
         | { type: "add"; name: string; stage: IssueStatus; afterId?: string | null }
-        | { type: "update"; columnId: string; name?: string; index?: number; stage?: IssueStatus }
+        | {
+            type: "update";
+            columnId: string;
+            name?: string;
+            index?: number;
+            stage?: IssueStatus;
+            waitsForPerson?: boolean;
+          }
         | { type: "delete"; columnId: string; moveTo: string },
     ): Promise<IssueColumn[]> => {
       switch (action.type) {
@@ -4297,6 +4304,9 @@ export function useIssueColumnAction(orgId: string, projectId?: string | null) {
             name: action.name,
             index: action.index,
             stage: action.stage,
+            waitsForPerson: action.waitsForPerson,
+            // The board the dialog is open on: a flag on a column it still shares with the workspace gives it a copy.
+            ...(action.waitsForPerson !== undefined ? { projectId: projectId ?? null } : {}),
           });
         case "delete":
           return api.issues.deleteColumn(orgId, action.columnId, action.moveTo);

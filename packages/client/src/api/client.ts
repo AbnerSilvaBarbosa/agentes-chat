@@ -1324,11 +1324,20 @@ export interface ApiClient {
       orgId: string,
       input: { name: string; stage: IssueStatus; afterId?: string | null; projectId?: string | null },
     ): Promise<IssueColumn[]>;
-    /** Renames a column, or moves it inside its stage (`index`). */
+    /**
+     * Renames a column, moves it inside its stage (`index`) or to another stage, or flags it as one that waits for a
+     * person (`waitsForPerson`, with the board the dialog is open on in `projectId`).
+     */
     updateColumn(
       orgId: string,
       columnId: string,
-      patch: { name?: string; index?: number; stage?: IssueStatus },
+      patch: {
+        name?: string;
+        index?: number;
+        stage?: IssueStatus;
+        waitsForPerson?: boolean;
+        projectId?: string | null;
+      },
     ): Promise<IssueColumn[]>;
     /** Deletes a column; its tasks go to `moveTo`. A stage keeps at least one column. */
     deleteColumn(orgId: string, columnId: string, moveTo: string): Promise<IssueColumn[]>;
