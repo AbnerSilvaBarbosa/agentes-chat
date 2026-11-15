@@ -18,6 +18,7 @@ import { agentsByHandle, getAgentCached } from "./agents";
 import type { AiStatusDeps } from "./ai-status";
 import { AGENT_LOOK } from "./appearance";
 import { listApprovals } from "./approvals";
+import { createChannelCategory, findCategoryByName } from "./channel-categories";
 import { addChannelMember, createChannel, listChannels } from "./channels";
 import { findMember } from "./chat-tools";
 import { CONNECTOR_CATALOG } from "./connectors/catalog";
@@ -60,6 +61,7 @@ const { agentActions, agentRuns, channels, machineAccounts, messages, orgRoles, 
 export const SETUP_SCOPE = "setup:write";
 export const OFFER_CONNECT_AI_TOOL = "offer_connect_ai";
 export const CREATE_CHANNEL_TOOL = "create_channel";
+export const CREATE_CHANNEL_CATEGORY_TOOL = "create_channel_category";
 export { OFFER_CONNECT_APP_TOOL };
 export const PROPOSE_AGENT_TOOL = "propose_agent";
 export const OFFER_INVITES_TOOL = "offer_invites";
@@ -146,6 +148,8 @@ export const SETTINGS_PROPOSAL_CARD = "settings_proposal";
 /** An agent's own settings card's `bodyCode` (`chat.body.settings_request`): no names, it is the author's. */
 export const SETTINGS_REQUEST_CARD = "settings_request";
 export const MAX_CHANNELS_PER_RUN = 5;
+/** Categories one run may make, alone or with a channel: a burst of calls must not reshape the sidebar (ADR 0080). */
+export const MAX_CATEGORIES_PER_RUN = 3;
 /** A Connect card's `bodyCode` (the apps say it with `chat.body.action_connect_ai`). */
 export const CONNECT_AI_CARD = "action_connect_ai";
 /** A connect-an-app card's `bodyCode` (`chat.body.action_connect_app`, with `name`); one with no name, `ADD_MCP_CARD`. */
@@ -287,6 +291,33 @@ export async function whoActs(ctx: ToolContext, userId: string | null, permissio
   if (can(membership, permission)) return "person" as const;
   return (await deciderCanOpen(ctx.db, ctx.orgId, channelId, permission)) ? ("admin_here" as const) : null;
 }
+
+/** Categories this run made so far, by `create_channel_category` or by `create_channel` with a new `category`. */
+async function categoriesMadeInRun(ctx: ToolContext) {
+  const [made] = await ctx.db
+    .select({ n: count() })
+    .from(agentActions)
+    .where(
+      and(
+        eq(agentActions.orgId, ctx.orgId),
+        eq(agentActions.runId, ctx.runId),
+        or(
+          eq(agentActions.kind, "channel_category.created"),
+          and(eq(agentActions.kind, "channel.created"), sql`${agentActions.params}->>'categoryCreated' = 'true'`),
+        ),
+      ),
+    );
+  return made?.n ?? 0;
+}
+
+/** A person without the right to manage channels makes no category, with an agent's hands or without. */
+async function mayMakeCategories(ctx: ToolContext, userId: string) {
+  return can(await getMembership(ctx.db, userId, ctx.orgId), "manage_channels");
+}
+const NO_CATEGORY_RIGHT: ToolOutput = {
+  content: "You can't create categories: it needs the right to manage channels. Nothing was created.",
+  isError: true,
+};
 
 /** A card with no place (`cardPlace`): nobody would see it. */
 export const NOBODY_READS: ToolOutput = { content: NO_PERSON_READS, isError: true };
@@ -538,6 +569,86 @@ export function createSetupToolSource(deps: {
           return {
             content: `Created #${channel.name}${members.length ? ` with ${members.join(", ")}` : ""}.`,
             data: { channel: { id: channel.id, name: channel.name } },
+          };
+        } catch (error) {
+          return failed(error);
+        }
+      },
+    },
+    {
+      name: CREATE_CHANNEL_CATEGORY_TOOL,
+      description:
+        "Create a category in the sidebar for channels when a person asks for one, with the person's rights (it needs the right to manage channels), optionally taking existing channels along. It needs a request from a person in the current message; the person sees it under your reply with Undo, which deletes the category and leaves its channels in none. To start a channel inside a category, use create_channel's `category` instead.",
+      scope: SETUP_SCOPE,
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            description: "The category's name, 1 to 40 characters.",
+          },
+          channels: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 81 },
+            maxItems: 20,
+            description: "Existing channels (with or without #) to put in it, in this order.",
+          },
+        },
+        required: ["name"],
+        additionalProperties: false,
+      },
+      async execute(input, ctx) {
+        try {
+          const requester = await personBehindCall(ctx);
+          if (!requester) return { content: "Only a person's request can create a category.", isError: true };
+          if (!(await mayMakeCategories(ctx, requester))) return NO_CATEGORY_RIGHT;
+          const found = await findCategoryByName(ctx.db, ctx.orgId, str(input.name));
+          if (found) {
+            return {
+              content: `The category "${found.name}" already exists. Use it with create_channel's \`category\`.`,
+              isError: true,
+            };
+          }
+          if ((await categoriesMadeInRun(ctx)) >= MAX_CATEGORIES_PER_RUN) {
+            return {
+              content: `You already created ${MAX_CATEGORIES_PER_RUN} categories in this turn.`,
+              isError: true,
+            };
+          }
+          // Only channels the person may see: a private one they can't read is not named, moved or leaked.
+          const visible = await listChannels(ctx.db, requester, ctx.orgId);
+          const taken: { id: string; name: string }[] = [];
+          for (const wanted of Array.isArray(input.channels) ? input.channels.map(str) : []) {
+            const name = wanted.trim().replace(/^#/, "").toLowerCase();
+            const channel = visible.find((c) => c.name === name);
+            if (!channel) return { content: `No channel #${name}.`, isError: true };
+            taken.push({ id: channel.id, name: channel.name });
+          }
+          const events = holdEvents(deps.pubsub);
+          const category = await actWithUndo(
+            ctx,
+            (db) =>
+              createChannelCategory(
+                db,
+                requester,
+                ctx.orgId,
+                { name: str(input.name), channelIds: taken.map((c) => c.id) },
+                events,
+              ),
+            (made) => ({
+              kind: "channel_category.created",
+              target: { type: "channel_category", id: made.id, title: made.name },
+              params: { name: made.name, channels: taken.map((c) => c.name) },
+              before: null,
+              after: { name: made.name, channelIds: taken.map((c) => c.id) },
+            }),
+          );
+          await events.flush();
+          return {
+            content: `Created the category "${category.name}"${taken.length ? ` with ${taken.map((c) => `#${c.name}`).join(", ")}` : ""}.`,
+            data: { category: { id: category.id, name: category.name } },
           };
         } catch (error) {
           return failed(error);

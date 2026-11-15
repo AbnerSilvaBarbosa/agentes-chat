@@ -206,6 +206,7 @@ const LABELS: Record<string, readonly [en: string, ptBR: string]> = {
   find_channels: ["Find channels", "Encontrar canais"],
   list_channels: ["List channels", "Listar canais"],
   create_channel: ["Create channel", "Criar canal"],
+  create_channel_category: ["Create channel category", "Criar categoria de canais"],
   invite_user_to_channel: ["Add someone to a channel", "Adicionar alguém a um canal"],
   fetch_conversation_history: ["Read conversation", "Ler conversa"],
   get_channel_history: ["Read channel", "Ler canal"],

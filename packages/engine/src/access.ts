@@ -64,6 +64,7 @@ export const BUILTIN_TOOLS: Record<string, string[]> = {
   "setup:write": [
     "offer_connect_ai",
     "create_channel",
+    "create_channel_category",
     "propose_agent",
     "offer_connect_app",
     "offer_invites",
@@ -225,6 +226,10 @@ export const BUILTIN_TOOL_INFO: Record<string, { label: string; description: str
   create_channel: {
     label: "Create channel",
     description: "Creates a channel with people and agents for the person asking, with Undo.",
+  },
+  create_channel_category: {
+    label: "Create channel category",
+    description: "Creates a sidebar category for channels for the person asking, with Undo.",
   },
   propose_agent: {
     label: "Propose an agent",

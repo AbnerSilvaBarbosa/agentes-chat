@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { orgTopic } from "@agenteschat/adapters";
 import { eq, schema } from "@agenteschat/db";
 import {
   type ActionCard,
@@ -9,6 +10,8 @@ import {
   type ConnectAppCard,
   connectorListing,
   createChannel,
+  createChannelCategory,
+  createRole,
   createSetupToolSource,
   createToolGateway,
   DEFAULT_AGENT_SCOPES,
@@ -17,7 +20,10 @@ import {
   type InviteCard,
   insertMessage,
   linkRunActions,
+  listChannelCategories,
+  listChannels,
   MAX_CARDS_PER_RUN,
+  MAX_CATEGORIES_PER_RUN,
   MAX_CHANNELS_PER_RUN,
   MCP_PRESETS,
   openAgentDm,
@@ -25,15 +31,18 @@ import {
   redoAgentAction,
   replyThreadOf,
   SETUP_SCOPE,
+  setMemberRoles,
   type ToolContext,
   undoAgentAction,
 } from "../src";
-import { toolKind } from "../src/tools/run-policy";
+import { REFUSALS, toolKind, toolPolicy } from "../src/tools/run-policy";
 import { addMember, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
 afterEach(async () => {
-  await f?.close();
+  const current = f;
+  f = undefined as unknown as Fixture;
+  await current?.close();
 });
 
 /** A run of @dev on a message `userId` wrote in #general: the tools act for that person. */
@@ -109,6 +118,7 @@ describe("the setup group", () => {
     const granted = await gatewayOf(f).granted(ctx);
     expect(granted.map((t) => t.name)).toEqual([
       "create_channel",
+      "create_channel_category",
       "offer_connect_ai",
       "offer_connect_app",
       "offer_invites",
@@ -119,7 +129,7 @@ describe("the setup group", () => {
     ]);
     // An agent's own settings go with the conversation's rarer tools, whatever its setup grant (ADR 0137).
     expect(deferrableGroups(granted).map((g) => [g.key, g.tools.length])).toEqual([
-      ["setup", 7],
+      ["setup", 8],
       ["more", 1],
     ]);
     expect(deferrableGroups(granted)[0]?.label).toBe(
@@ -129,6 +139,7 @@ describe("the setup group", () => {
     expect(presentTools(granted, undefined, []).map((t) => t.name)).toEqual(["find_tools", "use_tool"]);
     expect(presentTools(granted, undefined, ["setup"]).map((t) => t.name)).toEqual([
       "create_channel",
+      "create_channel_category",
       "offer_connect_ai",
       "offer_connect_app",
       "offer_invites",
@@ -483,6 +494,192 @@ describe("create_channel", () => {
       content: `You already created ${MAX_CHANNELS_PER_RUN} channels in this turn.`,
     });
     expect(await channelNamed(f, "canal-extra")).toBeUndefined();
+  });
+});
+
+const categoriesOf = (fx: Fixture) => listChannelCategories(fx.db, fx.owner.id, fx.org.id);
+/** The receipts of a run, oldest first. */
+const receiptsOf = async (fx: Fixture, ctx: ToolContext) =>
+  (await fx.db.select().from(schema.agentActions).where(eq(schema.agentActions.runId, ctx.runId))).sort(
+    (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+  );
+
+describe("create_channel_category", () => {
+  test("creates the category at the end of the sidebar and names it", async () => {
+    f = await setup();
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Interno" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora");
+    const out = await call(f, ctx, "create_channel_category", { name: " Livora " });
+    expect(out).toMatchObject({
+      content: 'Created the category "Livora".',
+      data: { category: { name: "Livora" } },
+    });
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Interno", "Livora"]);
+  });
+
+  test("records one channel_category.created receipt with the name and the channels taken", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora com o geral");
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    await call(f, ctx, "create_channel_category", { name: "Livora", channels: ["#vendas", "general"] });
+    const rows = await receiptsOf(f, ctx);
+    expect(rows).toHaveLength(1);
+    const [category] = await categoriesOf(f);
+    expect(rows[0]).toMatchObject({
+      kind: "channel_category.created",
+      requestedByUserId: f.owner.id,
+      targetType: "channel_category",
+      targetId: category?.id,
+      target: { title: "Livora" },
+      params: { name: "Livora", channels: ["vendas", "general"] },
+    });
+  });
+
+  test("refuses a category name that exists ignoring case and names it", async () => {
+    f = await setup();
+    await createChannelCategory(f.db, f.owner.id, f.org.id, { name: "Livora" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria livora");
+    const out = await call(f, ctx, "create_channel_category", { name: "livora" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('The category "Livora" already exists');
+    expect(await categoriesOf(f)).toHaveLength(1);
+    expect(await receiptsOf(f, ctx)).toEqual([]);
+  });
+
+  test("refuses an empty category name and one over 40 characters", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria categorias");
+    expect((await call(f, ctx, "create_channel_category", { name: "   " })).isError).toBe(true);
+    const long = await call(f, ctx, "create_channel_category", { name: "x".repeat(41) });
+    expect(long).toMatchObject({ isError: true });
+    expect(long.content).toContain("at most 40 characters");
+    expect(await categoriesOf(f)).toEqual([]);
+    expect(await receiptsOf(f, ctx)).toEqual([]);
+  });
+
+  test("refuses a category from a person without manage_channels and creates nothing", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    const ctx = await runFor(f, bia.id, "cria a categoria Livora");
+    const out = await call(f, ctx, "create_channel_category", { name: "Livora" });
+    expect(out).toEqual({
+      content: "You can't create categories: it needs the right to manage channels. Nothing was created.",
+      isError: true,
+    });
+    expect(await categoriesOf(f)).toEqual([]);
+    expect(await receiptsOf(f, ctx)).toEqual([]);
+  });
+
+  test("refuses a category in a run with no person behind it", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora");
+    // Nobody asked: the trigger was an agent's note, not a person's message.
+    await f.db
+      .update(schema.messages)
+      .set({ authorType: "agent", authorUserId: null, authorAgentId: f.agent.id })
+      .where(eq(schema.messages.id, ctx.triggerMessageId ?? ""));
+    const out = await call(f, ctx, "create_channel_category", { name: "Livora" });
+    expect(out).toMatchObject({ isError: true });
+    expect(await categoriesOf(f)).toEqual([]);
+  });
+
+  test("takes the named channels along in the order given", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "bia");
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "vendas" });
+    await createChannel(f.db, f.owner.id, f.org.id, { name: "suporte" });
+    const secret = await createChannel(f.db, f.owner.id, f.org.id, { name: "diretoria", visibility: "private" });
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora");
+    expect(
+      (await call(f, ctx, "create_channel_category", { name: "Livora", channels: ["suporte", "#vendas"] })).content,
+    ).toBe('Created the category "Livora" with #suporte, #vendas.');
+    const [category] = await categoriesOf(f);
+    const inside = (await listChannels(f.db, f.owner.id, f.org.id))
+      .filter((c) => c.categoryId === category?.id)
+      .map((c) => c.name);
+    expect(inside).toEqual(["suporte", "vendas"]);
+
+    // A channel that is not there, or that the person cannot see, is "not there" and nothing is made.
+    const other = await runFor(f, bia.id, "cria a categoria Outra");
+    const keepers = await createRole(f.db, f.owner.id, f.org.id, { name: "Keepers", permissions: ["manage_channels"] });
+    await setMemberRoles(f.db, f.owner.id, f.org.id, bia.id, [keepers.id]);
+    expect(await call(f, other, "create_channel_category", { name: "Outra", channels: ["nao-existe"] })).toEqual({
+      content: "No channel #nao-existe.",
+      isError: true,
+    });
+    expect(await call(f, other, "create_channel_category", { name: "Outra", channels: ["diretoria"] })).toEqual({
+      content: `No channel #${secret.name}.`,
+      isError: true,
+    });
+    expect((await categoriesOf(f)).map((c) => c.name)).toEqual(["Livora"]);
+  });
+
+  test("sends the layout broadcast once the category exists", async () => {
+    f = await setup();
+    const seen: { type?: string; event?: { type?: string } }[] = [];
+    f.pubsub.subscribe(orgTopic(f.org.id), (e) => seen.push(e as never));
+    const ctx = await runFor(f, f.owner.id, "cria a categoria Livora");
+    await call(f, ctx, "create_channel_category", { name: "Livora" });
+    expect(seen.filter((e) => e.event?.type === "channels.layout")).toHaveLength(1);
+    // A refusal says nothing to anyone.
+    seen.length = 0;
+    await call(f, ctx, "create_channel_category", { name: "Livora" });
+    expect(seen).toEqual([]);
+  });
+
+  test(`refuses the fourth category of a run`, async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria quatro categorias");
+    for (let i = 0; i < MAX_CATEGORIES_PER_RUN; i++) {
+      expect((await call(f, ctx, "create_channel_category", { name: `Cat ${i}` })).isError).toBeUndefined();
+    }
+    expect(await call(f, ctx, "create_channel_category", { name: "Cat extra" })).toEqual({
+      content: `You already created ${MAX_CATEGORIES_PER_RUN} categories in this turn.`,
+      isError: true,
+    });
+    expect(MAX_CATEGORIES_PER_RUN).toBe(3);
+    expect(await categoriesOf(f)).toHaveLength(3);
+  });
+
+  test("lists create_channel_category and create_channel's category field in the setup tools", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria uma categoria");
+    const granted = await gatewayOf(f).granted(ctx);
+    expect(granted.map((t) => t.name)).toContain("create_channel_category");
+  });
+
+  test("create_channel_category is elsewhere and a routine's run is refused it", () => {
+    const tool = { name: "create_channel_category", scope: SETUP_SCOPE, connectionId: null };
+    expect(toolKind(tool).kind).toBe("elsewhere");
+    const routine = {
+      kind: "routine",
+      personId: null,
+      brief: {
+        routineId: "00000000-0000-4000-8000-000000000001",
+        routineRunId: "00000000-0000-4000-8000-000000000002",
+        name: "Diária",
+        creatorUserId: "user_creator",
+        deliverTo: { channelId: "00000000-0000-4000-8000-000000000003", threadId: null },
+        access: "act",
+        report: "when_new",
+        trigger: "schedule",
+        dueAt: new Date().toISOString(),
+      },
+    } as const;
+    expect(toolPolicy(routine as never, tool)).toEqual({ action: "refuse", reason: REFUSALS.routineElsewhere });
+  });
+
+  test("the descriptions say the person's rights, Undo and a person's request", async () => {
+    f = await setup();
+    const ctx = await runFor(f, f.owner.id, "cria uma categoria");
+    const granted = await gatewayOf(f).granted(ctx);
+    for (const name of ["create_channel_category"]) {
+      const description = granted.find((t) => t.name === name)?.description ?? "";
+      expect(description).toContain("person's rights");
+      expect(description).toContain("Undo");
+      expect(description).toContain("person");
+      expect(description).toContain("current message");
+    }
   });
 });
 

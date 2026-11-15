@@ -63,6 +63,7 @@ export type ActivityKind =
   | "readingWiki"
   | "linkingWiki"
   | "creatingChannel"
+  | "creatingChannelCategory"
   | "offeringConnectAi"
   | "offeringConnectApp"
   | "offeringSkill"
@@ -210,6 +211,7 @@ const BUILTIN: Record<string, ActivityKind> = {
   link_to_wiki: "linkingWiki",
   // Setting up the workspace.
   create_channel: "creatingChannel",
+  create_channel_category: "creatingChannelCategory",
   offer_connect_ai: "offeringConnectAi",
   offer_connect_app: "offeringConnectApp",
   offer_invites: "offeringInvites",

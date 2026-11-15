@@ -15943,6 +15943,7 @@ export const en = {
         readingWiki: "Read the wiki",
         linkingWiki: "Linked a wiki page",
         creatingChannel: "Created a channel",
+        creatingChannelCategory: "Created a channel category",
         offeringConnectAi: "Offered to connect an AI",
         offeringConnectApp: "Offered to connect an app",
         offeringSkill: "Offered to install a skill",
@@ -16057,6 +16058,7 @@ export const en = {
       readingWiki: "reading the wiki",
       linkingWiki: "linking a wiki page",
       creatingChannel: "creating a channel",
+      creatingChannelCategory: "creating a channel category",
       offeringConnectAi: "getting an AI ready to connect",
       offeringConnectApp: "getting an app ready to connect",
       offeringSkill: "getting a skill ready to install",
@@ -16553,6 +16555,10 @@ export const en = {
     create_channel: {
       label: "Create channel",
       description: "Creates a channel with people and agents for the person asking, with Undo.",
+    },
+    create_channel_category: {
+      label: "Create channel category",
+      description: "Creates a sidebar category for channels for the person asking, with Undo.",
     },
     run_code: {
       label: "Run code",

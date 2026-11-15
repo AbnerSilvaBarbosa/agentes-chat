@@ -63,6 +63,7 @@ export const UNDOABLE_TOOLS = new Set([
   "delete_routine",
   "add_agent_to_channel",
   "create_channel",
+  "create_channel_category",
   "create_wiki_page",
   "update_wiki_page",
   "link_to_wiki",

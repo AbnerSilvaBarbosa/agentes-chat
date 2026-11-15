@@ -15937,6 +15937,7 @@ export const ptBR = {
         readingWiki: "Leu a wiki",
         linkingWiki: "Ligou a uma página da wiki",
         creatingChannel: "Criou um canal",
+        creatingChannelCategory: "Criou uma categoria de canais",
         offeringConnectAi: "Ofereceu conectar uma IA",
         offeringConnectApp: "Ofereceu conectar um app",
         offeringSkill: "Ofereceu instalar uma skill",
@@ -16051,6 +16052,7 @@ export const ptBR = {
       readingWiki: "lendo a wiki",
       linkingWiki: "ligando a uma página da wiki",
       creatingChannel: "criando um canal",
+      creatingChannelCategory: "criando uma categoria de canais",
       offeringConnectAi: "preparando a conexão de uma IA",
       offeringConnectApp: "preparando a conexão de um app",
       offeringSkill: "preparando a instalação de uma skill",
@@ -16545,6 +16547,10 @@ export const ptBR = {
     create_channel: {
       label: "Criar canal",
       description: "Cria um canal com pessoas e agentes para quem pediu, com Desfazer.",
+    },
+    create_channel_category: {
+      label: "Criar categoria de canais",
+      description: "Cria uma categoria da barra lateral para canais para quem pediu, com Desfazer.",
     },
     run_code: {
       label: "Rodar código",

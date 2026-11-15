@@ -127,6 +127,7 @@ const ELSEWHERE = new Set([
   "run_routine_now",
   "add_agent_to_channel",
   "create_channel",
+  "create_channel_category",
   "request_secret",
   "request_permission",
   // An agent's own settings, as its permissions: never what a routine or what it read asks for.

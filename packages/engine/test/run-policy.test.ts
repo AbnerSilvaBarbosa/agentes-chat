@@ -135,6 +135,12 @@ describe("run policy table", () => {
         action: "refuse",
         reason: REFUSALS.routineElsewhere,
       });
+    // Nor does it change the sidebar: a category is made for a person who asked.
+    for (const name of ["create_channel", "create_channel_category"])
+      expect(toolPolicy(r, builtIn(name, "setup:write"))).toEqual({
+        action: "refuse",
+        reason: REFUSALS.routineElsewhere,
+      });
   });
 
   test("unattended: it works as the agent itself, with every tool a person's run has but hand_off", () => {
