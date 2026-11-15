@@ -53,6 +53,7 @@ import { missionRoutes } from "./routes/app/missions";
 import { notificationRoutes } from "./routes/app/notifications";
 import { personUsageRoutes } from "./routes/app/person-usage";
 import { planUsageRoutes } from "./routes/app/plan-usage";
+import { poRoutes } from "./routes/app/po";
 import { pushRoutes } from "./routes/app/push";
 import { questionRoutes } from "./routes/app/questions";
 import { roleRoutes } from "./routes/app/roles";
@@ -212,6 +213,7 @@ export function createApp(options: AppOptions) {
     api.route("/app", wikiRoutes(deps));
     api.route("/app", routineRoutes(deps));
     api.route("/app", calendarRoutes(deps));
+    api.route("/app", poRoutes(deps));
     api.route("/app", skillRoutes(deps));
     api.route("/app", agentImportRoutes(deps));
     api.route("/app", sandboxRoutes(deps));
