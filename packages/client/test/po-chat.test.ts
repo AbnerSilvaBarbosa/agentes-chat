@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { CardProposalView } from "../src/api/types";
+import type { AppNotification, CardProposalView } from "../src/api/types";
 import { ApiError, createHttpApi } from "../src/index";
 import { actionCardOf, cardProposalCardOf } from "../src/lib/action-cards";
+import { openTarget } from "../src/lib/notifications";
 
 const proposal = (patch: Partial<CardProposalView> = {}): CardProposalView => ({
   id: "p1",
@@ -101,5 +102,44 @@ describe("the PO's reads and the proposal's decisions over http", () => {
     const error = await po.confirmProposal("o1", "p1").catch((e) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 400, code: "card_proposal.decided" });
+  });
+});
+
+describe("a PO reply opens the PO chat", () => {
+  const at = "2026-11-15T10:00:00.000Z";
+  const notice = (patch: Partial<AppNotification>): AppNotification => ({
+    id: "n1",
+    kind: "dm",
+    waiting: false,
+    actors: [{ type: "agent", id: "po" }],
+    count: 1,
+    source: { channelId: "d1", dmId: "d1" },
+    latest: {},
+    readAt: null,
+    doneAt: null,
+    snoozedUntil: null,
+    createdAt: at,
+    updatedAt: at,
+    ...patch,
+  });
+
+  test("a notice with poSpaceId opens that company's chat, at its message when it has one", () => {
+    expect(openTarget(notice({ source: { dmId: "d1", poSpaceId: "s1" } }))).toEqual({
+      to: "/org/$orgId/po/$spaceId",
+      params: { spaceId: "s1" },
+    });
+    expect(openTarget(notice({ source: { dmId: "d1", poSpaceId: "s1", messageId: "m1" } }))).toEqual({
+      to: "/org/$orgId/po/$spaceId",
+      params: { spaceId: "s1" },
+      search: { m: "m1" },
+    });
+  });
+
+  test("a plain DM notice still opens the DM with the agent", () => {
+    expect(openTarget(notice({ source: { dmId: "d1", messageId: "m1" } }))).toEqual({
+      to: "/org/$orgId/dm/agent/$agentId",
+      params: { agentId: "po" },
+      search: { m: "m1" },
+    });
   });
 });

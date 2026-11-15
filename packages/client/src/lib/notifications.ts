@@ -336,6 +336,7 @@ export type OpenTarget =
   | { to: "/org/$orgId/c/$channelId"; params: { channelId: string }; search?: { m: string } }
   | { to: "/org/$orgId/dm/agent/$agentId"; params: { agentId: string }; search?: { m: string } }
   | { to: "/org/$orgId/agents/$agentId"; params: { agentId: string }; search?: { sec: "brain"; brain?: "model" } }
+  | { to: "/org/$orgId/po/$spaceId"; params: { spaceId: string }; search?: { m: string } }
   | { to: "/org/$orgId/dm/person/$userId"; params: { userId: string }; search?: { m: string } }
   | { to: "/org/$orgId/issues/$number"; params: { number: string }; search?: { m: string } }
   | { to: "/org/$orgId/approvals"; search?: { open: string } }
@@ -465,6 +466,9 @@ export function openTarget(n: AppNotification): OpenTarget | null {
   // What a routine found opens the agent's message in its conversation (below); without one, the routine.
   if (ROUTINE_TROUBLE.has(n.kind) || (n.kind === "routine_finished" && !s.messageId && !s.threadId))
     return s.routineId ? { to: "/org/$orgId/routines", search: { open: s.routineId } } : { to: "/org/$orgId/routines" };
+  // A reply in my PO chat for a company (ADR 0185) opens that chat, not my plain DM with the same agent.
+  if (s.dmId && s.poSpaceId && n.actors[0]?.type === "agent" && !s.threadId)
+    return { to: "/org/$orgId/po/$spaceId", params: { spaceId: s.poSpaceId }, ...at };
   // An agent's answer or request in my DM with it opens that DM (a DM has no channel page of its own); one in a thread
   // there opens the thread, the only place its message is.
   if (s.dmId && n.actors[0]?.type === "agent" && !s.threadId)
