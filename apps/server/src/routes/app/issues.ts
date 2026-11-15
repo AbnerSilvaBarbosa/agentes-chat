@@ -31,6 +31,7 @@ import {
   removeBoardAlert,
   SPACE_NAME_MAX,
   saveColumnTemplate,
+  setColumnWaits,
   setCriterion,
   setIssueAudience,
   setSpaceImage,
@@ -259,6 +260,9 @@ const Column = z
     stage: Status,
     name: z.string().nullable().openapi({ description: "Null: the stage's own name, in the reader's language." }),
     position: z.number(),
+    waitsForPerson: z
+      .boolean()
+      .openapi({ description: "A task sitting here waits for a person to act on it: Início lists it." }),
   })
   .openapi("IssueColumn");
 const Columns = z.object({
@@ -269,12 +273,16 @@ const ColumnTemplate = z
     id: z.uuid(),
     name: z.string(),
     columns: z
-      .array(z.object({ name: z.string(), stage: Status }))
+      .array(z.object({ name: z.string(), stage: Status, waitsForPerson: z.boolean().optional() }))
       .openapi({ description: "In the order the board shows them." }),
     seeded: z.boolean().openapi({ description: "One of the two the workspace started with, which it may not delete." }),
   })
   .openapi("IssueColumnTemplate");
-const TemplateColumn = z.object({ name: z.string().max(200), stage: Status });
+const TemplateColumn = z.object({
+  name: z.string().max(200),
+  stage: Status,
+  waitsForPerson: z.boolean().optional().openapi({ description: "Only `true` is kept." }),
+});
 const ColumnParams = OrgParams.extend({ columnId: z.uuid() });
 const BoardAlert = z
   .object({
@@ -557,7 +565,8 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issue-columns/{columnId}",
       tags,
       security,
-      summary: "Rename a column, move it inside its stage (`index`), or move it to another stage",
+      summary:
+        "Rename a column, move it inside its stage (`index`), move it to another stage, or flag it as one that waits for a person",
       request: {
         params: ColumnParams,
         body: body(
@@ -567,6 +576,13 @@ export function issueRoutes(deps: AppDeps) {
             stage: Status.optional().openapi({
               description: "Moves the column to this stage, at its end; its tasks take the new stage.",
             }),
+            waitsForPerson: z.boolean().optional().openapi({
+              description: "Flags the column as one whose tasks wait for a person, or clears it.",
+            }),
+            projectId: z.uuid().nullable().optional().openapi({
+              description:
+                "With `waitsForPerson`: the board the dialog is open on. A board that follows the workspace's columns takes its own copy first.",
+            }),
           }),
         ),
       },
@@ -574,7 +590,17 @@ export function issueRoutes(deps: AppDeps) {
     }),
     async (c) => {
       const { orgId, columnId } = c.req.valid("param");
-      const columns = await updateIssueColumn(issues, c.get("user").id, orgId, columnId, c.req.valid("json"));
+      const { waitsForPerson, projectId, ...edit } = c.req.valid("json");
+      const userId = c.get("user").id;
+      let columns: Awaited<ReturnType<typeof updateIssueColumn>> | undefined;
+      if (edit.name !== undefined || edit.index !== undefined || edit.stage !== undefined) {
+        columns = await updateIssueColumn(issues, userId, orgId, columnId, edit);
+      }
+      if (waitsForPerson !== undefined) {
+        columns = await setColumnWaits(issues, userId, orgId, columnId, waitsForPerson, projectId ?? null);
+      }
+      // An empty body changes nothing: it still answers with the columns, and is refused to those who may not edit.
+      columns ??= await updateIssueColumn(issues, userId, orgId, columnId, {});
       return c.json({ columns }, 200);
     },
   );
