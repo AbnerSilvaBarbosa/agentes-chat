@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { and, asc, countQueries, eq, schema } from "@agenteschat/db";
+import { systemText } from "@agenteschat/providers";
 import {
   applyColumnTemplate,
+  buildRunContext,
   createIssue,
   createIssueColumn,
   createIssueProject,
@@ -9,6 +11,7 @@ import {
   createWikiPage,
   deleteWikiPage,
   getIssue,
+  insertMessage,
   listColumnTemplates,
   listIssueActivity,
   listIssues,
@@ -428,5 +431,50 @@ describe("the brief a spec run reads", () => {
   test("a company's folder turns a slash in its name into a dash", () => {
     expect(specFolder("Acme/Brasil")).toBe("Specs/Acme-Brasil");
     expect(specFolder("  Acme  ")).toBe("Specs/Acme");
+  });
+});
+
+describe("a spec run reads the spec brief", () => {
+  test("the run answering the start message has the brief; another message in that conversation has the task block", async () => {
+    f = await setup();
+    const c = await specCompany();
+    const { issue, row } = await c.queue("Tela de login");
+    await pumpSpecs(c.deps, c.company.id);
+    const started = await c.state(row.id);
+    const [specRun] = await f.db
+      .select()
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.id, started?.specRunId as string));
+    if (!specRun) throw new Error("no spec run");
+    const brief = systemText((await buildRunContext(f.db, specRun, f.agent, { maxMessages: 10 })).system);
+    expect(brief).toContain(`# Your task: write the spec of card #${issue.number}`);
+    expect(brief).toContain('folder "Specs/Acme"');
+
+    // The same agent, in the same conversation, answering a person's other message: the generic task block.
+    const [card] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, issue.id));
+    const other = await insertMessage(f.db, {
+      orgId: f.org.id,
+      channelId: card?.conversationChannelId as string,
+      threadId: card?.conversationRootId as string,
+      author: { type: "person", userId: f.owner.id },
+      body: "Como está a spec?",
+    });
+    const [otherRun] = await f.db
+      .insert(schema.agentRuns)
+      .values({
+        orgId: f.org.id,
+        agentId: f.agent.id,
+        channelId: other.channelId,
+        threadRootId: card?.conversationRootId as string,
+        triggerMessageId: other.id,
+        trigger: "mention",
+        hop: 1,
+        status: "running",
+      })
+      .returning();
+    if (!otherRun) throw new Error("no run");
+    const plain = systemText((await buildRunContext(f.db, otherRun, f.agent, { maxMessages: 10 })).system);
+    expect(plain).not.toContain("write the spec of card");
+    expect(plain).toContain(`task #${issue.number}`);
   });
 });

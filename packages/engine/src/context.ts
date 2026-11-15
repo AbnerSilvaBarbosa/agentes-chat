@@ -47,6 +47,7 @@ import { openRequestsBlock, openRequestsOf } from "./open-requests";
 import { parkedOnBlock } from "./parked-asks";
 import { parsePoChatKey, poScopeOf } from "./po-chat";
 import { poChatBrief } from "./po-chat-context";
+import { specBriefOfRun } from "./po-specs";
 import { reachNote, reachOf } from "./reach";
 import {
   byAnotherAgent,
@@ -994,11 +995,15 @@ export async function buildRunContext(
   const taskHere = root ? taskConversationOf(root.meta) : null;
   const workIssueId = issueWork && issueWork.agentId === agent.id ? issueWork.issueId : null;
   const taskAsked = taskHere ? await assignedTo(db, run.orgId, taskHere.issueId, agent.id) : false;
-  const issueBrief = workIssueId
-    ? await issueWorkBrief(db, run.orgId, workIssueId, { inConversation: false, personal }).catch(() => null)
-    : taskHere
-      ? await issueWorkBrief(db, run.orgId, taskHere.issueId, { asked: taskAsked, personal }).catch(() => null)
-      : null;
+  // A PO's spec run (ADR 0185) reads its spec brief in place of the generic task block, only on its own start message.
+  const specText = taskHere ? await specBriefOfRun(db, run, trigger).catch(() => null) : null;
+  const issueBrief =
+    specText ??
+    (workIssueId
+      ? await issueWorkBrief(db, run.orgId, workIssueId, { inConversation: false, personal }).catch(() => null)
+      : taskHere
+        ? await issueWorkBrief(db, run.orgId, taskHere.issueId, { asked: taskAsked, personal }).catch(() => null)
+        : null);
 
   // A routine's background run: its routine block, time line and where it reports (ADR 0053 §4).
   const routine = background ? await routineContext(db, run, agent, trigger, zone, personal) : null;

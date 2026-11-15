@@ -5,6 +5,7 @@ import { insertMessage, messageView } from "./messages";
 import { enqueueRunJob } from "./mission-runs";
 import { poAgentOf } from "./po-chat";
 import { type ProposalRow, syncProposalCard } from "./po-proposals";
+import { specBrief } from "./po-spec-brief";
 import { bodyCode } from "./run-tools";
 import { admitTaskAgents } from "./task-access";
 import { ensureTaskConversation } from "./task-conversation";
@@ -167,4 +168,27 @@ async function endSpec(deps: SpecDeps, row: ProposalRow, state: "failed" | "stop
     .where(and(eq(poCardProposals.id, row.id), eq(poCardProposals.specState, "queued")))
     .returning();
   if (ended) await syncProposalCard(deps, ended).catch(() => undefined);
+}
+
+/**
+ * The spec brief of a run, when the message it answers is a spec start (`meta.cardSpec`) and the run is the one the
+ * proposal started: the same agent answering any other message of that conversation gets the generic task block.
+ */
+export async function specBriefOfRun(
+  db: Database,
+  run: { id: string; orgId: string },
+  trigger: { meta: Record<string, unknown> | null },
+): Promise<string | null> {
+  const spec = cardSpecOf(trigger.meta);
+  if (!spec) return null;
+  const [proposal] = await db
+    .select()
+    .from(poCardProposals)
+    .where(and(eq(poCardProposals.id, spec.proposalId), eq(poCardProposals.orgId, run.orgId)));
+  if (!proposal || proposal.specRunId !== run.id) return null;
+  const [issue] = await db
+    .select()
+    .from(schema.issues)
+    .where(and(eq(schema.issues.id, spec.issueId), eq(schema.issues.orgId, run.orgId)));
+  return issue ? specBrief(db, run.orgId, proposal, issue) : null;
 }
