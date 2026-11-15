@@ -645,9 +645,10 @@ export async function buildRunContext(
         .then((d) => ({ computers: d.computers.filter((c) => c.id !== agent.machineId), phones: d.phones }))
         .catch(() => null)
     : null;
-  // A routine's run keeps to its own task, as with "Your recent work" below.
+  // A routine's run keeps to its own task, as with "Your recent work" below. A PO chat has no such block: its company's
+  // cards are in the chat's own block, and another company's never reach the prompt (ADR 0185).
   const openTasks =
-    options.routine || run.background
+    options.routine || run.background || (channel.kind === "dm" && parsePoChatKey(channel.dmKey))
       ? null
       : openTasksBrief(db, run.orgId, agent.id, run.channelId, options.issueTools === true, personal).catch(() => null);
   // Its background work in this conversation (ADR 0121): a new run knows it, to pass messages on or stop it.

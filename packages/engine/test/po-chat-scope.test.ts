@@ -243,6 +243,27 @@ describe("the PO chat block in a run's context", () => {
     expect(inChannel).not.toContain("Your company in this chat");
   });
 
+  test("no card of another company reaches the whole prompt of a PO chat", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const { chat } = await workspace(f);
+    const beta = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Beta" });
+    const betaBoard = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Lancamentos", spaceId: beta.id });
+    const secret = await createIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, {
+      title: "Campanha secreta de Natal",
+      projectId: betaBoard.id,
+      assignee: { type: "agent", id: f.agent.id },
+    });
+    expect(secret.title).toBe("Campanha secreta de Natal");
+    const text = await contextOf(chat.channelId, "O que voce tem aberto?");
+    expect(text).not.toContain("Campanha secreta de Natal");
+    expect(text).not.toContain("# Your open tasks");
+    // Outside a PO chat the agent's open tasks are listed as before.
+    expect(await contextOf(f.general.id, `@${f.agent.handle} o que tem aberto?`)).toContain(
+      "Campanha secreta de Natal",
+    );
+  });
+
   test("another company's chat gives that company's block", async () => {
     f = await setup();
     const { chat } = await workspace(f);
