@@ -1,5 +1,5 @@
 import type { PubSub } from "@agenteschat/adapters";
-import { and, type Database, desc, eq, inArray, isNull, schema, sql } from "@agenteschat/db";
+import { and, type Database, desc, eq, inArray, isNull, type SQL, schema, sql } from "@agenteschat/db";
 import { ForbiddenError, isUniqueViolation, NotFoundError, ValidationError } from "./errors";
 import { publishOrgEvent } from "./events";
 import type { IssueStatus } from "./issues";
@@ -176,6 +176,34 @@ export function columnOf(columns: ColumnRow[], issue: { status: IssueStatus; col
   const own = issue.columnId ? columns.find((c) => c.id === issue.columnId && c.stage === issue.status) : undefined;
   return own ?? columns.find((c) => c.stage === issue.status) ?? null;
 }
+
+/**
+ * The column the `issues` row `alias` sits in, as a `left join lateral … col` (ADR 0184): the column `columnOf` gives
+ * over the board's columns (`boardColumnsOf`), in SQL, so a list reads one column per task in one statement. The
+ * task's own column when it is in the board's set and in the task's stage; else the first column of that stage in the
+ * board's own set, or in the workspace's when the board has none. Exposes `col.id`, `col.name`, `col.stage` and
+ * `col.waits_for_person`; no column at all (a workspace that never read its set) leaves them null.
+ */
+export function effectiveColumnSql(alias: string): SQL {
+  const t = sql.raw(alias);
+  return sql`left join lateral (
+    select c.id, c.name, c.stage, c.waits_for_person
+    from ${issueColumns} c
+    where c.org_id = ${t}.org_id and c.stage = ${t}.status
+      and c.project_id is not distinct from (
+        case when exists (select 1 from ${issueColumns} b where b.org_id = ${t}.org_id and b.project_id = ${t}.project_id)
+          then ${t}.project_id end)
+    order by (c.id = ${t}.column_id) desc, c.position asc, c.id asc
+    limit 1
+  ) col on true`;
+}
+
+/**
+ * Whether the task `alias` waits for a person (ADR 0184): open, and in a flagged column. Reads the `col` of
+ * `effectiveColumnSql` for the same alias, which the query must join.
+ */
+export const waitingSql = (alias: string): SQL =>
+  sql`(${sql.raw(alias)}.status in ('todo', 'in_progress', 'in_review') and coalesce(col.waits_for_person, false))`;
 
 /** On top of a column: lower ranks come first, and later moves get lower ranks. */
 export const topRank = () => -Date.now();
