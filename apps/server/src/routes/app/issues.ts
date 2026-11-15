@@ -16,6 +16,7 @@ import {
   deleteIssueColumn,
   deleteIssueProject,
   deleteIssueSpace,
+  factoryHome,
   getIssueDetail,
   type IssueDeps,
   issueFromMessage,
@@ -131,6 +132,46 @@ const CompanyDashboardBody = z
       .openapi({ description: "Absent for a member who may not view usage." }),
   })
   .openapi("CompanyDashboard");
+const FactoryHomeBody = z
+  .object({
+    companies: z
+      .array(
+        z.object({
+          id: z.uuid(),
+          name: z.string(),
+          color: z.string(),
+          image: z.string().nullable(),
+          stages: z.object({
+            todo: z.number().int(),
+            in_progress: z.number().int(),
+            in_review: z.number().int(),
+            done: z.number().int().openapi({ description: "Concluded in the last 7 days." }),
+          }),
+          late: z.number().int(),
+          waiting: z.number().int(),
+        }),
+      )
+      .openapi({ description: "At most 20, most waiting first, then by name." }),
+    companiesTotal: z.number().int(),
+    waiting: z.object({
+      total: z.number().int(),
+      items: z.array(
+        z.object({
+          id: z.uuid(),
+          number: z.number().int(),
+          title: z.string(),
+          stage: z.enum(["todo", "in_progress", "in_review"]),
+          spaceId: z.uuid(),
+          spaceName: z.string(),
+          projectId: z.uuid(),
+          projectName: z.string(),
+          columnName: z.string().nullable().openapi({ description: "Null: the stage's own name." }),
+          since: z.string().openapi({ description: "ISO time of its last change of status, column or board." }),
+        }),
+      ),
+    }),
+  })
+  .openapi("FactoryHome");
 const ProjectRef = z
   .object({
     id: z.uuid(),
@@ -342,6 +383,10 @@ export function issueRoutes(deps: AppDeps) {
             .literal("me")
             .optional()
             .openapi({ description: "Only the tasks assigned to you as a person (ADR 0181)." }),
+          waiting: z
+            .literal("person")
+            .optional()
+            .openapi({ description: "Only the tasks in a column that waits for a person (ADR 0184)." }),
         }),
       },
       responses: { 200: json(z.object({ issues: z.array(Issue) })), ...errors },
@@ -356,10 +401,27 @@ export function issueRoutes(deps: AppDeps) {
         projectId: query.projectId,
         spaceId: query.spaceId,
         assignee: query.assignee === "me" ? { type: "person", id: c.get("user").id } : undefined,
+        waitingForPerson: query.waiting === "person" ? true : undefined,
         // The member's own page leaves canceled tasks out, before the cap (ADR 0181).
         notStatus: query.assignee === "me" ? "canceled" : undefined,
       });
       return c.json({ issues: list }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/organizations/{orgId}/factory-home",
+      tags,
+      security,
+      summary: "The factory on Início: a panel per company and the tasks waiting for a person, for the tasks you see",
+      request: { params: OrgParams },
+      responses: { 200: json(FactoryHomeBody), ...errors },
+    }),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      return c.json(await factoryHome(db, c.get("user").id, orgId), 200);
     },
   );
 
