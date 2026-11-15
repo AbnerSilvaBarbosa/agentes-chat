@@ -3,6 +3,7 @@ import { eq, schema } from "@agenteschat/db";
 import { systemText } from "@agenteschat/providers";
 import {
   buildRunContext,
+  checkInWork,
   createIssue,
   createIssueColumn,
   createIssueProject,
@@ -14,11 +15,13 @@ import {
   getWikiPage,
   grantScopes,
   insertMessage,
+  moveToBackground,
   openDm,
   openPoChat,
   poChatBrief,
   postPersonMessage,
   updateIssue,
+  WORK_LIMITS,
 } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
 
@@ -513,5 +516,39 @@ describe("the wiki tools keep to the company's Specs folder in a PO chat", () =>
     const within = await call("move_wiki_page", { pages: [guide.slug], folder: "Specs/Acme" });
     expect(within.isError).toBeFalsy();
     expect((await getWikiPage(f.db, owner(), f.org.id, guide.slug)).folder).toBe("Specs/Acme");
+  });
+});
+
+describe("background work in a PO chat", () => {
+  test("makes no card nobody confirmed, on a card:true move or at the 15-minute check-in", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const { chat } = await workspace(f);
+    const inPo = await runIn(f, chat.channelId);
+    const out = await moveToBackground(deps, inPo.runId, {
+      how: "agent",
+      title: "Pesquisa de mercado",
+      say: "Vou cuidar disso.",
+      card: true,
+    });
+    expect(out?.work.status).toBe("live");
+    expect(await f.db.select().from(schema.issues)).toHaveLength(0);
+
+    const later = new Date(Date.now() + WORK_LIMITS.cardAfterMs + 60_000);
+    await checkInWork(deps, f.org.id, { workId: out?.work.id ?? "", seq: 0, phase: "card" }, later);
+    expect(await f.db.select().from(schema.issues)).toHaveLength(0);
+    const [work] = await f.db.select().from(schema.agentWorks);
+    expect(work?.issueId).toBeNull();
+
+    // Anywhere else the card is made as before.
+    const inGeneral = await runIn(f, f.general.id);
+    const plain = await moveToBackground(deps, inGeneral.runId, {
+      how: "agent",
+      title: "Outra pesquisa",
+      say: "Vou cuidar disso.",
+      card: true,
+    });
+    expect(plain?.work.status).toBe("live");
+    expect(await f.db.select().from(schema.issues)).toHaveLength(1);
   });
 });

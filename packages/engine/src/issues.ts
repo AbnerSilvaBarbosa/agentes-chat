@@ -46,6 +46,7 @@ import { enqueueRunJob } from "./mission-runs";
 import { notifyIssueChanged } from "./notification-producers";
 import { can, getMembership, requireActiveMembership } from "./organizations";
 import { membersWhoMaySql } from "./permissions";
+import { poScopeOf } from "./po-chat";
 import { fireRoutineEvent, MAX_MOVE_HOPS } from "./routines";
 import { agentSearchChannels, enqueueIndex, registerDocumentBuilder } from "./search";
 import { AUDIENCE_MAX, type Audience, admitTaskAgents, taskSeenSql } from "./task-access";
@@ -2065,6 +2066,8 @@ export async function linkIssueToWork(
       found && !found.restricted && (found.channelId === null || found.channelId === work.channelId) ? found.id : null;
   }
   issueId ??= run.issueId;
+  // A PO chat makes no card nobody confirmed (ADR 0185): the work goes without one, the PO may propose it.
+  if (!issueId && (await poScopeOf(deps.db, run.orgId, run.channelId))) return null;
   if (!issueId) {
     const created = await createIssue(deps, actor, run.orgId, {
       title: work.title,
