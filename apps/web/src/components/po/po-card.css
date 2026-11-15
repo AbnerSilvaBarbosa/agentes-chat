@@ -1,0 +1,31 @@
+/* The PO's card proposal (ADR 0185) inside the request pill's lines: the criteria as a plain list, and the edit form
+   in the pill's width, every control the kit's own height and its fields `--form-gap` apart. */
+.po-card__criteria {
+  margin: 0;
+  padding-inline-start: var(--space-4);
+  overflow-wrap: anywhere;
+}
+.po-card__dup {
+  margin: 0;
+  color: var(--ink);
+}
+.po-card__form {
+  margin-block: var(--space-2);
+}
+.po-card__edits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.po-card__edits > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.po-card__edits > li > .ac-input {
+  flex: 1;
+  min-width: 0;
+}
