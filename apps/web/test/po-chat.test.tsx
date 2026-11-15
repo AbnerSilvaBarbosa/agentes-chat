@@ -187,3 +187,50 @@ describe("a decided proposal rewrites its card in the chat", () => {
     expect(read()).toMatchObject({ status: "confirmed", issue: { id: "i1", number: 7 } });
   });
 });
+
+describe("Conversar com o PO on a company's page", () => {
+  const TALK = "Conversar com o PO";
+  const talk = () => screen().queryAllByRole("button", { name: TALK });
+
+  async function visit(search: string, patch: Partial<FakeState> = {}) {
+    const state = seedState({ poAgentId: ADA_ID, ...patch });
+    const api = createFakeApi(state);
+    const acme = await api.issues.createSpace(ORG_ID, { name: "Acme", color: "teal" });
+    const board = await api.issues.createProject(ORG_ID, { name: "Site", color: "amber", spaceId: acme.id });
+    await api.issues.create(ORG_ID, { title: "Revisar a home", projectId: board.id });
+    state.poCompanies ??= [company(acme.id, "Acme")];
+    const query = search.replace("{space}", acme.id).replace("{board}", board.id);
+    const app = await renderApp(`/org/${ORG_ID}/issues${query}`, { api });
+    await settle(8);
+    return { app, acme, state };
+  }
+
+  test("a company's page offers it and selecting it opens that company's PO chat", async () => {
+    const { app, acme } = await visit("?space={space}");
+    expect(talk()).toHaveLength(1);
+    await act(async () => fireEvent.click(talk()[0] as HTMLElement));
+    await settle(8);
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/po/${acme.id}`);
+  });
+
+  test("a workspace without a PO shows no such button", async () => {
+    await visit("?space={space}", { poAgentId: null });
+    expect(talk()).toHaveLength(0);
+  });
+
+  test("a board's page, the companies' root and Todas as tarefas show none", async () => {
+    await visit("?project={board}");
+    expect(talk()).toHaveLength(0);
+    cleanup();
+    await visit("");
+    expect(talk()).toHaveLength(0);
+    cleanup();
+    await visit("?all=1");
+    expect(talk()).toHaveLength(0);
+  });
+
+  test("an archived company offers none: no chat opens for it", async () => {
+    await visit("?space={space}", { poCompanies: [] });
+    expect(talk()).toHaveLength(0);
+  });
+});

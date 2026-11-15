@@ -7561,6 +7561,7 @@ export const ptBR = {
       label: "Empresa",
       none: "Sem empresa",
       new: "Nova empresa",
+      talkToPo: "Conversar com o PO",
       create: "Criar empresa",
       edit: "Editar empresa",
       newHint: "A empresa agrupa os boards de um cliente ou produto. As tarefas ficam nos boards dela.",

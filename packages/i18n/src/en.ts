@@ -7562,6 +7562,7 @@ export const en = {
       label: "Company",
       none: "No company",
       new: "New company",
+      talkToPo: "Talk to the PO",
       create: "Create company",
       edit: "Edit company",
       newHint: "A company groups the boards of one client or product. Its tasks live in its boards.",

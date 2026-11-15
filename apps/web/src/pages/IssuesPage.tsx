@@ -15,6 +15,7 @@ import {
   useIssueSpaceAction,
   useIssues,
   useIssuesView,
+  usePoOverview,
   useSetIssuesView,
   useTaskUnread,
 } from "@agenteschat/client";
@@ -60,6 +61,7 @@ import { ErrorState, LoadingCards, LoadingList } from "@/components/Loading";
 import { useOrg } from "@/components/org-context";
 import { CardSky } from "@/components/Sky";
 import { TaskMentions, useTaskLive } from "@/components/TaskConversation";
+import { useDirectory } from "@/hooks/useDirectory";
 import { useRightHandLook } from "@/hooks/useRightHandLook";
 import { copyText } from "@/lib/context-menu";
 import { entityMenu } from "@/lib/entity-menu";
@@ -243,6 +245,23 @@ function useTabParam(): ["boards" | "painel", (value: "boards" | "painel") => vo
   return [value === "painel" ? "painel" : "boards", set];
 }
 
+/** "Conversar com o PO": opens the PO's chat about this company (ADR 0185), the PO's face before the words. */
+function TalkToPo({ agentId, spaceId }: { agentId: string; spaceId: string }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const navigate = useNavigate();
+  const name = useDirectory(org.id).agentById.get(agentId)?.name ?? "";
+  return (
+    <Button
+      variant="ghost"
+      onClick={() => void navigate({ to: "/org/$orgId/po/$spaceId", params: { orgId: org.id, spaceId } })}
+    >
+      <AgentAvatar agentId={agentId} name={name} size="xs" />
+      {t("issues.spaces.talkToPo")}
+    </Button>
+  );
+}
+
 /**
  * Tarefas (issues in the code): agents working now, then the tasks as a board or a list, grouped by stage (the org's
  * custom columns in fixed stages), by assignee or by priority, with a details dialog. How the person looks at them
@@ -304,6 +323,9 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const chrome = chromeFor(level);
   const onRootPage = level === "root";
   const onCompanyPage = level === "company";
+  // "Conversar com o PO" on a live company's page, only where the workspace has a PO (ADR 0185).
+  const po = usePoOverview(org.id).data;
+  const poAgentId = onCompanyPage && spaceParam && po?.companies.some((c) => c.id === spaceParam) ? po.agentId : null;
   // A company's page is two tabs: its boards, and its Painel (ADR 0182).
   const onPainel = onCompanyPage && tabParam === "painel";
   // A board opened from a company's grid: its dialogs live with the page's, as the board of the URL's do.
@@ -444,10 +466,15 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                       </Button>
                     )
                   : chrome.action === "board"
-                    ? addsBoard && (
-                        <Button variant="primary" icon="plus" onClick={() => setProjectDialog("new")}>
-                          {t("issues.projects.new")}
-                        </Button>
+                    ? (poAgentId || addsBoard) && (
+                        <>
+                          {poAgentId && spaceParam && <TalkToPo agentId={poAgentId} spaceId={spaceParam} />}
+                          {addsBoard && (
+                            <Button variant="primary" icon="plus" onClick={() => setProjectDialog("new")}>
+                              {t("issues.projects.new")}
+                            </Button>
+                          )}
+                        </>
                       )
                     : !noIssues &&
                       adds && (
