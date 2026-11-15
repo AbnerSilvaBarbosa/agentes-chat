@@ -11,6 +11,7 @@ import {
   createIssueSpace,
   createIssueToolSource,
   createWikiPage,
+  createWikiToolSource,
   deleteWikiPage,
   getIssue,
   grantScopes,
@@ -1058,5 +1059,89 @@ describe("confirming a card starts its spec", () => {
         .from(schema.agentRuns)
         .where(eq(schema.agentRuns.issueId, confirmed.issue?.id as string)),
     ).toHaveLength(0);
+  });
+});
+
+describe("a spec run keeps to its company like a PO chat", () => {
+  const owner = () => ({ type: "person" as const, userId: f.owner.id });
+  const wikiDeps = () => ({ db: f.db, pubsub: f.pubsub, search: f.context });
+
+  test("it creates no card and reads and writes nothing of another company", async () => {
+    f = await setup();
+    const acme = await specCompany("Acme", "pipeline");
+    await grantScopes(
+      f.db,
+      f.org.id,
+      f.agent.id,
+      ["issues:read", "issues:write", "wiki:read", "wiki:write", "context:read"].map((scope) => ({
+        connectionId: null,
+        scope,
+      })),
+    );
+    const beta = await specCompany("Beta", "pipeline");
+    const betaCard = await beta.queue("Campanha de Natal");
+    const loose = await createIssue(acme.deps, owner(), f.org.id, { title: "Sem quadro nenhum" });
+    const mine = await acme.queue("Tela de login");
+    await pumpSpecs(acme.deps, acme.company.id);
+    const [run] = await f.db
+      .select()
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.id, (await acme.state(mine.row.id))?.specRunId as string));
+    if (!run) throw new Error("no run");
+    const ctx = {
+      db: f.db,
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      runId: run.id,
+      channelId: run.channelId,
+      threadRootId: run.threadRootId,
+      triggerMessageId: run.triggerMessageId,
+    };
+    const tools = await createIssueToolSource(f.artifactDeps).tools(ctx);
+    const call = (name: string, input: Record<string, unknown>) => {
+      const tool = tools.find((t) => t.name === name);
+      if (!tool) throw new Error(`no ${name}`);
+      return tool.execute(input, ctx);
+    };
+    // No card is created (not even listed), and no proposal either.
+    expect(tools.map((t) => t.name)).not.toContain("create_issue");
+    expect(tools.map((t) => t.name)).not.toContain("propose_card");
+    expect(tools.map((t) => t.name)).toContain("attach_spec");
+    const before = (await f.db.select().from(schema.issues)).length;
+    // A model that remembers the tool is refused by the code.
+    const remembered = (await createIssueToolSource(f.artifactDeps).tools({ ...ctx, channelId: f.general.id })).find(
+      (t) => t.name === "create_issue",
+    );
+    const made = await remembered?.execute({ title: "Card de ninguem" }, ctx);
+    expect(made?.isError).toBe(true);
+    expect((await f.db.select().from(schema.issues)).length).toBe(before);
+
+    // Cards of another company, or with no board, are not read or changed.
+    const listed = await call("list_issues", {});
+    expect(listed.content).toContain("Tela de login");
+    expect(listed.content).not.toContain("Campanha de Natal");
+    expect(listed.content).not.toContain("Sem quadro nenhum");
+    for (const other of [betaCard.issue, loose]) {
+      const refused = await call("update_issue", { issue: `#${other.number}`, title: "Mudado" });
+      expect(refused.isError).toBe(true);
+    }
+    const moved = await call("update_issue", { issue: `#${mine.issue.number}`, project: "none" });
+    expect(moved.isError).toBe(true);
+
+    // The wiki: another company's specs are refused, and the company's folder is where a page goes.
+    const wiki = createWikiToolSource({ pubsub: f.pubsub, search: f.context });
+    const wikiTools = await wiki.tools(ctx);
+    const otherPage = await createWikiPage(wikiDeps(), owner(), f.org.id, {
+      title: "Spec da Beta",
+      body: "# Beta",
+      folder: "Specs/Beta",
+    });
+    const read = await wikiTools.find((t) => t.name === "read_wiki_page")?.execute({ page: otherPage.slug }, ctx);
+    expect(read?.isError).toBe(true);
+    const write = await wikiTools
+      .find((t) => t.name === "create_wiki_page")
+      ?.execute({ title: "Intruso", body: "x", folder: "Specs/Beta" }, ctx);
+    expect(write?.isError).toBe(true);
+    expect(await f.db.select().from(schema.wikiPages).where(eq(schema.wikiPages.title, "Intruso"))).toHaveLength(0);
   });
 });

@@ -69,7 +69,7 @@ const wikiEdit = (
  * not, and what the chat writes goes to its own company's folder. Null in any other conversation.
  */
 async function specsScope(ctx: ToolContext) {
-  const po = await poScopeOf(ctx.db, ctx.orgId, ctx.channelId);
+  const po = await poScopeOf(ctx.db, ctx.orgId, ctx.channelId, ctx.runId);
   return po ? { name: po.name, own: specFolder(po.name) } : null;
 }
 

@@ -46,6 +46,7 @@ export const UPDATE_ISSUE_TOOL = "update_issue";
 /** What a PO chat says of the one company it keeps to (ADR 0185). */
 const inCompanyOnly = (company: string) =>
   `This PO chat is about ${company}: it reads and changes only that company's cards.`;
+const SPEC_CREATE_REFUSAL = "A spec run creates no card: write the spec in the wiki and save it with attach_spec.";
 const PO_CREATE_REFUSAL = "In a PO chat nothing is created without a yes: use propose_card.";
 
 const GITHUB_URL_FIELD = {
@@ -205,7 +206,7 @@ const projectOf = (input: Record<string, unknown>) => str(input.project).trim();
  * guess never filters a list to nothing (ADR 0176).
  */
 async function spaceByName(deps: IssueDeps, ctx: ToolContext, name: string) {
-  const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+  const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId);
   const [found] = await deps.db
     .select({ id: schema.issueSpaces.id, name: schema.issueSpaces.name })
     .from(schema.issueSpaces)
@@ -322,7 +323,7 @@ async function boardOverview(deps: IssueDeps, ctx: ToolContext, only?: string) {
 async function chosenProject(deps: IssueDeps, ctx: ToolContext, input: Record<string, unknown>) {
   const name = projectOf(input);
   if (!name) return undefined;
-  const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+  const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId);
   if (name.toLowerCase() === "none") {
     if (po) throw new Error(`${inCompanyOnly(po.name)} A card stays on one of its boards.`);
     return null;
@@ -406,7 +407,7 @@ const issueKey = (ref: string) => {
 async function find(deps: IssueDeps, ctx: ToolContext, ref: string) {
   const found = await getIssue(deps.db, actorOf(ctx), ctx.orgId, issueKey(ref));
   // A PO chat keeps to its company (ADR 0185): a card of another company, or with no board, is not here.
-  const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+  const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId);
   if (po && found.project?.spaceId !== po.spaceId)
     throw new Error(`Card #${found.number} is not in this company. ${inCompanyOnly(po.name)}`);
   return found;
@@ -712,7 +713,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       },
       async execute(input, ctx) {
         try {
-          const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+          const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId);
           if (str(input.issue))
             return { content: await describeIssue(deps, ctx, await find(deps, ctx, str(input.issue)), po !== null) };
           if (po && projectOf(input).toLowerCase() === "none")
@@ -758,7 +759,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       async execute(_input, ctx) {
         try {
-          const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+          const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId);
           return { content: await boardOverview(deps, ctx, po?.spaceId) };
         } catch (error) {
           return failed(error);
@@ -907,6 +908,9 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
         try {
           // Code, not the prompt: a computer brain lists tools once and a model may call a name it remembers.
           if (await poScopeOf(deps.db, ctx.orgId, ctx.channelId)) return { content: PO_CREATE_REFUSAL, isError: true };
+          // The PO's spec run writes a spec, not cards (ADR 0185): a card comes from a proposal a person confirmed.
+          if (await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId))
+            return { content: SPEC_CREATE_REFUSAL, isError: true };
           const assignee = str(input.assignee) ? await assigneeOf(deps, ctx, str(input.assignee)) : undefined;
           const reader = await rightHandReader(ctx);
           if (reader) {
@@ -1154,6 +1158,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
     // A PO chat offers `propose_card` and never `create_issue` (ADR 0185): nothing there is created without a yes.
     tools: async (ctx) => {
       const po = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+      const company = po ?? (await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId));
       // `attach_spec` is offered to the run a proposal started to write a card's spec, and to no other.
       const [specRun] = await deps.db
         .select({ id: schema.poCardProposals.id })
@@ -1161,7 +1166,13 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
         .where(and(eq(schema.poCardProposals.specRunId, ctx.runId), eq(schema.poCardProposals.orgId, ctx.orgId)))
         .limit(1);
       return tools.filter((t) =>
-        t.name === "attach_spec" ? Boolean(specRun) : po ? t.name !== "create_issue" : t.name !== "propose_card",
+        t.name === "attach_spec"
+          ? Boolean(specRun)
+          : t.name === "create_issue"
+            ? !company
+            : t.name === "propose_card"
+              ? Boolean(po)
+              : true,
       );
     },
   };

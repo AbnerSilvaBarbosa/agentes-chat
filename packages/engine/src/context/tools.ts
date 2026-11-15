@@ -199,7 +199,7 @@ export function createContextToolSource(deps: ContextDeps): ToolSource {
           visible(ctx),
           personRequester(ctx),
           rightHandReader(ctx),
-          poScopeOf(ctx.db, ctx.orgId, ctx.channelId),
+          poScopeOf(ctx.db, ctx.orgId, ctx.channelId, ctx.runId),
         ]);
         const dm = await agentsDmReads(ctx.db, ctx.orgId, ctx.channelId, () => readerOfCall(ctx));
         // Only where no person reads the answer: a channel never gets what someone said in their DM.

@@ -11,7 +11,7 @@ import { type IssueSpaceRef, listIssueProjects, spaceRef } from "./issue-project
 import { can, requirePermission } from "./organizations";
 import { closedRefusal } from "./standing";
 
-const { agents, channelMembers, channels, issueSpaces, organizationSettings } = schema;
+const { agents, channelMembers, channels, issueSpaces, organizationSettings, poCardProposals } = schema;
 
 /**
  * A PO chat is the DM between a person and the workspace's PO about one company (ADR 0185): a DM whose key carries a
@@ -162,11 +162,15 @@ export async function openPoChat(
 /**
  * The company a conversation is a PO chat of (ADR 0185), read from the channel's key through the per-process channel
  * cache: the one thing the PO's tools and context ask. Null in any other conversation, so no other chat changes.
+ * With `runId`, the PO's own spec run (the run a confirmed proposal started, in the card's conversation) has the same
+ * company scope, so writing a spec reads and writes nothing of another company; the lookup is made only in a card's
+ * conversation.
  */
 export async function poScopeOf(
   db: Database,
   orgId: string,
   channelId: string,
+  runId?: string,
 ): Promise<{ spaceId: string; name: string } | null> {
   // The channel cache `getChannelCached` fills (same key and loader): `context.ts` can't be imported from here without
   // a cycle through the wiki's search registration.
@@ -178,10 +182,18 @@ export async function poScopeOf(
     return row ?? null;
   })) as typeof channels.$inferSelect | null;
   const key = channel?.kind === "dm" ? parsePoChatKey(channel.dmKey) : null;
-  if (!key) return null;
+  let spaceId = key?.spaceId ?? null;
+  if (!spaceId && runId && channel?.kind === "task") {
+    const [spec] = await db
+      .select({ spaceId: poCardProposals.spaceId })
+      .from(poCardProposals)
+      .where(and(eq(poCardProposals.specRunId, runId), eq(poCardProposals.orgId, orgId)));
+    spaceId = spec?.spaceId ?? null;
+  }
+  if (!spaceId) return null;
   const [space] = await db
     .select({ id: issueSpaces.id, name: issueSpaces.name })
     .from(issueSpaces)
-    .where(and(eq(issueSpaces.id, key.spaceId), eq(issueSpaces.orgId, orgId)));
+    .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
   return space ? { spaceId: space.id, name: space.name } : null;
 }
