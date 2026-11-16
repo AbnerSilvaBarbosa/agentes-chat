@@ -125,7 +125,7 @@ through Início and its button, while the PO agent's own row opened a plain DM w
   and workspace, in the browser: a convenience, never state that has to survive.
 - The PO agent's row opens the same route, and the address of a plain DM with the PO agent replaces itself with it:
   the PO has no company-less conversation. Messages already in such a DM stay stored and searchable; every other
-  agent keeps its DM. A PO that is archived or no longer the workspace's PO is an ordinary agent again.
+  agent keeps its DM. The redirect keeps no `?m=`: the message belongs to the old conversation. A PO that is archived or no longer the workspace's PO is an ordinary agent again.
 - `listDms` still leaves out the company chats (section 1): the agent's row is the one entry, not one row per company.
 
 The phone and desktop shells are left for a later decision.

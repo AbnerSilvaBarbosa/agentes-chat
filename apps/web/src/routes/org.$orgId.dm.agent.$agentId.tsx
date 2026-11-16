@@ -1,6 +1,7 @@
 import { usePoOverview } from "@agenteschat/client";
 import { isPaidReturn } from "@agenteschat/client/lib/billing";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { ErrorState } from "@/components/Loading";
 import { threadSearch } from "@/lib/open-param";
 import { ChannelSkeleton } from "@/pages/ChannelPage";
 import { DmPage } from "@/pages/DmPage";
@@ -21,8 +22,16 @@ export const Route = createFileRoute("/org/$orgId/dm/agent/$agentId")({
     const po = usePoOverview(orgId);
     // The workspace's PO has no plain DM: its address opens the PO view (ADR 0185). The overview is read before any
     // agent's DM draws, so a PO's chat never shows for a moment.
-    if (!po.data && !po.isError) return <ChannelSkeleton dm="agent" />;
-    if (po.data?.agentId === agentId) return <Navigate to="/org/$orgId/po" params={{ orgId }} replace />;
+    if (po.isError)
+      return (
+        <main className="shell__main">
+          <div className="page page--mid">
+            <ErrorState error={po.error} onRetry={() => void po.refetch()} />
+          </div>
+        </main>
+      );
+    if (!po.data) return <ChannelSkeleton dm="agent" />;
+    if (po.data.agentId === agentId) return <Navigate to="/org/$orgId/po" params={{ orgId }} replace />;
     return <DmPage key={agentId} target={{ agentId }} focusMessageId={focus} />;
   },
 });
