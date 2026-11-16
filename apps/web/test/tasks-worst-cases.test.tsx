@@ -297,7 +297,7 @@ describe("Tarefas at their worst", () => {
     const { services } = await renderApp(`/org/${ORG_ID}/issues/131`, { api });
     await settle(8);
     const strip = screen().getByRole("group", { name: "Detalhes da tarefa" });
-    expect(within(strip).getByRole("combobox", { name: "Responsável" }).textContent).toContain(LONG_ASSIGNEE);
+    expect(within(strip).getByRole("button", { name: /^Responsável/ }).textContent).toContain(LONG_ASSIGNEE);
     expect(within(strip).getByRole("combobox", { name: "Coluna" }).textContent).toBe(
       "Aguardando aprovação do jurídico",
     );

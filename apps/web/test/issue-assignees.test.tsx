@@ -8,8 +8,8 @@ import { assignmentWith } from "@agenteschat/client/lib/issue-assignees";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { type AssigneesChange, AssigneesField } from "@/components/issues/AssigneesField";
-import { ADA_ID, createFakeApi, seedState } from "./fake-api";
-import { renderPage, screen, settle } from "./render";
+import { ADA_ID, ATLAS_ID, createFakeApi, ORG_ID, seedState } from "./fake-api";
+import { renderApp, renderPage, screen, settle, showIn } from "./render";
 
 afterEach(() => cleanup());
 
@@ -144,5 +144,67 @@ describe("the responsible picker", () => {
     expect(within(menu).getByText("No máximo 5 pessoas também com")).toBeTruthy();
     // Someone already on it can still be taken off.
     expect(within(menu).getByRole("menuitemcheckbox", { name: /^Bea/ }).getAttribute("aria-disabled")).toBeNull();
+  });
+});
+
+/** The card's page: its details' strip and the history under its tabs (the picker is the strip's Responsável). */
+async function visit(setup: (api: ReturnType<typeof createFakeApi>) => Promise<number>) {
+  const api = createFakeApi(seedState(), { seed: false });
+  const number = await setup(api);
+  const app = await renderApp(`/org/${ORG_ID}/issues/${number}`, { api });
+  await settle(8);
+  return { api, ...app };
+}
+const strip = () => screen().getByRole("group", { name: "Detalhes da tarefa" });
+
+describe("the card's page", () => {
+  test("the properties line shows the people also with", async () => {
+    await visit(async (api) => {
+      const card = await api.issues.create(ORG_ID, { title: "Testar o checkout", assignees: [walter, joao] });
+      return card.number;
+    });
+    const field = within(strip()).getByRole("button", { name: /^Responsável/ });
+    expect(field.getAttribute("aria-label")).toBe("Responsável: Walter. Também com: João.");
+    expect(field.textContent).toContain("+1");
+    // A person on it still lets the card be asked of an agent, and asking keeps both people beside the agent.
+    const ask = screen().getByRole("region", { name: "Pedir a um agente" });
+    await click(within(ask).getByRole("button", { name: /^Pedir à Ada/ }));
+    await settle(4);
+    expect(
+      within(strip())
+        .getByRole("button", { name: /^Responsável/ })
+        .getAttribute("aria-label"),
+    ).toBe("Responsável: Ada. Também com: Walter, João.");
+    expect(screen().queryByRole("region", { name: "Pedir a um agente" })).toBeNull();
+  });
+
+  test("the history reads each new event in both languages", async () => {
+    const { services } = await visit(async (api) => {
+      const card = await api.issues.create(ORG_ID, { title: "Testar o checkout", assignees: [walter] });
+      await api.issues.update(ORG_ID, card.id, { addAssignees: [joao] });
+      await api.issues.update(ORG_ID, card.id, { principal: joao });
+      await api.issues.update(ORG_ID, card.id, { assignee: ada });
+      await api.issues.update(ORG_ID, card.id, { assignee: { type: "agent", id: ATLAS_ID } });
+      await api.issues.update(ORG_ID, card.id, { removeAssignees: [walter] });
+      return card.number;
+    });
+    await act(async () => fireEvent.mouseDown(screen().getByRole("tab", { name: "Histórico" }), { button: 0 }));
+    await settle(4);
+    const history = () => document.body.textContent ?? "";
+    for (const words of [
+      "pôs João também no card",
+      "tornou João o principal",
+      "passou o card de Ada para Atlas e as pessoas ficam",
+      "tirou Walter do card",
+    ])
+      expect(history()).toContain(words);
+    await showIn(services, "en");
+    for (const words of [
+      "added João to the task",
+      "made João the principal",
+      "handed the task from Ada to Atlas and the people stay",
+      "took Walter off the task",
+    ])
+      expect(history()).toContain(words);
   });
 });

@@ -49,12 +49,13 @@ import { Trans, useTranslation } from "react-i18next";
 import { useApi } from "@/api/context";
 import { renderIdRef } from "@/chat/IdRef";
 import { ActorAvatar, AgentAvatar } from "@/components/AgentAvatar";
-import { actorFromKey, actorKey, useActors } from "@/components/actors";
+import { useActors } from "@/components/actors";
 import { ArtifactCard } from "@/components/artifacts/ArtifactCard";
 import { IssueWorkBlock } from "@/components/BackgroundWork";
 import { EditInPlace, useFocusAtEnd, useSavedFlash, useSent } from "@/components/EditInPlace";
 import { GitHubMark } from "@/components/GitHubMark";
 import { IssueFiles, useIssueFileEntries } from "@/components/IssueFiles";
+import { type AssigneesChange, AssigneesField } from "@/components/issues/AssigneesField";
 import { useOrg } from "@/components/org-context";
 import { SidePanel } from "@/components/SidePanel";
 import { TaskConversationButton, TaskConversationPanel, TaskConversationSummary } from "@/components/TaskConversation";
@@ -819,7 +820,6 @@ function History({ activity, loaded }: { activity: IssueActivity[]; loaded: bool
 function useIssueFields(i: Issue) {
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
-  const actors = useActors();
   const action = useIssueAction(org.id);
   const columns = useIssueColumns(org.id).data ?? [];
   const title = useColumnTitle();
@@ -843,11 +843,8 @@ function useIssueFields(i: Issue) {
       // Until the board's columns load, the task's stage: the select never shows an empty box.
       placeholder: stageName(i.status),
     },
-    who: {
-      value: actorKey(i.assignee),
-      options: actors.options(true, actorKey(i.assignee)),
-      onChange: (v: string) => update({ assignee: actorFromKey(v) }),
-    },
+    // The picker asks for the whole list in order or for a principal; what the server computed comes back.
+    who: { onChange: (change: AssigneesChange) => update(change) },
     priority: {
       value: i.priority,
       options: PRIORITIES.map((p) => ({
@@ -928,16 +925,7 @@ function PropsLine({ issue: i }: { issue: Issue }) {
           placeholder={f.column.placeholder}
         />,
       )}
-      {prop(
-        t("issues.form.assignee"),
-        <Select
-          size="sm"
-          aria-label={t("issues.form.assignee")}
-          value={f.who.value}
-          onValueChange={f.who.onChange}
-          options={f.who.options}
-        />,
-      )}
+      {prop(t("issues.form.assignee"), <AssigneesField value={i} onChange={f.who.onChange} />)}
       {prop(
         t("issues.form.priority"),
         <Select
