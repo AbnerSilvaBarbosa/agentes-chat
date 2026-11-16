@@ -30,6 +30,7 @@ import {
   publishUserEvent,
 } from "./events";
 import { cutText } from "./format";
+import { coAssigneesOf } from "./issue-assignees";
 import {
   allColumns,
   boardColumnsOf,
@@ -104,6 +105,8 @@ export interface IssueView {
   /** Its one project (ADR 0171), or none. */
   project: IssueProjectRef | null;
   assignee: WorkActor | null;
+  /** The people also with the card beside its principal, in order, always people (ADR 0186). */
+  alsoWith: WorkActor[];
   labels: string[];
   dueDate: string | null;
   /** `doneBy`: who checked it (an agent shows its face next to it). */
@@ -581,7 +584,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     : [];
   const byId = new Map(files.map((f) => [f.id, f]));
   const orgId = rows[0]?.orgId;
-  const [columns, tied, projects, specPages] = await Promise.all([
+  const [columns, tied, projects, specPages, alsoWith] = await Promise.all([
     orgId ? allColumns(db, orgId) : [],
     tiedPeople(db, rows),
     projectsById(
@@ -589,6 +592,10 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
       rows.map((r) => r.projectId),
     ),
     specPagesOf(db, rows),
+    coAssigneesOf(
+      db,
+      rows.map((r) => r.id),
+    ),
   ]);
   return rows.map((r) => ({
     id: r.id,
@@ -601,6 +608,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     priority: r.priority,
     project: (r.projectId && projects.get(r.projectId)) || null,
     assignee: r.assigneeType && r.assigneeId ? { type: r.assigneeType as WorkActor["type"], id: r.assigneeId } : null,
+    alsoWith: (alsoWith.get(r.id) ?? []).map((id) => ({ type: "person" as const, id })),
     labels: r.labels,
     dueDate: r.dueDate,
     criteria: r.criteria,

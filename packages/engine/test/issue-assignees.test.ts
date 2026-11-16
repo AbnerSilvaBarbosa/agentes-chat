@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { asc, eq, schema, sql } from "@agenteschat/db";
-import { createIssue, ValidationError } from "../src";
+import { createIssue, getIssue, getIssueDetail, listIssues, ValidationError } from "../src";
 import { applyAssignees, checkAssignees, coAssigneesOf, onCardSql } from "../src/issue-assignees";
 import { addMember, addUser, type Fixture, setup } from "./fixtures";
 
@@ -242,5 +242,43 @@ describe("writing who is responsible", () => {
     const state = await stateOf(card.id);
     expect(state.principal).toEqual(["person", f.owner.id]);
     expect([...state.also].sort()).toEqual([bia.id, caio.id].sort());
+  });
+});
+
+describe("reading a card with its people", () => {
+  test("a card is read with its principal and its people also with in order", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "com gente",
+      assignee: { type: "person", id: f.owner.id },
+    });
+    const alone = await createIssue(deps, person(f.owner.id), f.org.id, { title: "sozinho" });
+    expect(card.alsoWith).toEqual([]);
+    // Inserted out of order: the read follows the position.
+    await f.db.insert(schema.issueCoAssignees).values([
+      { issueId: card.id, orgId: f.org.id, userId: caio.id, position: 1, addedByType: "person", addedById: f.owner.id },
+      { issueId: card.id, orgId: f.org.id, userId: bia.id, position: 0, addedByType: "person", addedById: f.owner.id },
+    ]);
+    const expected = [actor("person", bia.id), actor("person", caio.id)];
+    const one = await getIssue(f.db, person(f.owner.id), f.org.id, { id: card.id });
+    expect(one.assignee).toEqual({ type: "person", id: f.owner.id });
+    expect(one.alsoWith).toEqual(expected);
+    expect((await getIssueDetail(f.db, person(f.owner.id), f.org.id, { id: card.id })).alsoWith).toEqual(expected);
+    const list = await listIssues(f.db, person(f.owner.id), f.org.id, {});
+    expect(list.find((i) => i.id === card.id)?.alsoWith).toEqual(expected);
+    expect(list.find((i) => i.id === alone.id)?.alsoWith).toEqual([]);
+    // An agent that can see the card reads them too: nothing is hidden from it.
+    const asAgent = await listIssues(
+      f.db,
+      { type: "agent", agentId: f.agent.id, channelId: f.general.id },
+      f.org.id,
+      {},
+    );
+    expect(asAgent.find((i) => i.id === card.id)?.alsoWith).toEqual(expected);
   });
 });
