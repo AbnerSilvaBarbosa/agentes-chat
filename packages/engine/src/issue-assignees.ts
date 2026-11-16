@@ -2,7 +2,7 @@ import { and, asc, type Database, type Executor, eq, inArray, type SQL, schema, 
 import { ValidationError } from "./errors";
 import { checkAssignee, type TaskScope, type WorkActor } from "./issues";
 
-const { issueCoAssignees, issues, users, agents } = schema;
+const { issueCoAssignees, issueActivity, issues, outbox, users, agents } = schema;
 
 /**
  * Who is responsible on a card (ADR 0186). A card has at most one agent, which is always its principal, and people in
@@ -361,4 +361,102 @@ export async function applyAssignees(
     }
   }
   return { before, after, events };
+}
+
+/**
+ * A person who leaves a workspace leaves its cards (ADR 0186), inside the caller's transaction and in one batch of
+ * statements, not one transaction per card. The cards they were also with simply lose them; a card they were the
+ * principal of goes to its first person also with, or to nobody. Each card gets one history event authored by the
+ * leaver with `left: true` (and `via`, the audit's way of leaving, when there is one), its `updated_at` moves and it is
+ * indexed again. Returns the ids of the cards that changed.
+ */
+export async function dropFromAssignments(
+  tx: Executor,
+  orgId: string,
+  userId: string,
+  via?: string | null,
+): Promise<string[]> {
+  const leaver: WorkActor = { type: "person", id: userId };
+  const alsoOn = (
+    await tx
+      .delete(issueCoAssignees)
+      .where(and(eq(issueCoAssignees.orgId, orgId), eq(issueCoAssignees.userId, userId)))
+      .returning({ issueId: issueCoAssignees.issueId })
+  ).map((r) => r.issueId);
+  const principalOn = (
+    await tx
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(eq(issues.orgId, orgId), eq(issues.assigneeType, "person"), eq(issues.assigneeId, userId)))
+  ).map((r) => r.id);
+  const heirs = new Map<string, string>();
+  if (principalOn.length) {
+    const next = await tx
+      .selectDistinctOn([issueCoAssignees.issueId], {
+        issueId: issueCoAssignees.issueId,
+        userId: issueCoAssignees.userId,
+      })
+      .from(issueCoAssignees)
+      .where(inArray(issueCoAssignees.issueId, principalOn))
+      .orderBy(asc(issueCoAssignees.issueId), asc(issueCoAssignees.position));
+    for (const n of next) heirs.set(n.issueId, n.userId);
+    const promoted = [...heirs.keys()];
+    if (promoted.length) {
+      await tx.execute(sql`update ${issues} i set assignee_id = n.user_id, updated_at = now()
+        from (select distinct on (issue_id) issue_id, user_id from ${issueCoAssignees}
+          where issue_id = any(${`{${promoted.join(",")}}`}::uuid[]) order by issue_id, position) n
+        where i.id = n.issue_id`);
+      // The principal keeps no row of their own.
+      await tx.execute(sql`delete from ${issueCoAssignees} ic using ${issues} i
+        where ic.issue_id = i.id and i.id = any(${`{${promoted.join(",")}}`}::uuid[]) and ic.user_id = i.assignee_id`);
+    }
+    await tx
+      .update(issues)
+      .set({ assigneeType: null, assigneeId: null, updatedAt: new Date() })
+      .where(and(inArray(issues.id, principalOn), eq(issues.assigneeId, userId)));
+  }
+  if (alsoOn.length) await tx.update(issues).set({ updatedAt: new Date() }).where(inArray(issues.id, alsoOn));
+
+  const touched = unique([...principalOn, ...alsoOn]);
+  if (touched.length === 0) return [];
+  const heirIds = unique([...heirs.values()]);
+  const name = await namesFor(tx, orgId, [{ agentId: null, people: [userId, ...heirIds] }]);
+  const left = name(leaver);
+  await tx.insert(issueActivity).values(
+    touched.map((issueId) => {
+      const heir = heirs.get(issueId);
+      const base = { orgId, issueId, kind: "event", authorType: "person", authorId: userId };
+      const marks = { left: true, ...(via ? { via } : {}) };
+      if (heir) {
+        return {
+          ...base,
+          text: "assigned the issue",
+          event: "assigned",
+          data: { assignee: { type: "person", id: heir }, promoted: true, ...marks },
+        };
+      }
+      if (principalOn.includes(issueId)) {
+        return { ...base, text: "removed the assignee", event: "assigned", data: { assignee: null, ...marks } };
+      }
+      return {
+        ...base,
+        text: `took ${left} off the issue`,
+        event: "assignee_removed",
+        data: { assignee: leaver, name: left, ...marks },
+      };
+    }),
+  );
+  await tx
+    .insert(outbox)
+    .values(
+      touched.map((sourceId) => ({
+        orgId,
+        kind: "search.index",
+        payload: { kind: "issue", sourceId },
+        nextAttemptAt: new Date(),
+        maxAttempts: 8,
+      })),
+    )
+    .onConflictDoNothing();
+  return touched;
 }
