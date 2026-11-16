@@ -309,3 +309,62 @@ describe("the board and the list", () => {
     expect(card.querySelector(".issue-card__also")).toBeNull();
   });
 });
+
+/** Every task, as the board of all of them: what the toolbar's filter and the grouping read. */
+async function allTasks(
+  tasks: { title: string; assignees: Actor[] }[],
+  view: Partial<typeof ISSUES_VIEW_DEFAULT> = {},
+) {
+  const state = seedState();
+  state.members.push(...CROWD);
+  state.issuesView = { ...structuredClone(ISSUES_VIEW_DEFAULT), ...view };
+  const api = createFakeApi(state, { seed: false });
+  for (const t of tasks) await api.issues.create(ORG_ID, t);
+  const app = await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
+  await settle(8);
+  return { api, ...app };
+}
+const shownTitles = () => [...document.querySelectorAll(".issue-card__title")].map((c) => c.textContent);
+const bea = { type: "person", id: idOf("Bea") } as const;
+
+describe("the assignee filter", () => {
+  test("the toolbar filter matches a person also with", async () => {
+    await allTasks([
+      { title: "Com a Bea", assignees: [ada, bea] },
+      { title: "Do João", assignees: [joao] },
+      { title: "De ninguém", assignees: [] },
+    ]);
+    expect(shownTitles().sort()).toEqual(["Com a Bea", "De ninguém", "Do João"]);
+    const filter = screen().getByRole("button", { name: "Filtro" });
+    filter.focus();
+    await act(async () => {
+      fireEvent.keyDown(filter, { key: "Enter" });
+      fireEvent.keyUp(filter, { key: "Enter" });
+    });
+    await settle(3);
+    const menu = screen().getByRole("menu");
+    // Bea is only ever also with a card, and the filter offers her all the same, with the agent and João.
+    expect(names(within(menu).getAllByRole("menuitemcheckbox").slice(0, 5))).toEqual([
+      "Eu",
+      "Ada",
+      "Bea",
+      "João",
+      "Sem responsável",
+    ]);
+    await click(within(menu).getByRole("menuitemcheckbox", { name: /^Bea/ }));
+    await settle(3);
+    expect(shownTitles()).toEqual(["Com a Bea"]);
+    // The agent that is the principal of the same card finds it too.
+    await click(within(menu).getByRole("menuitemcheckbox", { name: /^Bea/ }));
+    await settle(3);
+    await click(within(menu).getByRole("menuitemcheckbox", { name: /^Ada/ }));
+    await settle(3);
+    expect(shownTitles()).toEqual(["Com a Bea"]);
+    // "Sem responsável" keeps only the card nobody is on.
+    await click(within(menu).getByRole("menuitemcheckbox", { name: /^Ada/ }));
+    await settle(3);
+    await click(within(menu).getByRole("menuitemcheckbox", { name: /^Sem responsável/ }));
+    await settle(3);
+    expect(shownTitles()).toEqual(["De ninguém"]);
+  });
+});

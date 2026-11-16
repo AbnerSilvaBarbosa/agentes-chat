@@ -1,4 +1,5 @@
 import type { Actor, Issue, IssuePriority, IssuesView } from "@agenteschat/client";
+import { assigneeKeys } from "@agenteschat/client/lib/issue-assignees";
 import {
   ISSUE_CARD_FIELDS,
   ISSUES_GROUPS,
@@ -54,7 +55,8 @@ export function IssueFilters({
   const actors = useActors();
   const copy = useFilterCopy();
   const mine: Actor = { type: "person", id: me.user.id };
-  const keys = new Set([...issues.map((i) => actorKey(i.assignee)), ...view.assignees]);
+  // Everyone on a card, the principal and the people also with it, can be filtered on (ADR 0186).
+  const keys = new Set([...issues.flatMap(assigneeKeys), ...view.assignees]);
   keys.delete(actorKey(mine));
   keys.delete(NO_ACTOR);
   // Agents first, then people, each by name.

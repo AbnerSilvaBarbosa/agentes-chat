@@ -21,6 +21,7 @@ import {
 } from "@agenteschat/client";
 import { dueLabel, dueTone, relativeTime } from "@agenteschat/client/lib/format";
 import { githubLinkLabel } from "@agenteschat/client/lib/github-link";
+import { matchesAssignees } from "@agenteschat/client/lib/issue-assignees";
 import { NO_PROJECT, projectOfFilter, spaceOfFilter } from "@agenteschat/client/lib/issue-projects";
 import { ISSUES_VIEW_DEFAULT, PRIORITY_ORDER, sortIssues } from "@agenteschat/client/lib/issues-view";
 import { can } from "@agenteschat/client/lib/permissions";
@@ -369,7 +370,7 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const filtered = all.filter(
     (i) =>
       // The assignee filter saved for the other pages would empty the page that is that filter.
-      (chrome.assignee === false || view.assignees.length === 0 || view.assignees.includes(actorKey(i.assignee))) &&
+      (chrome.assignee === false || matchesAssignees(i, view.assignees)) &&
       (view.priorities.length === 0 || view.priorities.includes(i.priority)),
   );
   const noIssues = !mine && issues.isSuccess && all.length === 0 && !search && !projectParam;
