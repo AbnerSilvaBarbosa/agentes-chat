@@ -121,6 +121,8 @@ export const STORAGE_KEYS = {
    * `@agenteschat/client/lib/composer-drafts`), forgotten on sign-out.
    */
   composerDrafts: "agentes.drafts",
+  /** Prefix (`.<user id>.<org id>`): the company the person's PO view opened last there (lib/po-landing.ts, ADR 0185). */
+  poCompany: "agentes.po.company",
 } as const;
 
 /** The right hand's DM opened, here or from any other way in (`rightHandSeenKey`): its row's "Novo" is gone. */
