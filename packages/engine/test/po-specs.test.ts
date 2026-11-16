@@ -463,6 +463,7 @@ describe("the brief a spec run reads", () => {
     expect(brief).toContain("Entrar com e-mail e senha");
     expect(brief).toContain("1. Mostra erro de senha");
     // Where and under which name it is saved, and the retry title.
+    expect(brief).toContain('read_skill_file (name "tlc-spec-driven"');
     expect(brief).toContain('folder "Acme/Specs/1"');
     expect(brief).toContain('"1 · Spec — Tela de login"');
     expect(brief).toContain('"1 · Design — Tela de login"');

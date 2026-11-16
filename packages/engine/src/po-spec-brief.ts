@@ -160,6 +160,7 @@ export async function specBrief(
       : "## Other cards of the company\nNone yet.",
     [
       "## Write the three pages of the tlc-spec-driven method, the way the company's other specs in the wiki are written",
+      'FIRST, before writing anything: open your skill "tlc-spec-driven" with read_skill_file (name "tlc-spec-driven", path "SKILL.md", then the files of its references/ folder that its Specify, Design and Tasks phases name: specify.md, design.md, tasks.md; list the folder with a path ending in "/") and follow it. If you have no such skill, say so in your answer and follow the form below.',
       `Save them all in the folder ${JSON.stringify(folder)}. Read one of the company's finished spec folders first (search the wiki for "Spec —") and copy its form, its tone and its links.`,
       `1. ${JSON.stringify(specTitle)}: it opens with one line "Pasta ${issue.number}: [[the three titles]]", then "# ${issue.number} · ${title}", then "**Approved**: pendente (aguarda o sim do Abner)" and a line with the card, board and risk 1/2/3. Then the EARS spec:`,
       "## Problem Statement · ## Goals (checkboxes) · ## Out of Scope (table: Feature | Reason) · ## Assumptions & Open Questions (table: Assumption | Chosen default | Rationale | Confirmed?) · ## User Stories (P1, P2, P3, each with: User Story, Why, numbered Acceptance Criteria, Independent Test) · ## Edge Cases · ## Requirement Traceability (ID | Story | Status Pending, IDs like <ABBR>-01) · ## Success Criteria",
