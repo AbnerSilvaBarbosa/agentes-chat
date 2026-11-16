@@ -565,3 +565,41 @@ describe("changing who is responsible on a card", () => {
     expect((await events(card.id)).some((e) => e.event === "principal_changed")).toBe(true);
   });
 });
+
+describe("filtering by who is on a card", () => {
+  test("the person filter lists a card where they are also with and the agent filter lists the principal only", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const make = (title: string, input: Parameters<typeof createIssue>[3] = { title }) =>
+      createIssue(deps, person(f.owner.id), f.org.id, { ...input, title });
+    const principal = await make("principal", { title: "", assignee: actor("person", bia.id) });
+    const beside = await make("ao lado do agente", {
+      title: "",
+      assignee: actor("agent", f.agent.id),
+      addAssignees: [actor("person", bia.id)],
+    });
+    const amongPeople = await make("entre pessoas", {
+      title: "",
+      assignees: [actor("person", caio.id), actor("person", bia.id)],
+    });
+    const notHers = await make("de outro", { title: "", assignee: actor("person", caio.id) });
+    const asOwner = (assignee: { type: "person" | "agent"; id: string }) =>
+      listIssues(f.db, person(f.owner.id), f.org.id, { assignee });
+    const ids = (list: { id: string }[]) => list.map((i) => i.id).sort();
+    expect(ids(await asOwner(actor("person", bia.id)))).toEqual(ids([principal, beside, amongPeople]));
+    expect(ids(await asOwner(actor("person", caio.id)))).toEqual(ids([amongPeople, notHers]));
+    // The agent filter reads the principal only: the person filter does not leak into it, nor the reverse.
+    expect(ids(await asOwner(actor("agent", f.agent.id)))).toEqual(ids([beside]));
+    // Still limited by who sees the card: a card hidden from Bia stays out of her list.
+    await f.db
+      .update(schema.issues)
+      .set({ restricted: true, audienceUserIds: [f.owner.id] })
+      .where(eq(schema.issues.id, beside.id));
+    const hers = await listIssues(f.db, person(bia.id), f.org.id, { assignee: actor("person", bia.id) });
+    expect(ids(hers)).toEqual(ids([principal, amongPeople]));
+  });
+});

@@ -36,6 +36,7 @@ import {
   assignmentOf,
   checkAssignees,
   coAssigneesOf,
+  onCardSql,
   planAssignees,
 } from "./issue-assignees";
 import {
@@ -1134,8 +1135,11 @@ export async function listIssues(
         filters.spaceId
           ? sql`${issues.projectId} in (select id from issue_projects where space_id = ${filters.spaceId} and org_id = ${orgId})`
           : undefined,
+        // A person is on a card as its principal or beside it (ADR 0186); an agent is only ever the principal.
         filters.assignee
-          ? and(eq(issues.assigneeType, filters.assignee.type), eq(issues.assigneeId, filters.assignee.id))
+          ? filters.assignee.type === "person"
+            ? onCardSql("issues", sql`${filters.assignee.id}::text`)
+            : and(eq(issues.assigneeType, "agent"), eq(issues.assigneeId, filters.assignee.id))
           : undefined,
         // The factory's own rule (`factoryHome`): a live task, on a board and a company that are not archived.
         filters.waitingForPerson
