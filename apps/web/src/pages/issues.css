@@ -1041,6 +1041,21 @@ html:not([data-pointer]) .issues-dest:focus-visible {
   min-width: 0;
   max-width: 100%;
 }
+/*
+ * The responsible picker's trigger (ADR 0186): up to three faces, the principal's name, how many are also with them.
+ * A long name wraps inside the control instead of widening it, and the faces stay on the first line.
+ */
+.issue-assignees {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--control-h-sm);
+  white-space: normal;
+  text-align: start;
+}
+.issue-assignees__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .issue-props .issue-github__chip,
 .issue-props .issue-link {
   font-size: 13.5px;

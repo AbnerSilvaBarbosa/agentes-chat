@@ -43,6 +43,7 @@ import type {
   WebhookSetup,
 } from "@agenteschat/client";
 import { ApiError } from "@agenteschat/client";
+import { assignmentWith } from "@agenteschat/client/lib/issue-assignees";
 import { nextOccurrences } from "@agenteschat/ui";
 import { fromApiRule } from "@/lib/recurrence";
 import { clone, type MockContext, MockNotFoundError, minutesAgo, mockId, perOrg } from "./context";
@@ -58,6 +59,8 @@ const DAY_LABEL = [
 ];
 const WEEKDAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 const WORKDAYS = ["MO", "TU", "WE", "TH", "FR"];
+/** The fields of a change that say who is responsible (taken out of a patch before the rest is applied). */
+type AssigneeFields = "assignee" | "assignees" | "addAssignees" | "removeAssignees" | "principal";
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /**
@@ -569,6 +572,37 @@ export function createMockPlanning(
     issue.updatedAt = a.createdAt;
     return a;
   };
+  /** The history of a change of who is responsible, as the server writes it (`assigneeEvents`). */
+  const logAssignees = async (
+    orgId: string,
+    issue: Issue,
+    after: { assignee: Actor | null; alsoWith: Actor[] },
+    author: Actor,
+  ) => {
+    const was = [issue.assignee, ...(issue.alsoWith ?? [])].filter((a): a is Actor => a !== null);
+    const now = [after.assignee, ...after.alsoWith].filter((a): a is Actor => a !== null);
+    const name = async (a: Actor) =>
+      a.type === "agent"
+        ? ((await ctx.lookup.agents(orgId)).find((x) => x.id === a.id)?.name ?? a.id)
+        : ((await ctx.lookup.members(orgId)).find((x) => x.userId === a.id)?.name ?? a.id);
+    const has = (list: Actor[], a: Actor) => list.some((x) => x.type === a.type && x.id === a.id);
+    const was0 = was.find((a) => a.type === "agent");
+    const now0 = now.find((a) => a.type === "agent");
+    const event = async (event: string, textCode: string, text: string, textParams: Record<string, string>) =>
+      log(orgId, issue, { kind: "event", author, event, text, textCode, textParams });
+    if (was0 && now0 && was0.id !== now0.id)
+      await event("agent_replaced", "agent_replaced", "handed the task over", {
+        from: await name(was0),
+        to: await name(now0),
+      });
+    for (const a of now.filter((x) => !has(was, x) && x.type === "person"))
+      await event("assignee_added", "assignee_added", "added a person to the task", { name: await name(a) });
+    for (const a of was.filter((x) => !has(now, x) && x.type === "person"))
+      await event("assignee_removed", "assignee_removed", "took a person off the task", { name: await name(a) });
+    const [before0, lead] = [was[0], now[0]];
+    if (!was0 && !now0 && before0 && lead && !has([before0], lead) && has(was, lead))
+      await event("principal_changed", "principal_changed", "made a person the principal", { name: await name(lead) });
+  };
   /** Renumbers a stage's columns in their current order (positions 0, 1, 2…). */
   const renumber = (cols: IssueColumn[], stage: IssueStatus) => {
     cols
@@ -605,7 +639,9 @@ export function createMockPlanning(
           !filters.projectId || (filters.projectId === "none" ? !i.project : i.project?.id === filters.projectId);
         const myId = filters.assignee === "me" ? (await me()).id : null;
         const assignedToMe = (i: Issue) =>
-          !myId || (i.assignee?.type === "person" && i.assignee.id === myId && i.status !== "canceled");
+          !myId ||
+          ([i.assignee, ...(i.alsoWith ?? [])].some((a) => a?.type === "person" && a.id === myId) &&
+            i.status !== "canceled");
         const s = await store(orgId);
         // The server's filter (`waitingForPerson`): the factory's own rule, here as it is below.
         const waits = (i: Issue) =>
@@ -646,7 +682,14 @@ export function createMockPlanning(
           boardRank: -ctx.now().getTime(),
           priority: input.priority ?? "normal",
           project: s.projects.find((p) => p.id === input.projectId) ?? null,
-          assignee: input.assignee ?? null,
+          // The server's rules (`planAssignees`): the whole list when it is given, else the one assignee.
+          ...(assignmentWith(
+            { assignee: null, alsoWith: [] },
+            { assignees: input.assignees ?? (input.assignee ? [input.assignee] : []) },
+          ) ?? {
+            assignee: null,
+            alsoWith: [],
+          }),
           labels: input.labels ?? [],
           dueDate: input.dueDate ?? null,
           criteria: (input.criteria ?? []).map((text) => ({ id: mockId("crit"), text, done: false })),
@@ -675,8 +718,31 @@ export function createMockPlanning(
         const i = await findIssue(orgId, id);
         const author = await me();
         const s = await columnsOf(orgId);
-        const { columnId, criteria, projectId, ...rest } = patch;
-        let change: Omit<IssuePatch, "columnId" | "criteria" | "projectId"> = rest;
+        const {
+          columnId,
+          criteria,
+          projectId,
+          assignee,
+          assignees,
+          addAssignees,
+          removeAssignees,
+          principal,
+          ...rest
+        } = patch;
+        let change: Omit<IssuePatch, "columnId" | "criteria" | "projectId" | AssigneeFields> = rest;
+        if (
+          assignee !== undefined ||
+          assignees !== undefined ||
+          addAssignees !== undefined ||
+          removeAssignees !== undefined ||
+          principal !== undefined
+        ) {
+          const after = assignmentWith(i, { assignee, assignees, addAssignees, removeAssignees, principal });
+          if (!after) throw new ApiError(400, "issue.assignees_max", "Those people can't be on this card");
+          await logAssignees(orgId, i, after, author);
+          i.assignee = after.assignee;
+          i.alsoWith = after.alsoWith;
+        }
         if (projectId !== undefined) i.project = (await store(orgId)).projects.find((p) => p.id === projectId) ?? null;
         // The whole list, as the backend takes it: an id keeps that criterion (and its check), none is a new one.
         if (criteria) {
@@ -764,7 +830,10 @@ export function createMockPlanning(
       },
       askAgent: async (orgId, id, agentId) => {
         const i = await findIssue(orgId, id);
-        i.assignee = { type: "agent", id: agentId };
+        // The server's hand-off: the agent becomes the principal and a person on it stays also with it.
+        const after = assignmentWith(i, { assignee: { type: "agent", id: agentId } });
+        i.assignee = after?.assignee ?? { type: "agent", id: agentId };
+        i.alsoWith = after?.alsoWith ?? [];
         if (i.status !== "in_progress") {
           i.status = "in_progress";
           i.columnId = (await columnsOf(orgId)).columns.find((c) => c.stage === "in_progress")?.id ?? null;
