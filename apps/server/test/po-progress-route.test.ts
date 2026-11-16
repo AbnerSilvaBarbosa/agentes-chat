@@ -80,6 +80,50 @@ test("GET progress is not found for a company of another workspace", async () =>
   expect((await api(`/po/companies/${foreign.id}/progress`)).status).toBe(404);
 });
 
+test("a card waiting in Especificado carries releaseTo, and the existing move route releases it as the person", async () => {
+  const { api, spaceId } = await scene();
+  const set = (await (
+    await api("/issue-column-templates", {
+      json: {
+        name: "PO",
+        columns: [
+          { name: "Especificar", stage: "todo" },
+          { name: "Especificado", stage: "todo" },
+          { name: "Ready for dev", stage: "in_progress" },
+          { name: "Concluído", stage: "done" },
+        ],
+      },
+    })
+  ).json()) as { id: string };
+  const first = (await (await api(`/po/companies/${spaceId}/progress`)).json()) as {
+    groups: { items: { boardId: string }[] }[];
+  };
+  const boardId = first.groups.flatMap((g) => g.items)[0]?.boardId;
+  await api(`/issue-column-templates/${set.id}/apply`, { method: "PUT", json: { projectId: boardId } });
+  const { columns } = (await (await api(`/issue-columns?projectId=${boardId}`)).json()) as {
+    columns: { id: string; name: string }[];
+  };
+  const id = (name: string) => columns.find((c) => c.name === name)?.id as string;
+  const read = async () =>
+    (
+      (await (await api(`/po/companies/${spaceId}/progress`)).json()) as {
+        groups: { key: string; items: { id: string; title: string; releaseTo?: { id: string; name: string } }[] }[];
+      }
+    ).groups;
+  const card = (await read()).flatMap((g) => g.items).find((i) => i.title === "Tela de login");
+  await api(`/issues/${card?.id}`, { method: "PATCH", json: { columnId: id("Especificado") } });
+
+  const waiting = (await read()).find((g) => g.key === "especificado")?.items.find((i) => i.title === "Tela de login");
+  expect(waiting?.releaseTo).toEqual({ id: id("Ready for dev"), name: "Ready for dev" });
+
+  // The panel's button is that same PATCH, as the person.
+  const moved = await api(`/issues/${card?.id}`, { method: "PATCH", json: { columnId: waiting?.releaseTo?.id } });
+  expect(moved.status).toBe(200);
+  const after = await read();
+  expect(after.find((g) => g.key === "ready for dev")?.items.map((i) => i.title)).toEqual(["Tela de login"]);
+  expect(after.find((g) => g.key === "especificado")?.items).toEqual([]);
+});
+
 test("GET issues with columns lists only the tasks in those columns", async () => {
   const { api, spaceId } = await scene();
   const progress = (await (await api(`/po/companies/${spaceId}/progress`)).json()) as Progress;
