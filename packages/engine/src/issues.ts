@@ -1105,9 +1105,11 @@ export async function listIssues(
               ${effectiveColumnSql("w")}
               where w.id = ${issues.id} and ${waitingSql("w")})`
           : undefined,
-        // The column the board draws the task in (`effectiveColumnSql`), by the keys' column ids.
+        // The column the board draws the task in (`effectiveColumnSql`), by the keys' column ids; a task of an archived
+        // board is out, as in the progress panel's count that "Ver todos" opens.
         columnIds
           ? sql`exists (select 1 from ${issues} k
+              join ${schema.issueProjects} kp on kp.id = k.project_id and kp.archived_at is null
               ${effectiveColumnSql("k")}
               where k.id = ${issues.id} and col.id in (${sql.join(
                 columnIds.map((id) => sql`${id}::uuid`),

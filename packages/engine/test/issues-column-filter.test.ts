@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { schema } from "@agenteschat/db";
+import { eq, schema } from "@agenteschat/db";
 import { listIssues } from "../src";
 import { addMember, type Fixture, setup } from "./fixtures";
 
@@ -17,8 +17,8 @@ const must = <T>(v: T | undefined): T => {
 let counter = 0;
 
 /** A board with its own columns: Especificar and Ready for dev, an unnamed review column, and the tasks in them. */
-async function scene() {
-  const [board] = await f.db.insert(schema.issueProjects).values({ orgId: f.org.id, name: "Entregas" }).returning();
+async function scene(name = "Entregas") {
+  const [board] = await f.db.insert(schema.issueProjects).values({ orgId: f.org.id, name }).returning();
   const projectId = must(board).id;
   const column = async (name: string | null, stage: "todo" | "in_progress" | "in_review", position: number) =>
     must(
@@ -89,5 +89,19 @@ describe("listIssues columnKeys", () => {
       columnKeys: ["especificar"],
     });
     expect(titles(rows)).toEqual(["De todos"]);
+  });
+
+  test("leaves out a task of an archived board, as the progress panel's count does", async () => {
+    f = await setup();
+    const live = await scene();
+    const old = await scene("Velho");
+    await live.task("Na viva", live.specify);
+    await old.task("Na arquivada", old.specify);
+    await f.db
+      .update(schema.issueProjects)
+      .set({ archivedAt: new Date() })
+      .where(eq(schema.issueProjects.id, old.projectId));
+    const rows = await listIssues(f.db, asOwner(), f.org.id, { columnKeys: ["especificar"] });
+    expect(titles(rows)).toEqual(["Na viva"]);
   });
 });
