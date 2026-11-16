@@ -117,6 +117,16 @@ describe("the columns a spec moves a card through", () => {
     expect(prioritized?.stage).toBe("in_review");
   });
 
+  test("Especificado is where a finished spec goes, ahead of Priorizado", async () => {
+    f = await setup();
+    const b = await board("Fluxo");
+    await add(b, "Especificar", "todo");
+    await add(b, "Priorizado", "todo");
+    await add(b, "Especificado", "todo");
+    const { prioritized } = await specColumns(f.db, f.org.id, b.project.id);
+    expect(prioritized?.name).toBe("Especificado");
+  });
+
   test("a board with no columns of its own reads the workspace's", async () => {
     f = await setup();
     const { project } = await board("Sem colunas");
