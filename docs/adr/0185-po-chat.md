@@ -135,6 +135,16 @@ button opens.
   `stage:<stage>` for a column with no name. `listIssues` filters by the effective column of each task in one
   statement (`columnKeys`), and Tarefas shows the company's tasks in those columns with a chip that clears only the
   filter.
+- **"Gerando spec" and the closed Backlog.** A long Backlog pushed the cards that matter (being specified, specified,
+  ready for dev) below the fold, and nothing said a spec was being written. While any card's spec is queued or running,
+  a block above every group lists them (`liveSpecs`, running first): the card, "Gerando spec…" or "Na fila", the time
+  since the spec was queued (`PoProgressSpec.queuedAt`, from `po_card_proposals.spec_queued_at`, else the column clock;
+  a minute clock shared by the whole panel, `specElapsed`) and a five-cell pixel bar that sweeps only while it runs,
+  still when queued or under `prefers-reduced-motion`; with no live spec the block is not drawn and nothing animates.
+  A spec that finishes while the panel is open lights its row once. The board's to-do column named Backlog
+  (`isBacklog`) starts closed, showing its name, count and a chevron (`aria-expanded`); the open choice is kept per
+  person and workspace in the browser (`agentes.po.groups`, a convenience that may be unavailable), and a group holding
+  a live spec never closes. Every other group stays open.
 - **Out of scope.** The phone and the desktop shell, dragging a card in the panel, and cards of other companies.
 
 ## Addendum: the sidebar opens the PO
