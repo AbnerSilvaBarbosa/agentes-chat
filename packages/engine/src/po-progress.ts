@@ -2,7 +2,7 @@ import { type Database, rowsOf, schema, sql } from "@agenteschat/db";
 import { NotFoundError } from "./errors";
 import { boardColumnsOf, columnKey, effectiveColumnSql } from "./issue-columns";
 import type { IssueStatus } from "./issues";
-import { requireActiveMembership } from "./organizations";
+import { can, requireActiveMembership } from "./organizations";
 import { specCodeOf } from "./po-specs";
 import { taskSeenSql } from "./task-access";
 
@@ -18,6 +18,9 @@ export const PO_PROGRESS_GROUP_ROWS = 8;
 
 /** The column that ends the head groups: everything open after it is the tail. */
 const READY_FOR_DEV = "ready for dev";
+/** The columns a finished spec waits in for the person (ADR 0185): "Especificado", on older boards "Priorizado". */
+const SPECIFIED = "especificado";
+const PRIORITIZED = "priorizado";
 const OPEN_STAGES: readonly IssueStatus[] = ["todo", "in_progress", "in_review"];
 const TAIL_STAGES: readonly IssueStatus[] = ["in_progress", "in_review"];
 
@@ -40,6 +43,12 @@ export interface PoProgressCard {
   /** ISO time the card entered its column (the column clock). */
   since: string;
   spec: PoProgressSpec | null;
+  /**
+   * The board's "Ready for dev" column, only on a card in the group a finished spec lands in (Especificado, on older
+   * boards Priorizado) and only when the viewer may move cards (`post`, as the board's own actions): the panel's
+   * "Liberar para dev" moves the card there as that person. Absent otherwise.
+   */
+  releaseTo?: { id: string; name: string };
 }
 
 export interface PoProgressGroup {
@@ -106,7 +115,7 @@ interface CardRow {
 
 /** The company's progress for `userId` (`spaceId` of another workspace: not found). */
 export async function poProgress(db: Database, userId: string, orgId: string, spaceId: string): Promise<PoProgress> {
-  await requireActiveMembership(db, userId, orgId);
+  const membership = await requireActiveMembership(db, userId, orgId);
   const [space] = rowsOf<{ id: string; name: string }>(
     await db.execute(
       sql`select id, name from ${schema.issueSpaces} where id = ${spaceId}::uuid and org_id = ${orgId}::uuid`,
@@ -134,8 +143,16 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
     items: [],
   };
   const tailKeys = new Set<string>();
+  // Per board: where its finished specs wait and the column that releases them.
+  const release = new Map<string, { ready: { id: string; name: string } | null; specified: boolean }>();
   for (const board of boards) {
-    const layout = layoutOf(await boardColumnsOf(db, orgId, board.id));
+    const columns = await boardColumnsOf(db, orgId, board.id);
+    const ready = columns.find((c) => c.name?.trim().toLowerCase() === READY_FOR_DEV);
+    release.set(board.id, {
+      ready: ready ? { id: ready.id, name: ready.name?.trim() ?? "" } : null,
+      specified: columns.some((c) => c.name?.trim().toLowerCase() === SPECIFIED),
+    });
+    const layout = layoutOf(columns);
     for (const h of layout.head)
       if (!heads.has(h.key))
         heads.set(h.key, {
@@ -155,6 +172,7 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
   const groups = [...heads.values(), tail];
   if (boards.length === 0) return { space, groups: [], done: 0 };
 
+  const mayMove = can(membership, "post");
   const seen = taskSeenSql("i", sql`${userId}::text`);
   const rows = rowsOf<CardRow>(
     await db.execute(sql`select i.id, i.number, i.title, i.status, i.project_id, p.name as project_name,
@@ -183,6 +201,8 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
     if (group === tail) tailKeys.add(key);
     group.count += 1;
     if (group.items.length >= PO_PROGRESS_GROUP_ROWS) continue;
+    const rel = release.get(r.project_id);
+    const waits = key === SPECIFIED || (key === PRIORITIZED && !rel?.specified);
     const page = r.page_slug ? { slug: r.page_slug, title: r.page_title ?? "" } : null;
     group.items.push({
       id: r.id,
@@ -191,6 +211,7 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
       boardId: r.project_id,
       boardName: r.project_name,
       since: new Date(r.column_since).toISOString(),
+      ...(mayMove && waits && rel?.ready ? { releaseTo: rel.ready } : {}),
       spec: r.spec_state
         ? {
             state: r.spec_state,

@@ -454,4 +454,91 @@ describe("poProgress", () => {
     const bare = await company("Sem board");
     expect((await read(bare.spaceId)).groups).toEqual([]);
   });
+
+  describe("releaseTo (ADR 0185 addendum)", () => {
+    const ids = (p: Awaited<ReturnType<typeof read>>) =>
+      Object.fromEntries(p.groups.flatMap((g) => g.items.map((i) => [i.title, i.releaseTo] as const)));
+
+    test("a card in Especificado names its board's Ready for dev column, any capitals, and no other card does", async () => {
+      f = await setup();
+      const c = await company();
+      const b = await c.board("Entregas", [
+        ["Especificar", "todo"],
+        ["Especificado", "todo"],
+        ["READY for Dev", "in_progress"],
+        ["Em desenvolvimento", "in_progress"],
+        ["Concluído", "done"],
+      ]);
+      await b.card("Pronto", "Especificado");
+      await b.card("A escrever", "Especificar");
+      await b.card("Liberado", "READY for Dev");
+      await b.card("Fazendo", "Em desenvolvimento");
+      const r = ids(await read(c.spaceId));
+      expect(r.Pronto).toEqual({ id: must(b.columns["READY for Dev"]).id, name: "READY for Dev" });
+      expect(r["A escrever"]).toBeUndefined();
+      expect(r.Liberado).toBeUndefined();
+      expect(r.Fazendo).toBeUndefined();
+    });
+
+    test("an older board's Priorizado releases too, but not on a board that also has Especificado", async () => {
+      f = await setup();
+      const c = await company();
+      const old = await c.board("Antigo", [
+        ["Especificar", "todo"],
+        ["Priorizado", "todo"],
+        ["Ready for dev", "in_progress"],
+        ["Concluído", "done"],
+      ]);
+      const both = await c.board("Novo", [
+        ["Especificar", "todo"],
+        ["Especificado", "todo"],
+        ["Priorizado", "todo"],
+        ["Ready for dev", "in_progress"],
+        ["Concluído", "done"],
+      ]);
+      await old.card("Velho", "Priorizado");
+      await both.card("Novo pronto", "Especificado");
+      await both.card("Novo priorizado", "Priorizado");
+      const r = ids(await read(c.spaceId));
+      expect(r.Velho?.id).toBe(must(old.columns["Ready for dev"]).id);
+      expect(r["Novo pronto"]?.id).toBe(must(both.columns["Ready for dev"]).id);
+      expect(r["Novo priorizado"]).toBeUndefined();
+    });
+
+    test("each card gets its own board's column", async () => {
+      f = await setup();
+      const c = await company();
+      const a = await c.board("A");
+      const b = await c.board("B");
+      await a.card("Do A", "Especificado");
+      await b.card("Do B", "Especificado");
+      const r = ids(await read(c.spaceId));
+      expect(r["Do A"]?.id).toBe(must(a.columns["Ready for dev"]).id);
+      expect(r["Do B"]?.id).toBe(must(b.columns["Ready for dev"]).id);
+    });
+
+    test("a board without a Ready for dev column offers no release", async () => {
+      f = await setup();
+      const c = await company();
+      const b = await c.board("Simples", [
+        ["Especificar", "todo"],
+        ["Especificado", "todo"],
+        ["Em dev", "in_progress"],
+        ["Concluído", "done"],
+      ]);
+      await b.card("Sem destino", "Especificado");
+      expect(ids(await read(c.spaceId))["Sem destino"]).toBeUndefined();
+    });
+
+    test("a person who may not post gets none", async () => {
+      f = await setup();
+      const guest = await addMember(f.db, f.org.id, "member", "gus");
+      const c = await company();
+      const b = await c.board("Entregas");
+      await b.card("Pronto", "Especificado");
+      expect(ids(await read(c.spaceId, guest.id)).Pronto?.id).toBe(must(b.columns["Ready for dev"]).id);
+      await f.db.update(schema.orgRoles).set({ permissions: [] }).where(eq(schema.orgRoles.kind, "everyone"));
+      expect(ids(await read(c.spaceId, guest.id)).Pronto).toBeUndefined();
+    });
+  });
 });

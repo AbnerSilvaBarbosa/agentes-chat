@@ -79,9 +79,16 @@ const ProgressCard = z.object({
       queuedAt: z.string().nullable().openapi({ description: "ISO time the spec was queued." }),
     })
     .nullable(),
+  releaseTo: z
+    .object({ id: z.uuid(), name: z.string() })
+    .optional()
+    .openapi({
+      description:
+        "The board's Ready for dev column, only on a finished spec's card waiting in Especificado (Priorizado on older boards) and only for a reader who may move cards.",
+    }),
 });
 
-const PoProgress = z
+const PoProgress =z
   .object({
     space: z.object({ id: z.uuid(), name: z.string() }),
     groups: z

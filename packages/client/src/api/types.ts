@@ -4297,6 +4297,8 @@ export interface PoProgressCard {
   /** ISO time the card entered its column. */
   since: string;
   spec: PoProgressSpec | null;
+  /** The board's Ready for dev column: the card waits in Especificado and the reader may move it ("Liberar para dev"). */
+  releaseTo?: { id: string; name: string };
 }
 
 /** One stage of the panel: a column (the boards' same-named ones merged), or the tail after Ready for dev. */
