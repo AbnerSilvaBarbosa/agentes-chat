@@ -341,4 +341,46 @@ describe("worst case", () => {
     expect(panel.querySelector(".po-side__scroll")).toBeTruthy();
     expect(panel.closest(".channel__body")).toBeTruthy();
   });
+
+  test("the worst case with Gerando spec and a long Backlog, closed then open, stays inside the panel", async () => {
+    widthIs(DM_SIDE_WIDE_QUERY);
+    // What the geometry check lays out at 1280, 390 and 320 (`capture.ts` saves both states of the Backlog): three
+    // 300-character cards being specified or queued with a long wait, over a Backlog of 35 cards, nine or more listed.
+    const title = `${"Reestruturação completa do atendimento ao cliente da clínica com triagem ".repeat(5)}`
+      .trim()
+      .slice(0, 300);
+    const specOf = (state: "queued" | "running") => ({
+      state,
+      page: null,
+      error: null,
+      queuedAt: new Date(Date.now() - 26 * 3_600_000 - 59 * 60_000).toISOString(),
+    });
+    const backlog = Array.from({ length: 8 }, (_, i) =>
+      card({ id: `bl-${i}`, number: 500 + i, title, boardName: `Board com um nome muito comprido número ${i}` }),
+    );
+    const live = [
+      card({ id: "l1", number: 901, title, spec: specOf("running") }),
+      card({ id: "l2", number: 902, title, spec: specOf("running") }),
+      card({ id: "l3", number: 903, title, spec: specOf("queued") }),
+    ];
+    const groups_ = [
+      { ...column("backlog", "Backlog", backlog), count: 35 },
+      column("especificar", "Especificar", live),
+      ...layout().slice(1),
+    ];
+    await scene({ groups: groups_ });
+    const panel = side() as HTMLElement;
+    expect(panel.querySelector(".po-live")).toBeTruthy();
+    expect(panel.querySelectorAll(".po-live__row")).toHaveLength(3);
+    // The Backlog is closed: its heading and chevron, none of its rows, the live block above it.
+    expect(panel.querySelectorAll(".po-row")).toHaveLength(3);
+    const chevron = within(panel).getByRole("button", { name: /Mostrar os cards de Backlog/ });
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => {
+      fireEvent.click(chevron);
+    });
+    expect(panel.querySelectorAll(".po-row")).toHaveLength(11);
+    expect(within(panel).getByRole("link", { name: "Ver todos" })).toBeTruthy();
+    expect(panel.querySelector(".po-live__state")?.textContent).toContain("há 26h 59min");
+  });
 });
