@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { asc, eq, schema } from "@agenteschat/db";
-import { createIssue, createOrganization } from "../src";
+import { createIssue, createOrganization, deleteAccount, removeMember } from "../src";
 import { dropFromAssignments } from "../src/issue-assignees";
 import { addMember, type Fixture, setup } from "./fixtures";
 
@@ -119,5 +119,38 @@ describe("a person who leaves drops from the cards of the workspace", () => {
     expect(await history(there.id)).toEqual([]);
     // Someone on no card changes nothing.
     expect(await leave(bia.id)).toEqual([]);
+  });
+});
+
+describe("leaving through the engine's doors", () => {
+  test("removing a member and deleting an account drop the person from the cards", async () => {
+    f = await setup();
+    const [bia, caio, dani] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+      await addMember(f.db, f.org.id, "member", "Dani"),
+    ];
+    const { organization: two } = await createOrganization(f.db, f.owner.id, { name: "Two" });
+    await f.db.insert(schema.organizationMembers).values({ orgId: two.id, userId: caio.id, role: "member" });
+    const first = await createIssue(deps(), owner(), f.org.id, {
+      title: "da Bia",
+      assignees: [who("person", bia.id), who("person", dani.id)],
+    });
+    const second = await createIssue(deps(), owner(), f.org.id, {
+      title: "da Caio",
+      assignees: [who("person", caio.id), who("person", bia.id)],
+    });
+    const third = await createIssue(deps(), owner(), two.id, { title: "em Two", assignee: who("person", caio.id) });
+
+    // Removed from the workspace: promoted past them on one card, dropped from the other.
+    await removeMember(f.db, f.owner.id, f.org.id, bia.id);
+    expect(await stateOf(first.id)).toEqual({ principal: ["person", dani.id], also: [] });
+    expect(await stateOf(second.id)).toEqual({ principal: ["person", caio.id], also: [] });
+
+    // Deleting an account leaves every workspace it was in, cards included.
+    await deleteAccount(f.db, caio.id, { pubsub: f.pubsub });
+    expect(await stateOf(second.id)).toEqual({ principal: [null, null], also: [] });
+    expect(await stateOf(third.id)).toEqual({ principal: [null, null], also: [] });
+    expect((await history(second.id)).map((e) => e.authorId)).toContain(caio.id);
   });
 });

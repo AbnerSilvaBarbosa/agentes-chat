@@ -1188,6 +1188,7 @@ export async function removeMember(
   const { cancelMailboxApprovals, publishApproval } = await import("./approvals");
   const { dropMailOfOwner } = await import("./tools/scopes");
   const { dropMemberDashboards } = await import("./dashboards/service");
+  const { dropFromAssignments } = await import("./issue-assignees");
   const { released, removed, handed, changed, heir, secrets, mailActions } = await db.transaction(async (tx) => {
     await lockOrgMembers(tx, orgId);
     if (target.role === "owner" && (await ownerCount(tx, orgId)) <= 1) {
@@ -1196,6 +1197,8 @@ export async function removeMember(
     await tx
       .delete(organizationMembers)
       .where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, targetUserId)));
+    // And its cards: promoted past them, or unassigned (ADR 0186).
+    await dropFromAssignments(tx, orgId, targetUserId, via);
     // Leaving the organization also leaves its channels.
     await tx
       .delete(channelMembers)
@@ -1384,6 +1387,7 @@ export async function deleteAccount(
     await import("./workspace-deletion");
   const { cancelMailboxApprovals, publishApproval } = await import("./approvals");
   const { dropMailOfOwner } = await import("./tools/scopes");
+  const { dropFromAssignments } = await import("./issue-assignees");
   const done = await db.transaction(async (tx) => {
     // First, as creating a workspace does: one made in another tab meanwhile is in the plan below and closes with them.
     await lockWorkspacesOf(tx, userId);
@@ -1449,6 +1453,8 @@ export async function deleteAccount(
       : [];
     if (options.emails) await queueAccountDeletedEmail(tx, userId, closed, options.emails);
     await enqueueAccountContact(tx, userId);
+    // Their cards: before the user row goes, so a card they led is promoted rather than left to a dangling id (ADR 0186).
+    for (const org of plan.leaves) await dropFromAssignments(tx, org.id, userId, "account");
     await tx.delete(users).where(eq(users.id, userId));
     for (const org of plan.leaves) await followOwner(tx, org.id);
     // The owner's own TypeSafe account would go on getting, and paying for, every workspace's Jev calls; and their
