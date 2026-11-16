@@ -282,3 +282,103 @@ describe("reading a card with its people", () => {
     expect(asAgent.find((i) => i.id === card.id)?.alsoWith).toEqual(expected);
   });
 });
+
+describe("creating a card with several people", () => {
+  test("createIssue puts several people on the card beside the principal", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "três",
+      assignees: [
+        actor("person", bia.id),
+        actor("person", caio.id),
+        actor("person", f.owner.id),
+        actor("person", bia.id),
+      ],
+    });
+    expect(card.assignee).toEqual(actor("person", bia.id));
+    expect(card.alsoWith).toEqual([actor("person", caio.id), actor("person", f.owner.id)]);
+    expect(await stateOf(card.id)).toMatchObject({ principal: ["person", bia.id], also: [caio.id, f.owner.id] });
+    // The creation's history stays the single created event.
+    const history = await f.db.select().from(schema.issueActivity).where(eq(schema.issueActivity.issueId, card.id));
+    expect(history.map((h) => h.event)).toEqual(["created"]);
+    // addAssignees goes beside whoever assignee names.
+    const beside = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "ao lado",
+      assignee: actor("person", bia.id),
+      addAssignees: [actor("person", caio.id)],
+    });
+    expect(beside.assignee).toEqual(actor("person", bia.id));
+    expect(beside.alsoWith).toEqual([actor("person", caio.id)]);
+    // The old single assignee is unchanged.
+    const old = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "um",
+      assignee: actor("person", bia.id),
+    });
+    expect(old.assignee).toEqual(actor("person", bia.id));
+    expect(old.alsoWith).toEqual([]);
+  });
+
+  test("createIssue with an agent and people keeps the agent as the principal", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "agente e gente",
+      assignees: [actor("person", bia.id), actor("agent", f.agent.id)],
+    });
+    expect(card.assignee).toEqual(actor("agent", f.agent.id));
+    expect(card.alsoWith).toEqual([actor("person", bia.id)]);
+    expect(await stateOf(card.id)).toMatchObject({ principal: ["agent", f.agent.id], also: [bia.id] });
+    const beside = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "assignee agente",
+      assignee: actor("agent", f.agent.id),
+      addAssignees: [actor("person", bia.id)],
+    });
+    expect(beside.assignee).toEqual(actor("agent", f.agent.id));
+    expect(beside.alsoWith).toEqual([actor("person", bia.id)]);
+  });
+
+  test("createIssue refuses a sixth person also with, two agents and a non-member, and makes no card", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const people = [];
+    for (const n of ["A", "B", "C", "D", "E", "F", "G"]) people.push(await addMember(f.db, f.org.id, "member", n));
+    const outsider = await addUser(f.db, "Fora");
+    const code = async (input: Parameters<typeof createIssue>[3]) =>
+      (await createIssue(deps, person(f.owner.id), f.org.id, input).catch((e) => e)).code;
+    expect(await code({ title: "sete", assignees: people.map((p) => actor("person", p.id)) })).toBe(
+      "issue.assignees_max",
+    );
+    expect(
+      await code({ title: "dois", assignees: [actor("agent", f.agent.id), actor("agent", crypto.randomUUID())] }),
+    ).toBe("issue.two_agents");
+    const nonMember = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "fora",
+      assignees: [actor("person", outsider.id)],
+    }).catch((e) => e);
+    expect(nonMember.message).toBe("That person is not a member of this organization");
+    expect(await f.db.select().from(schema.issues)).toHaveLength(0);
+  });
+
+  test("createIssue with a limited audience keeps every person it names on the card", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "reservado",
+      assignees: [actor("person", bia.id), actor("person", caio.id)],
+      audience: { mode: "people", userIds: [] },
+    });
+    expect(card.audience.mode).toBe("people");
+    expect([...card.audience.userIds].sort()).toEqual([bia.id, caio.id].sort());
+    expect(card.alsoWith).toEqual([actor("person", caio.id)]);
+  });
+});

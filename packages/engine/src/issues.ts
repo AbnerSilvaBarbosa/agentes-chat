@@ -30,7 +30,7 @@ import {
   publishUserEvent,
 } from "./events";
 import { cutText } from "./format";
-import { coAssigneesOf } from "./issue-assignees";
+import { type AssigneeChange, applyAssignees, checkAssignees, coAssigneesOf, planAssignees } from "./issue-assignees";
 import {
   allColumns,
   boardColumnsOf,
@@ -200,6 +200,10 @@ export interface IssueInput {
   projectId?: string | null;
   /** The board column it starts in (ADR 0176): the task takes that column's stage. */
   columnId?: string | null;
+  /** The whole list of people (and the one agent): the first person, or the agent, is the principal (ADR 0186). */
+  assignees?: WorkActor[];
+  /** People to put on the card beside whoever `assignee` or `assignees` names, up to five. */
+  addAssignees?: WorkActor[];
 }
 
 export type IssuePatch = Partial<{
@@ -320,22 +324,19 @@ async function conversationOf(db: Database, orgId: string, channelId: string) {
 
 /**
  * The columns for a chosen audience. "Only me" is a list of one. Who chooses stays in it unless they're an
- * administrator, who sees it anyway, and a person assigned to the task stays too: taking it from them is a surprise.
+ * administrator, who sees it anyway, and every person on the task stays too: taking it from them is a surprise.
  */
 async function chosenScope(
   db: Database,
   actor: IssueActor,
   orgId: string,
   audience: Audience,
-  assigneeId: string | null,
+  keep: string[],
 ): Promise<TaskScope> {
   if (audience.mode === "everyone") return WORKSPACE_SCOPE;
   const membership = actor.type === "person" ? await getMembership(db, actor.userId, orgId) : null;
   const self = actor.type === "person" && !(membership && can(membership, "administrator")) ? [actor.userId] : [];
-  const wanted = [...new Set([...self, ...(assigneeId ? [assigneeId] : []), ...audience.userIds])].slice(
-    0,
-    AUDIENCE_MAX,
-  );
+  const wanted = [...new Set([...self, ...keep, ...audience.userIds])].slice(0, AUDIENCE_MAX);
   const members = wanted.length
     ? await db
         .select({ id: organizationMembers.userId })
@@ -904,15 +905,20 @@ export async function createIssue(
   // step, its parent's.
   const madeIn = input.channelId ?? (actor.type === "agent" ? actor.channelId : null);
   const made = madeIn ? await conversationOf(db, orgId, madeIn) : null;
-  const assigned = input.assignee?.type === "person" ? input.assignee.id : null;
+  // Who is on the card, by the same rule a change later follows (ADR 0186).
+  const change: AssigneeChange = {
+    ...(input.assignees ? { assignees: input.assignees } : input.assignee ? { assignee: input.assignee } : {}),
+    ...(input.addAssignees ? { add: input.addAssignees } : {}),
+  };
+  const planned = planAssignees({ agentId: null, people: [] }, change);
   const scope: TaskScope = parent?.restricted
     ? parent
     : parent?.channelId
       ? { ...WORKSPACE_SCOPE, channelId: parent.channelId }
       : input.audience
-        ? await chosenScope(db, actor, orgId, input.audience, assigned)
+        ? await chosenScope(db, actor, orgId, input.audience, planned.people)
         : (made?.scope ?? { ...WORKSPACE_SCOPE, channelId: made?.tiedTo ?? input.channelId ?? null });
-  await checkAssignee(db, orgId, input.assignee, scope);
+  await checkAssignees(db, orgId, { agentId: null, people: [] }, change, scope);
   const project = input.projectId ? await projectForTask(db, orgId, input.projectId) : null;
   // Born in a column (ADR 0176): it takes that column's stage, and no `issue.moved` fires for a card starting there.
   const bornIn = input.columnId ? await columnForMove(db, orgId, input.columnId, input.projectId ?? null) : null;
@@ -936,8 +942,6 @@ export async function createIssue(
         boardRank: topRank(),
         ...(bornIn ? { status: bornIn.stage, columnId: bornIn.id } : {}),
         projectId: project?.id ?? null,
-        assigneeType: input.assignee?.type ?? null,
-        assigneeId: input.assignee?.id ?? null,
         labels: cleanLabels(input.labels) ?? [],
         dueDate: checkDate(input.dueDate) ?? null,
         githubUrl: checkGithubUrl(input.githubUrl),
@@ -953,6 +957,8 @@ export async function createIssue(
       })
       .returning();
     if (!issue) throw new Error("issue insert returned nothing");
+    // The one writer of who is on a card; the creation's history is its own `created` event.
+    await applyAssignees(tx, issue, change, author);
     await addActivity(tx, issue, {
       kind: "event",
       author,
@@ -972,9 +978,10 @@ export async function createIssue(
     row,
     uploaded.map((f) => f.id),
   );
-  const view = await one(db, (await reload(db, row)) ?? row);
+  const fresh = (await reload(db, row)) ?? row;
+  const view = await one(db, fresh);
   await announce(deps, orgId, view, "issue.created");
-  if (row.assigneeType === "person") await notifyIssueChanged(deps, author, null, row).catch(() => {});
+  if (fresh.assigneeType === "person") await notifyIssueChanged(deps, author, null, fresh).catch(() => {});
   // Routines on `issue.created` (ADR 0053 §6.5): never for an issue a routine or an unattended run created
   // (a routine would trigger itself), only for routines whose creator can see the issue, and with its id,
   // not its title (the run reads it with its own tools).
@@ -2242,7 +2249,7 @@ export async function setIssueAudience(
   const { db } = deps;
   const current = await findVisible(db, actor, orgId, { id: issueId });
   const assignee = current.assigneeType === "person" ? current.assigneeId : null;
-  const scope = await chosenScope(db, actor, orgId, audience, assignee);
+  const scope = await chosenScope(db, actor, orgId, audience, assignee ? [assignee] : []);
   const tied = (await tiedPeople(db, [current])).has(current.channelId ?? "");
   const unchanged = current.restricted
     ? scope.restricted && sameList(scope.audienceUserIds, current.audienceUserIds)
