@@ -1,8 +1,8 @@
-import { asc, type Database, inArray, type SQL, schema, sql } from "@agenteschat/db";
+import { and, asc, type Database, type Executor, eq, inArray, type SQL, schema, sql } from "@agenteschat/db";
 import { ValidationError } from "./errors";
-import type { WorkActor } from "./issues";
+import { checkAssignee, type TaskScope, type WorkActor } from "./issues";
 
-const { issueCoAssignees } = schema;
+const { issueCoAssignees, issues, users, agents } = schema;
 
 /**
  * Who is responsible on a card (ADR 0186). A card has at most one agent, which is always its principal, and people in
@@ -249,4 +249,116 @@ export function onCardSql(alias: string, userId: SQL): SQL {
   const t = sql.raw(alias);
   return sql`((${t}.assignee_type = 'person' and ${t}.assignee_id = ${userId})
     or exists (select 1 from ${issueCoAssignees} ic where ic.issue_id = ${t}.id and ic.user_id = ${userId}))`;
+}
+
+/**
+ * Whoever a change adds to a card must be a member who sees it (or a live agent), the same checks as before for a
+ * single assignee. Someone already on the card is not checked again, so a person who lost sight of it can be taken off.
+ */
+export async function checkAssignees(
+  db: Database,
+  orgId: string,
+  current: Assignment,
+  change: AssigneeChange,
+  scope: TaskScope,
+) {
+  const named = [...(change.assignees ?? []), ...(change.assignee ? [change.assignee] : []), ...(change.add ?? [])];
+  const seen = new Set<string>();
+  for (const who of named) {
+    const key = `${who.type}:${who.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const already = who.type === "agent" ? current.agentId === who.id : current.people.includes(who.id);
+    if (!already) await checkAssignee(db, orgId, who, scope);
+  }
+}
+
+/** Display names for the history: people by their account name, agents by theirs. Unknown ids read as their id. */
+async function namesFor(tx: Executor, orgId: string, states: Assignment[]) {
+  const people = unique(states.flatMap((s) => s.people));
+  const agentIds = unique(states.flatMap((s) => (s.agentId ? [s.agentId] : [])));
+  const names = new Map<string, string>();
+  if (people.length) {
+    for (const u of await tx.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, people))) {
+      names.set(`person:${u.id}`, u.name);
+    }
+  }
+  if (agentIds.length) {
+    const rows = await tx
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(and(eq(agents.orgId, orgId), inArray(agents.id, agentIds)));
+    for (const a of rows) names.set(`agent:${a.id}`, a.name);
+  }
+  return (who: WorkActor) => names.get(`${who.type}:${who.id}`) ?? who.id;
+}
+
+/**
+ * The one writer of who is responsible on a card, inside the caller's transaction. It locks the card's row, reads the
+ * people there, plans the change from that state, then writes the principal's two columns and the rows together, so two
+ * people editing at once merge instead of losing one, and a refusal writes nothing. It does not write the history: the
+ * caller records `events`, authored by whoever made the change.
+ */
+export async function applyAssignees(
+  tx: Executor,
+  issue: { id: string; orgId: string },
+  change: AssigneeChange,
+  author: WorkActor,
+): Promise<{ before: Assignment; after: Assignment; events: AssigneeEvent[] }> {
+  const [row] = await tx
+    .select({ assigneeType: issues.assigneeType, assigneeId: issues.assigneeId })
+    .from(issues)
+    .where(eq(issues.id, issue.id))
+    .for("update");
+  if (!row) throw new ValidationError("Issue not found", "not_found");
+  const rows = await tx
+    .select()
+    .from(issueCoAssignees)
+    .where(eq(issueCoAssignees.issueId, issue.id))
+    .orderBy(asc(issueCoAssignees.position));
+  const before = assignmentOf(
+    row,
+    rows.map((r) => r.userId),
+  );
+  const after = planAssignees(before, change);
+  const events = assigneeEvents(before, after, await namesFor(tx, issue.orgId, [before, after]));
+  const alsoWith = alsoWithOf(after);
+  const unchanged =
+    before.agentId === after.agentId &&
+    before.people.length === after.people.length &&
+    before.people.every((id, i) => id === after.people[i]);
+  if (unchanged) return { before, after, events };
+
+  await tx
+    .update(issues)
+    .set({ ...columnsOf(after), updatedAt: new Date() })
+    .where(eq(issues.id, issue.id));
+  const kept = new Set(alsoWith);
+  const gone = rows.filter((r) => !kept.has(r.userId)).map((r) => r.userId);
+  if (gone.length) {
+    await tx
+      .delete(issueCoAssignees)
+      .where(and(eq(issueCoAssignees.issueId, issue.id), inArray(issueCoAssignees.userId, gone)));
+  }
+  const had = new Map(rows.map((r) => [r.userId, r]));
+  for (const [position, userId] of alsoWith.entries()) {
+    if (had.has(userId)) {
+      if (had.get(userId)?.position !== position) {
+        await tx
+          .update(issueCoAssignees)
+          .set({ position })
+          .where(and(eq(issueCoAssignees.issueId, issue.id), eq(issueCoAssignees.userId, userId)));
+      }
+    } else {
+      await tx.insert(issueCoAssignees).values({
+        issueId: issue.id,
+        orgId: issue.orgId,
+        userId,
+        position,
+        addedByType: author.type,
+        addedById: author.id,
+      });
+    }
+  }
+  return { before, after, events };
 }

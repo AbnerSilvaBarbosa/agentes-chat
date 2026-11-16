@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { eq, schema, sql } from "@agenteschat/db";
-import { createIssue } from "../src";
-import { coAssigneesOf, onCardSql } from "../src/issue-assignees";
-import { addMember, type Fixture, setup } from "./fixtures";
+import { asc, eq, schema, sql } from "@agenteschat/db";
+import { createIssue, ValidationError } from "../src";
+import { applyAssignees, checkAssignees, coAssigneesOf, onCardSql } from "../src/issue-assignees";
+import { addMember, addUser, type Fixture, setup } from "./fixtures";
 
 let f: Fixture;
 afterEach(async () => {
@@ -89,5 +89,158 @@ describe("reading the people also with", () => {
     await f.db.delete(schema.issues).where(eq(schema.issues.id, card.id));
     const rows = await f.db.select().from(schema.issueCoAssignees);
     expect(rows.map((r) => r.issueId)).toEqual([kept.id]);
+  });
+});
+
+const actor = (type: "person" | "agent", id: string) => ({ type, id });
+
+/** The card's principal columns and its people rows, read back raw. */
+async function stateOf(issueId: string) {
+  const [row] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, issueId));
+  const rows = await f.db
+    .select()
+    .from(schema.issueCoAssignees)
+    .where(eq(schema.issueCoAssignees.issueId, issueId))
+    .orderBy(asc(schema.issueCoAssignees.position));
+  return { principal: [row?.assigneeType, row?.assigneeId], also: rows.map((r) => r.userId), rows };
+}
+
+const change = (issueId: string, orgId: string, c: Parameters<typeof applyAssignees>[2], by = f.owner.id) =>
+  f.db.transaction((tx) => applyAssignees(tx, { id: issueId, orgId }, c, actor("person", by)));
+
+describe("writing who is responsible", () => {
+  test("a person who is not a member or cannot see the card is refused", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const caio = await addMember(f.db, f.org.id, "member", "Caio");
+    const outsider = await addUser(f.db, "Fora");
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, { title: "fechado" });
+    const open = { agentId: null, people: [f.owner.id] };
+    const scope = { channelId: null, restricted: true, audienceUserIds: [f.owner.id, bia.id] };
+
+    // Not a member of the workspace.
+    const nonMember = await checkAssignees(f.db, f.org.id, open, { add: [actor("person", outsider.id)] }, scope).catch(
+      (e) => e,
+    );
+    expect(nonMember).toBeInstanceOf(ValidationError);
+    expect(nonMember.message).toBe("That person is not a member of this organization");
+    // A member the card is hidden from.
+    const hidden = await checkAssignees(f.db, f.org.id, open, { add: [actor("person", caio.id)] }, scope).catch(
+      (e) => e,
+    );
+    expect(hidden).toBeInstanceOf(ValidationError);
+    expect(hidden.code).toBe("issue.assignee_outside");
+    // The same through the whole list and through the hand-off.
+    for (const c of [{ assignees: [actor("person", caio.id)] }, { assignee: actor("person", caio.id) }]) {
+      expect((await checkAssignees(f.db, f.org.id, open, c, scope).catch((e) => e)).code).toBe(
+        "issue.assignee_outside",
+      );
+    }
+    // Someone who sees it passes; someone already on the card is not checked again (they can be taken off).
+    await checkAssignees(f.db, f.org.id, open, { add: [actor("person", bia.id)] }, scope);
+    await checkAssignees(
+      f.db,
+      f.org.id,
+      { agentId: null, people: [f.owner.id, caio.id] },
+      { assignees: [actor("person", caio.id)] },
+      scope,
+    );
+    // An agent that was archived does not exist for this.
+    await f.db.update(schema.agents).set({ archivedAt: new Date() }).where(eq(schema.agents.id, f.agent.id));
+    const archived = await checkAssignees(f.db, f.org.id, open, { assignee: actor("agent", f.agent.id) }, scope).catch(
+      (e) => e,
+    );
+    expect(archived.message).toBe("That agent does not exist in this organization");
+    expect(card.id).toBeTruthy();
+  });
+
+  test("the principal's columns and the people's rows change together and a refusal writes nothing", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, { title: "uma" });
+    const done = await change(card.id, f.org.id, {
+      assignees: [actor("person", bia.id), actor("person", caio.id), actor("person", f.owner.id)],
+    });
+    expect(done.after).toEqual({ agentId: null, people: [bia.id, caio.id, f.owner.id] });
+    expect(done.events.map((e) => e.event)).toEqual(["assigned", "assignee_added", "assignee_added"]);
+    expect(await stateOf(card.id)).toMatchObject({ principal: ["person", bia.id], also: [caio.id, f.owner.id] });
+
+    // An agent over a person principal: the agent is the principal and every person is also with.
+    await change(card.id, f.org.id, { assignee: actor("agent", f.agent.id) });
+    expect(await stateOf(card.id)).toMatchObject({
+      principal: ["agent", f.agent.id],
+      also: [bia.id, caio.id, f.owner.id],
+    });
+
+    // Two agents refused: nothing moves, not the columns and not the rows.
+    const before = await stateOf(card.id);
+    const refused = await change(card.id, f.org.id, { add: [actor("agent", crypto.randomUUID())] }).catch((e) => e);
+    expect(refused.code).toBe("issue.two_agents");
+    expect(await stateOf(card.id)).toEqual(before);
+    // Taking everyone off clears the principal and every row.
+    await change(card.id, f.org.id, { assignee: null });
+    expect(await stateOf(card.id)).toMatchObject({ principal: [null, null], also: [] });
+  });
+
+  test("rows are replaced as a set keeping who added the ones that stay", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio, dani] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+      await addMember(f.db, f.org.id, "member", "Dani"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, { title: "set" });
+    await change(card.id, f.org.id, {
+      assignees: [actor("person", f.owner.id), actor("person", bia.id), actor("person", caio.id)],
+    });
+    const first = await stateOf(card.id);
+    const biaRow = first.rows.find((r) => r.userId === bia.id);
+    expect(biaRow?.addedById).toBe(f.owner.id);
+    // Another person reorders and adds: Bia keeps who added her and when; the order is the new one.
+    await change(
+      card.id,
+      f.org.id,
+      {
+        assignees: [
+          actor("person", f.owner.id),
+          actor("person", caio.id),
+          actor("person", bia.id),
+          actor("person", dani.id),
+        ],
+      },
+      dani.id,
+    );
+    const second = await stateOf(card.id);
+    expect(second.also).toEqual([caio.id, bia.id, dani.id]);
+    const biaAfter = second.rows.find((r) => r.userId === bia.id);
+    expect(biaAfter?.addedById).toBe(f.owner.id);
+    expect(biaAfter?.createdAt.getTime()).toBe(biaRow?.createdAt.getTime() as number);
+    expect(second.rows.find((r) => r.userId === dani.id)?.addedById).toBe(dani.id);
+  });
+
+  test("two concurrent changes merge instead of losing one", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "corrida",
+      assignee: { type: "person", id: f.owner.id },
+    });
+    await Promise.all([
+      change(card.id, f.org.id, { add: [actor("person", bia.id)] }),
+      change(card.id, f.org.id, { add: [actor("person", caio.id)] }),
+    ]);
+    const state = await stateOf(card.id);
+    expect(state.principal).toEqual(["person", f.owner.id]);
+    expect([...state.also].sort()).toEqual([bia.id, caio.id].sort());
   });
 });

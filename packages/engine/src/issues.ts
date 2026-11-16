@@ -230,7 +230,7 @@ type AgentActor = { type: "agent"; agentId: string; channelId: string; runId?: s
 
 type IssueRow = typeof issues.$inferSelect;
 /** The columns that say who sees a task. */
-type TaskScope = Pick<IssueRow, "channelId" | "restricted" | "audienceUserIds">;
+export type TaskScope = Pick<IssueRow, "channelId" | "restricted" | "audienceUserIds">;
 /** What an agent's reach also reads of a task. */
 type TaskRef = TaskScope & Partial<Pick<IssueRow, "assigneeType" | "assigneeId" | "conversationChannelId">>;
 
@@ -263,7 +263,7 @@ function cleanLabels(labels: string[] | undefined) {
 }
 
 /** `scope`: who sees the task, which a person assigned to it must be among. */
-async function checkAssignee(
+export async function checkAssignee(
   db: Database,
   orgId: string,
   a: WorkActor | null | undefined,
