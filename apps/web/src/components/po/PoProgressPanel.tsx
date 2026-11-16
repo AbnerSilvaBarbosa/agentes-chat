@@ -210,12 +210,6 @@ function Pixels({ running }: { running: boolean }) {
   );
 }
 
-function elapsedText(t: ReturnType<typeof useTranslation>["t"], card: PoProgressCard, now: number) {
-  const { hours, minutes } = specElapsed(card, now);
-  if (hours > 0) return t("poProgress.elapsedHour", { hours, minutes });
-  return minutes > 0 ? t("poProgress.elapsedMin", { minutes }) : t("poProgress.elapsedNow");
-}
-
 /**
  * "Gerando spec": above every group, one row per card whose spec is queued or running, with the time it has waited and a
  * working mark that moves only while it runs. Not drawn at all when nothing is being written, so it costs nothing.
@@ -223,6 +217,11 @@ function elapsedText(t: ReturnType<typeof useTranslation>["t"], card: PoProgress
 function LiveSpecs({ items, now }: { items: LiveSpec[]; now: number }) {
   const { t } = useTranslation();
   const { org } = useOrg();
+  const elapsed = (card: PoProgressCard, at: number) => {
+    const { hours, minutes } = specElapsed(card, at);
+    if (hours > 0) return t("poProgress.elapsedHour", { hours, minutes });
+    return minutes > 0 ? t("poProgress.elapsedMin", { minutes }) : t("poProgress.elapsedNow");
+  };
   return (
     <section className="po-live" aria-label={t("poProgress.liveTitle")}>
       <GroupHeading level={3} title={t("poProgress.liveTitle")} count={items.length} />
@@ -239,8 +238,7 @@ function LiveSpecs({ items, now }: { items: LiveSpec[]; now: number }) {
                 <span className="po-row__number">#{card.number}</span> {card.title}
               </span>
               <span className="po-live__state">
-                {state === "running" ? t("poProgress.liveRunning") : t("poProgress.specQueued")} ·{" "}
-                {elapsedText(t, card, now)}
+                {state === "running" ? t("poProgress.liveRunning") : t("poProgress.specQueued")} · {elapsed(card, now)}
               </span>
             </Link>
           </li>
