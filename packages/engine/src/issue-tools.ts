@@ -915,7 +915,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
     {
       name: "create_issue",
       description:
-        "Create a task on this workspace's board: task, tarefa or backlog mean this board, never GitHub or another tool unless the person names it (criar tarefa no backlog). It takes a title, a description and acceptance criteria (a checklist), and optionally a priority, labels, a project, an assignee and a due date. No permission needed: when work should be tracked, create it; the person sees it with Undo.",
+        "Create a task on this workspace's board: task, tarefa or backlog mean this board, never GitHub or another tool unless the person names it (criar tarefa no backlog). It takes a title, a description and acceptance criteria (a checklist), and optionally a priority, labels, a project, an assignee and a due date. add_assignee puts more people on it beside the assignee (up to 5). No permission needed: when work should be tracked, create it; the person sees it with Undo.",
       scope: "issues:write",
       inputSchema: {
         type: "object",
@@ -930,6 +930,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           column: columnField,
           new_project: newProjectField,
           assignee: assigneeField,
+          add_assignee: peopleField("People to put on the card beside the assignee (handles, names or emails)."),
           due_date: { type: "string", maxLength: 10, description: "Due date as YYYY-MM-DD" },
           github_url: GITHUB_URL_FIELD,
           visible_to: visibleToField,
@@ -948,6 +949,13 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           if (await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId))
             return { content: SPEC_CREATE_REFUSAL, isError: true };
           const assignee = str(input.assignee) ? await assigneeOf(deps, ctx, str(input.assignee)) : undefined;
+          const add = await peopleOf(deps, ctx, "add_assignee", input.add_assignee);
+          if (add.some((a) => a.type === "agent"))
+            throw new Error(
+              assignee?.type === "agent"
+                ? TWO_AGENTS
+                : "add_assignee takes people; to hand the card to an agent put it in assignee",
+            );
           const reader = await rightHandReader(ctx);
           if (reader) {
             const refused = await rightHandTaskRefusal(deps, ctx, reader, assignee, input.visible_to);
@@ -964,8 +972,16 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           // assigned sees it too) or made where no person reads (the workspace's) takes only files all its readers
           // open already, never a copy.
           const readers: Audience | null = audience
-            ? audience.mode === "people" && assignee?.type === "person"
-              ? { mode: "people", userIds: [...new Set([...audience.userIds, assignee.id])] }
+            ? audience.mode === "people"
+              ? {
+                  mode: "people",
+                  userIds: [
+                    ...new Set([
+                      ...audience.userIds,
+                      ...[assignee, ...add].flatMap((a) => (a?.type === "person" ? [a.id] : [])),
+                    ]),
+                  ],
+                }
               : audience
             : (await nobodyReads(deps, ctx.channelId))
               ? { mode: "everyone" }
@@ -989,6 +1005,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
                 ...(projectId ? { projectId } : {}),
                 ...(column ? { columnId: column.id } : {}),
                 ...(assignee !== undefined ? { assignee } : {}),
+                ...(add.length ? { addAssignees: add } : {}),
                 ...(str(input.due_date) ? { dueDate: str(input.due_date) } : {}),
                 ...(str(input.github_url) ? { githubUrl: str(input.github_url) } : {}),
                 ...(audience ? { audience } : {}),

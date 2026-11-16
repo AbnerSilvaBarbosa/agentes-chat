@@ -7,6 +7,7 @@ import {
   createIssueToolSource,
   getIssue,
   grantScopes,
+  listIssues,
   listMembers,
   NEW_AGENT_DEFAULTS,
 } from "../src";
@@ -175,5 +176,54 @@ describe("the agents' tools put several people on a card", () => {
     // A card with nobody on it: the first person added is its principal.
     expect((await read(card.id)).assignee).toEqual(actor("person", bia.id));
     expect(caio.id).toBeTruthy();
+  });
+});
+
+describe("create_issue and the lines put people beside the assignee", () => {
+  test("create_issue with add_assignee puts people beside the assignee", async () => {
+    f = await setup();
+    const { bia, caio } = await team();
+    const { run } = await agentTools();
+    const made = await run("create_issue", { title: "em grupo", assignee: "me", add_assignee: ["@bia", "@caio"] });
+    expect(made.isError).toBe(false);
+    const view = await read((made.data as { issue: { id: string } }).issue.id);
+    expect(view.assignee).toEqual(actor("agent", f.agent.id));
+    expect(view.alsoWith).toEqual([actor("person", bia.id), actor("person", caio.id)]);
+    expect(made.content).toContain("(also with: Bia (@bia), Caio (@caio))");
+    // Without an assignee the first person is the principal and the others are also with.
+    const people = await run("create_issue", { title: "so gente", add_assignee: ["@bia", "@caio"] });
+    const second = await read((people.data as { issue: { id: string } }).issue.id);
+    expect(second.assignee).toEqual(actor("person", bia.id));
+    expect(second.alsoWith).toEqual([actor("person", caio.id)]);
+    // Two agents are refused and make no card.
+    const two = await run("create_issue", { title: "dois", assignee: "me", add_assignee: ["@qa"] });
+    expect(two.isError).toBe(true);
+    expect(two.content).toContain("at most one agent");
+    // A person who cannot see where the card is made is refused, and no card is made.
+    const secret = await createChannel(f.db, f.owner.id, f.org.id, { name: "secreto", visibility: "private" });
+    await addChannelMember(f.db, f.owner.id, f.org.id, secret.id, { agentId: f.agent.id });
+    await addChannelMember(f.db, f.owner.id, f.org.id, secret.id, { userId: bia.id });
+    const inSecret = (await agentTools(secret.id)).run;
+    const outside = await inSecret("create_issue", { title: "fechado", add_assignee: ["@bia", "@caio"] });
+    expect(outside.isError).toBe(true);
+    expect(outside.content).toContain("Add them to who sees it first");
+    expect(await listIssues(f.db, person(f.owner.id), f.org.id, {})).toHaveLength(2);
+  });
+
+  test("list_issues shows who is also with on a card's line", async () => {
+    f = await setup();
+    const { bia, caio } = await team();
+    const { run } = await agentTools();
+    await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "com gente",
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id), actor("person", caio.id)],
+    });
+    await createIssue(deps(), person(f.owner.id), f.org.id, { title: "sozinho", assignee: actor("agent", f.agent.id) });
+    const listed = await run("list_issues", {});
+    expect(listed.content).toContain("com gente");
+    expect(listed.content).toContain("(assignee: @dev (you)) (also with: Bia (@bia), Caio (@caio))");
+    const lone = listed.content.split("\n").find((l) => l.includes("sozinho")) ?? "";
+    expect(lone).toContain("(assignee: @dev (you))");
+    expect(lone).not.toContain("also with");
   });
 });
