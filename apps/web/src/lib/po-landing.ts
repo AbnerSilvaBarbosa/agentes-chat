@@ -14,10 +14,3 @@ export const rememberPoCompany = (userId: string, orgId: string, spaceId: string
 export function poLanding(companies: readonly { id: string }[], kept: string | null): string | null {
   return companies.find((c) => c.id === kept)?.id ?? companies[0]?.id ?? null;
 }
-
-/** `poLanding` over what this browser kept, and the choice kept in its place, so a gone company is replaced. */
-export function landOnPoCompany(userId: string, orgId: string, companies: readonly { id: string }[]): string | null {
-  const id = poLanding(companies, rememberedPoCompany(userId, orgId));
-  if (id) rememberPoCompany(userId, orgId, id);
-  return id;
-}
