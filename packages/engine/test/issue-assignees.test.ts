@@ -2,15 +2,23 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { orgTopic, type RealtimeEvent } from "@agenteschat/adapters";
 import { and, asc, eq, schema, sql } from "@agenteschat/db";
 import {
+  addChannelMember,
   askAgentToImplement,
+  companyDashboard,
   createAgent,
+  createChannel,
   createIssue,
+  createIssueProject,
+  createIssueSpace,
+  drainOutbox,
   getIssue,
   getIssueDetail,
   listIssueActivity,
   listIssues,
   NEW_AGENT_DEFAULTS,
+  NotFoundError,
   openTaskConversation,
+  openTasksBrief,
   setIssueAudience,
   updateIssue,
   ValidationError,
@@ -668,5 +676,185 @@ describe("asking an agent to implement a card", () => {
     const start = (await f.db.select().from(schema.messages)).filter((m) => m.meta?.issueWorkStart === true);
     expect(start).toHaveLength(1);
     expect(await f.db.select().from(schema.agentRuns)).toHaveLength(1);
+  });
+});
+
+describe("the readers of a card keep working with several people", () => {
+  test("every agent-side reader still works for a card with an agent and two people", async () => {
+    const seen: string[] = [];
+    f = await setup({
+      reply: (req) => {
+        seen.push(JSON.stringify(req.system));
+        return { chunks: ["Feito."] };
+      },
+    });
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    // A private channel the agent is not in: it reaches these cards only as their agent, from their conversation.
+    const secret = await createChannel(f.db, f.owner.id, f.org.id, { name: "secreto", visibility: "private" });
+    for (const u of [bia, caio]) await addChannelMember(f.db, f.owner.id, f.org.id, secret.id, { userId: u.id });
+    const withPeople = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "com gente",
+      channelId: secret.id,
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id), actor("person", caio.id)],
+    });
+    const alone = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "so o agente",
+      channelId: secret.id,
+      assignee: actor("agent", f.agent.id),
+    });
+
+    // What each reader says about a card, in the same words for both.
+    const observe = async (card: { id: string; number: number; title: string }) => {
+      const room = await openTaskConversation(f.db, person(f.owner.id), f.org.id, card.id);
+      const members = await f.db
+        .select()
+        .from(schema.channelMembers)
+        .where(and(eq(schema.channelMembers.channelId, room.channelId), eq(schema.channelMembers.agentId, f.agent.id)));
+      const asAgent = (channelId: string) => ({ type: "agent" as const, agentId: f.agent.id, channelId });
+      const inRoom = await getIssue(f.db, asAgent(room.channelId), f.org.id, { id: card.id });
+      const fromGeneral = await getIssue(f.db, asAgent(f.general.id), f.org.id, { id: card.id }).catch((e) => e);
+      const brief = (await openTasksBrief(f.db, f.org.id, f.agent.id, room.channelId, false)) ?? "";
+      return {
+        admitted: members.length,
+        reachesInRoom: inRoom.id === card.id,
+        hiddenFromGeneral: fromGeneral instanceof NotFoundError,
+        briefLists: brief.includes(`#${card.number} ${card.title} (todo`),
+        work: inRoom.work,
+      };
+    };
+    const [a, b] = [await observe(withPeople), await observe(alone)];
+    expect({ ...a }).toEqual({ ...b });
+    expect(a).toMatchObject({ admitted: 1, reachesInRoom: true, hiddenFromGeneral: true, briefLists: true });
+
+    // Asked to implement: the agent starts (status, work, run linked to the card) and its context says it is its task.
+    const asked = await askAgentToImplement(deps, f.owner.id, f.org.id, withPeople.id, f.agent.id);
+    expect(asked.status).toBe("in_progress");
+    expect(asked.work).toMatchObject({ agentId: f.agent.id, state: "running" });
+    expect(asked.alsoWith).toEqual([actor("person", bia.id), actor("person", caio.id)]);
+    expect((await f.db.select().from(schema.agentRuns)).map((r) => r.issueId)).toEqual([withPeople.id]);
+    await drainOutbox(f.db, f.handlers);
+    expect(seen.some((system) => system.includes(`# Your task: issue #${withPeople.number}`))).toBe(true);
+  });
+
+  test("the company dashboard counts the principal only", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const company = await createIssueSpace(deps, f.owner.id, f.org.id, { name: "Clínica Teo" });
+    const board = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Entregas", spaceId: company.id });
+    await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "dividido",
+      projectId: board.id,
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id), actor("person", caio.id)],
+    });
+    const d = await companyDashboard(f.db, f.owner.id, f.org.id, company.id, 30);
+    expect(d.total).toBe(1);
+    // One card, counted once, for its principal; the people also with are not rows of the Painel.
+    expect(d.assignees).toEqual([{ type: "agent", id: f.agent.id, name: f.agent.name, open: 1, done: 0 }]);
+    expect(d.unassigned).toBe(0);
+  });
+
+  test("a card moved to another board keeps its people", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const one = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Um" });
+    const two = await createIssueProject(deps, f.owner.id, f.org.id, { name: "Dois" });
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "muda de quadro",
+      projectId: one.id,
+      assignees: [actor("person", f.owner.id), actor("person", bia.id)],
+    });
+    const moved = await updateIssue(deps, person(f.owner.id), f.org.id, card.id, { projectId: two.id });
+    expect(moved.project?.id).toBe(two.id);
+    expect(moved.assignee).toEqual(actor("person", f.owner.id));
+    expect(moved.alsoWith).toEqual([actor("person", bia.id)]);
+    expect(await stateOf(card.id)).toMatchObject({ principal: ["person", f.owner.id], also: [bia.id] });
+  });
+
+  test("an archived agent as principal still shows the people also with", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "agente saiu",
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id)],
+    });
+    await f.db.update(schema.agents).set({ archivedAt: new Date() }).where(eq(schema.agents.id, f.agent.id));
+    const read = await getIssue(f.db, person(f.owner.id), f.org.id, { id: card.id });
+    expect(read.assignee).toEqual(actor("agent", f.agent.id));
+    expect(read.alsoWith).toEqual([actor("person", bia.id)]);
+    const listed = (await listIssues(f.db, person(f.owner.id), f.org.id, {})).find((i) => i.id === card.id);
+    expect(listed?.alsoWith).toEqual([actor("person", bia.id)]);
+  });
+
+  test("no sequence of changes leaves an agent that is not the principal", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const qa = await createAgent(f.db, f.owner.id, f.org.id, { name: "QA", handle: "qa" }, NEW_AGENT_DEFAULTS);
+    const crowd = [f.owner];
+    for (const n of ["A", "B", "C", "D", "E", "F"]) crowd.push(await addMember(f.db, f.org.id, "member", n));
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, { title: "caos" });
+    // A fixed seed: a failure repeats.
+    let seed = 20261116;
+    const next = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T>(list: T[]) => list[Math.floor(next() * list.length)] as T;
+    const anyone = () => {
+      const r = next();
+      if (r < 0.15) return actor("agent", f.agent.id);
+      if (r < 0.25) return actor("agent", qa.id);
+      return actor("person", pick(crowd).id);
+    };
+    const some = (max: number) => Array.from({ length: Math.floor(next() * (max + 1)) }, anyone);
+    const patches = [
+      () => ({ assignee: anyone() }),
+      () => ({ assignee: null }),
+      () => ({ assignees: some(8) }),
+      () => ({ addAssignees: some(4) }),
+      () => ({ removeAssignees: some(3) }),
+      () => ({ principal: anyone() }),
+      () => ({ assignee: anyone(), addAssignees: some(2), removeAssignees: some(2) }),
+    ];
+    let refused = 0;
+    let changed = 0;
+    for (let step = 0; step < 80; step++) {
+      const before = await stateOf(card.id);
+      try {
+        await updateIssue(deps, person(f.owner.id), f.org.id, card.id, pick(patches)());
+        changed++;
+      } catch (e) {
+        expect(e).toBeInstanceOf(ValidationError);
+        refused++;
+        // A refusal writes nothing.
+        expect(await stateOf(card.id)).toEqual(before);
+      }
+      const now = await stateOf(card.id);
+      const [type, id] = now.principal;
+      // Nobody is also with a card that has no principal; never more than five; the principal is not also with.
+      if (!type) expect(now.also).toEqual([]);
+      expect(now.also.length).toBeLessThanOrEqual(5);
+      if (type === "person") expect(now.also).not.toContain(id as string);
+      expect(new Set(now.also).size).toBe(now.also.length);
+      // An agent is on the card only as its principal: the view agrees with the columns, and people are all people.
+      const view = await getIssue(f.db, person(f.owner.id), f.org.id, { id: card.id });
+      expect(view.alsoWith.every((a) => a.type === "person")).toBe(true);
+      const seenAs: (string | null)[] = view.assignee ? [view.assignee.type, view.assignee.id] : [null, null];
+      expect(seenAs).toEqual([type ?? null, id ?? null]);
+    }
+    // The run did both: it changed the card and met refusals.
+    expect(changed).toBeGreaterThan(10);
+    expect(refused).toBeGreaterThan(3);
   });
 });
