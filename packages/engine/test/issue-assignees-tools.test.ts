@@ -90,6 +90,22 @@ describe("the agents' tools put several people on a card", () => {
     expect(view.alsoWith).toEqual([actor("person", caio.id)]);
   });
 
+  test("remove_assignee with an agent is refused and the card's agent stays", async () => {
+    f = await setup();
+    const { bia } = await team();
+    const { run } = await agentTools();
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "o agente fica",
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id)],
+    });
+    const out = await run("update_issue", { issue: "#1", remove_assignee: [`@${f.agent.handle}`] });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain("remove_assignee takes people");
+    const view = await read(card.id);
+    expect(view.assignee).toEqual(actor("agent", f.agent.id));
+    expect(view.alsoWith).toEqual([actor("person", bia.id)]);
+  });
+
   test("assignee naming an agent hands the card over and keeps the people", async () => {
     f = await setup();
     const { bia, qa } = await team();

@@ -1067,7 +1067,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           description: { type: "string", maxLength: 20000 },
           assignee: assigneeField,
           add_assignee: peopleField("People to put on the card beside whoever is on it (handles, names or emails)."),
-          remove_assignee: peopleField("People to take off the card."),
+          remove_assignee: peopleField("People to take off the card (never an agent: hand the card over or use none)."),
           labels: {
             type: "array",
             items: { type: "string", maxLength: 40 },
@@ -1114,6 +1114,10 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
               assignee?.type === "agent"
                 ? TWO_AGENTS
                 : "add_assignee takes people; to hand the card to an agent put it in assignee",
+            );
+          if (remove.some((a) => a.type === "agent"))
+            throw new Error(
+              "remove_assignee takes people; to take the agent off the card, hand it to a person in assignee or use none",
             );
           if (reader) {
             await getIssue(deps.db, { type: "person", userId: reader }, ctx.orgId, issueKey(str(input.issue)));
