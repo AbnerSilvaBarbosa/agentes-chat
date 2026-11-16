@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
+import { QueryClient } from "@tanstack/react-query";
 import { createHttpApi } from "../src/api/http-client";
 import { keys } from "../src/api/keys";
-import { poProgressQuery } from "../src/api/queries";
+import { applyIssueEvent, applyPoProposalEvent, poProgressQuery, UNREAD_REFRESH_MS } from "../src/api/queries";
 import type { PoProgress, PoProgressCard, PoProgressGroup } from "../src/api/types";
 import { columnsParam, specBadge, specReasonKey } from "../src/lib/po-progress";
 
@@ -123,5 +124,43 @@ describe("the progress through the client", () => {
     // The list's key gains the column filter only when it is set.
     expect(keys.issueList("o1", "")).toEqual(["org", "o1", "issues", "list", "", "", ""]);
     expect(keys.issueList("o1", "", "", "s1", "", "", "a|b")).not.toEqual(keys.issueList("o1", "", "", "s1"));
+  });
+});
+
+describe("the panel follows events", () => {
+  afterEach(() => jest.useRealTimers());
+
+  const seeded = () => {
+    const qc = new QueryClient();
+    qc.setQueryData(keys.poProgress("o1", "s1"), progress);
+    qc.setQueryData(keys.poProgress("o2", "s1"), progress);
+    return qc;
+  };
+  const stale = (qc: QueryClient, orgId = "o1") => qc.getQueryState(keys.poProgress(orgId, "s1"))?.isInvalidated;
+
+  test("a card proposal update reads the panel at once", () => {
+    const qc = seeded();
+    applyPoProposalEvent(qc, "o1", { type: "card.proposal.updated" });
+    expect(stale(qc)).toBe(true);
+    // Another workspace's panel is left alone.
+    expect(stale(qc, "o2")).toBe(false);
+  });
+
+  test("any other event leaves the panel alone", () => {
+    const qc = seeded();
+    applyPoProposalEvent(qc, "o1", { type: "message.created" });
+    applyPoProposalEvent(qc, "o1", { type: "calendar.proposal.updated" });
+    expect(stale(qc)).toBe(false);
+  });
+
+  test("a task event reads the panel again through the issues keys, once per burst", () => {
+    jest.useFakeTimers();
+    const qc = seeded();
+    applyIssueEvent(qc, "o1", { type: "issue.updated" });
+    applyIssueEvent(qc, "o1", { type: "issue.updated" });
+    expect(stale(qc)).toBe(false);
+    jest.advanceTimersByTime(UNREAD_REFRESH_MS);
+    expect(stale(qc)).toBe(true);
+    expect(stale(qc, "o2")).toBe(false);
   });
 });

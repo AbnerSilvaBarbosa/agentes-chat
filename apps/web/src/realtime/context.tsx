@@ -26,6 +26,7 @@ import {
   applyMachineEvent,
   applyMembershipEvent,
   applyNotificationEvent,
+  applyPoProposalEvent,
   applyReactions,
   applyReceiptEvent,
   applyTyping,
@@ -830,6 +831,8 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       // A PO's card proposal was decided, or its spec moved on (ADR 0185): its card, whole.
       if (event.type === "card.proposal.updated")
         cacheMessageMeta(qc, orgId, event.channelId, event.messageId, () => ({ cardProposal: event.proposal }));
+      // ...and the PO chat's progress panel reads again (ADR 0185 addendum).
+      applyPoProposalEvent(qc, orgId, event);
       if (event.type === "card.delegate") cacheCardDelegate(qc, orgId, event, event.delegate);
       // A right hand's card of a workspace change was applied, dismissed or sent on: the whole card.
       if (event.type === "action_card.updated") cacheActionCard(qc, orgId, event, event.card);

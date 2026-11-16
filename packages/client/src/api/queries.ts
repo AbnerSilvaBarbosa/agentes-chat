@@ -6412,6 +6412,15 @@ export function applyIssueEvent(qc: QueryClient, orgId: string, event: { type: s
     readOncePerBurst(`${orgId}:unread-tasks`, () => void qc.invalidateQueries({ queryKey: keys.unreadTasks(orgId) }));
 }
 
+/**
+ * A PO's card proposal changed (ADR 0185 addendum): its spec was queued, started, ended or failed, or it was decided.
+ * The PO chat's progress panel reads again at once, not after a burst: the proposal's own change is what it shows. The
+ * card itself moving column is a task event, which `applyIssueEvent` covers through the issues prefix.
+ */
+export function applyPoProposalEvent(qc: QueryClient, orgId: string, event: { type: string }) {
+  if (event.type === "card.proposal.updated") void qc.invalidateQueries({ queryKey: keys.poProgress(orgId) });
+}
+
 const taskNoticeOf = (event: { type: string }) =>
   Boolean((event as { notification?: { source?: { issueId?: unknown } } }).notification?.source?.issueId);
 
