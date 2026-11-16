@@ -115,6 +115,25 @@ describe("the progress panel", () => {
     expect(param("columns")).toBe("especificar");
   });
 
+  test("the tail group's Ver todos asks for every one of its columns joined by a bar", async () => {
+    const items = Array.from({ length: 8 }, (_, i) => card({ id: `t${i}`, number: i + 1 }));
+    await show(
+      progress([
+        group({
+          key: "tail",
+          kind: "tail",
+          stage: "in_progress",
+          items,
+          count: 10,
+          columns: ["em desenvolvimento", "revisão qa"],
+        }),
+      ]),
+    );
+    const more = screen().getByRole("link", { name: "Ver todos" });
+    const url = new URL(more.getAttribute("href") ?? "", "http://x");
+    expect(url.searchParams.get("columns")?.replace(/^"|"$/g, "")).toBe("em desenvolvimento|revisão qa");
+  });
+
   test("a group with every card listed has no Ver todos", async () => {
     await show(progress([group({ items: [card()] })]));
     expect(screen().queryByRole("link", { name: "Ver todos" })).toBeNull();
@@ -162,13 +181,16 @@ describe("the progress panel", () => {
           items: [
             card({ id: "a", number: 1, spec: { state: "failed", page: null, error: "no_spec_page" } }),
             card({ id: "b", number: 2, spec: { state: "failed", page: null, error: "o modelo recusou" } }),
+            card({ id: "c", number: 3, spec: { state: "stopped", page: null, error: "stopped" } }),
           ],
         }),
       ]),
     );
     const specs = [...document.querySelectorAll(".po-row__spec")].map((e) => e.textContent);
     expect(specs[0]).toBe("Spec falhou: a execução terminou sem salvar a spec na wiki");
-    expect(specs[1]).toBe("Spec falhou: o modelo recusou");
+    // Free text is never shown to a viewer: any code that is not a known one reads as a plain failure.
+    expect(specs[1]).toBe("Spec falhou: a execução falhou");
+    expect(specs[2]).toBe("Spec falhou: foi interrompida");
   });
 
   test("the header links to the company's board", async () => {

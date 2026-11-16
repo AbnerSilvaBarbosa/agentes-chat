@@ -82,10 +82,10 @@ describe("a card's spec badge", () => {
     expect(specBadge(card(null), todo)).toBeNull();
   });
 
-  test("a failure's reason is a known code's words, a stop's own words, or the run's text as written", () => {
+  test("a failure's reason is a known code's words, a stop's own words, or a plain failure for any other text", () => {
     expect(specReasonKey("no_spec_page")).toBe("poCard.specReason.no_spec_page");
     expect(specReasonKey(null)).toBe("poCard.specReason.stopped");
-    expect(specReasonKey("the model refused")).toBeNull();
+    expect(specReasonKey("the model refused")).toBe("poCard.specReason.failed");
   });
 
   test("columnsParam joins a group's keys with a bar", () => {

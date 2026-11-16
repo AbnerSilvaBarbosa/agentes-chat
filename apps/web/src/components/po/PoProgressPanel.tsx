@@ -40,11 +40,10 @@ function SpecLine({ card, group }: { card: PoProgressCard; group: PoProgressGrou
         )}
       </p>
     );
-  const key = specReasonKey(badge.reason);
   return (
     <p className="po-row__spec po-row__spec--failed ac-iconline">
       <Icon name="alert" size={14} />
-      <span>{t("poProgress.specFailed", { reason: key ? t(key) : badge.reason })}</span>
+      <span>{t("poProgress.specFailed", { reason: t(specReasonKey(badge.reason)) })}</span>
     </p>
   );
 }

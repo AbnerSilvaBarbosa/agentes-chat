@@ -36,11 +36,11 @@ export type SpecReasonKey = (typeof SPEC_REASONS)[keyof typeof SPEC_REASONS];
 
 /**
  * The words key of a spec failure's reason: a known code has its own sentence, a stop with no reason reads "stopped",
- * any other text is the run's own and has no key (null: show it as written).
+ * any other text reads as a plain failure: free text is never shown, the card's viewers are not the one who asked.
  */
-export function specReasonKey(reason: string | null): SpecReasonKey | null {
+export function specReasonKey(reason: string | null): SpecReasonKey {
   if (!reason) return SPEC_REASONS.stopped;
-  return Object.hasOwn(SPEC_REASONS, reason) ? SPEC_REASONS[reason as keyof typeof SPEC_REASONS] : null;
+  return Object.hasOwn(SPEC_REASONS, reason) ? SPEC_REASONS[reason as keyof typeof SPEC_REASONS] : SPEC_REASONS.failed;
 }
 
 /** The `columns` the task list is asked for to see a whole group: its keys joined by a bar (`?columns=a|b`). */
