@@ -111,3 +111,28 @@ A card's spec is three wiki pages, the form the company's wiki already uses, sav
 still read as a company's folder by the PO chat's scope, so pages already there stay hidden from other companies.
 The proposal card shows its summary, criteria and board above its buttons, and the PO's summary is two or three
 sentences, with the detail in the criteria.
+
+## Addendum: the progress panel
+
+A company's PO chat has, at its right, a panel with the company's open cards by stage, so nobody has to ask the PO where
+a card stands. It replaces the agent's own sidebar in that chat (the PO's page still opens from its name): a column on a
+wide window, open at first and remembered per person, and on a narrow one a sheet over the chat that the header's
+button opens.
+
+- **The read.** `poProgress` in `packages/engine/src/po-progress.ts`, behind
+  `GET /api/app/organizations/{orgId}/po/companies/{spaceId}/progress`. Nothing is stored. The cards are the ones the
+  reader sees (ADR 0151); canceled cards and the cards of archived boards are in no number; done cards are one count,
+  never rows. The groups follow the columns of the company's boards (`boardColumnsOf`) in board order: each open
+  column up to "Ready for dev" is a group (a board without that column: its to-do columns), the same name on several
+  boards is one group (`columnKey`), and every later open column is one tail group, "Em andamento até Concluído". A
+  group lists 8 cards, longest in the column first (`issues.column_since`), and counts all of them. Each card carries
+  its board, its spec state and reason (`po_card_proposals.spec_*`) and its spec page when the reader may open it.
+- **No new event.** A card changing column is `updateIssue`'s `issue.updated`, announced to whoever sees the task, which
+  the app already hears and which reads the issues query keys again once per burst (at most about two seconds). A
+  spec being queued, started, finished or failed is `card.proposal.updated` on the PO chat's channel, open whenever the
+  panel is, and reads the panel at once (`applyPoProposalEvent`). The panel never polls.
+- **"Ver todos".** The task list takes `?columns=a|b` (the groups' `columnKey`s, with `?space=`): a name in lower case, or
+  `stage:<stage>` for a column with no name. `listIssues` filters by the effective column of each task in one
+  statement (`columnKeys`), and Tarefas shows the company's tasks in those columns with a chip that clears only the
+  filter.
+- **Out of scope.** The phone and the desktop shell, dragging a card in the panel, and cards of other companies.
