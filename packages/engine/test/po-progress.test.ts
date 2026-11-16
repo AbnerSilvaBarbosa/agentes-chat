@@ -296,6 +296,135 @@ describe("poProgress", () => {
     expect(p.groups[0]?.count).toBe(1);
   });
 
+  test("a board that follows the workspace's column set is grouped by the stage columns", async () => {
+    f = await setup();
+    const c = await company();
+    const [row] = await f.db
+      .insert(schema.issueProjects)
+      .values({ orgId: f.org.id, name: "Sem colunas", spaceId: c.spaceId })
+      .returning();
+    const projectId = must(row).id;
+    const task = (title: string, status: "todo" | "in_progress") =>
+      f.db.insert(schema.issues).values({
+        orgId: f.org.id,
+        number: ++counter,
+        title,
+        projectId,
+        status,
+        createdByType: "person",
+        createdById: f.owner.id,
+      });
+    await task("A fazer", "todo");
+    await task("Andando", "in_progress");
+    const p = await read(c.spaceId);
+    expect(p.groups.map((g) => [g.key, g.count])).toEqual([
+      ["stage:todo", 1],
+      ["tail", 1],
+    ]);
+    expect(group(p, "stage:todo").items.map((i) => i.title)).toEqual(["A fazer"]);
+  });
+
+  test("the done count leaves out a hidden, an archived board's and another company's done card", async () => {
+    f = await setup();
+    const member = await addMember(f.db, f.org.id, "member", "Bia");
+    const c = await company();
+    const other = await company("Outra");
+    const b = await c.board("Entregas");
+    const old = await c.board("Velho");
+    const elsewhere = await other.board("De fora");
+    await b.card("Feito", "Concluído");
+    await b.card("Só do dono", "Concluído", { restricted: true, audienceUserIds: [f.owner.id] });
+    await old.card("No arquivado", "Concluído");
+    await elsewhere.card("Da outra", "Concluído");
+    await f.db.update(schema.issueProjects).set({ archivedAt: new Date() }).where(eq(schema.issueProjects.id, old.id));
+    expect((await read(c.spaceId, member.id)).done).toBe(1);
+    expect((await read(c.spaceId)).done).toBe(2);
+  });
+
+  test("a stopped spec carries its state and the stopped code", async () => {
+    f = await setup();
+    const c = await company();
+    const b = await c.board("Entregas");
+    const card = await b.card("Parou", "Especificar");
+    await f.db.insert(schema.poCardProposals).values({
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      requesterUserId: f.owner.id,
+      channelId: crypto.randomUUID(),
+      spaceId: c.spaceId,
+      projectId: b.id,
+      title: "Parou",
+      status: "confirmed",
+      issueId: card.id,
+      specState: "stopped",
+      specError: "stopped",
+    });
+    const item = must(group(await read(c.spaceId), "especificar").items[0]);
+    expect(item.spec).toEqual({ state: "stopped", page: null, error: "stopped" });
+  });
+
+  test("a spec's reason is a fixed code, never the text the proposal holds", async () => {
+    f = await setup();
+    const c = await company();
+    const b = await c.board("Entregas");
+    const card = await b.card("Falhou", "Especificar");
+    await f.db.insert(schema.poCardProposals).values({
+      orgId: f.org.id,
+      agentId: f.agent.id,
+      requesterUserId: f.owner.id,
+      channelId: crypto.randomUUID(),
+      spaceId: c.spaceId,
+      projectId: b.id,
+      title: "Falhou",
+      status: "confirmed",
+      issueId: card.id,
+      specState: "failed",
+      specError: "token sk-secret rejected by the provider",
+    });
+    const item = must(group(await read(c.spaceId), "especificar").items[0]);
+    expect(item.spec).toEqual({ state: "failed", page: null, error: "failed" });
+  });
+
+  test("a to-do column listed after Ready for dev still has its cards in a group, none dropped", async () => {
+    f = await setup();
+    const c = await company();
+    const b = await c.board("Estranho", [
+      ["Especificar", "todo"],
+      ["Ready for dev", "in_progress"],
+      ["Voltou", "todo"],
+      ["Concluído", "done"],
+    ]);
+    await b.card("Perdido", "Voltou");
+    await b.card("Normal", "Especificar");
+    const p = await read(c.spaceId);
+    // The board draws the stages in order, so the to-do column is a group of its own; either way every open card counts once.
+    expect(p.groups.reduce((n, g) => n + g.count, 0)).toBe(2);
+    expect(p.groups.flatMap((g) => g.items.map((i) => i.title)).sort()).toEqual(["Normal", "Perdido"]);
+  });
+
+  test("a key that is a head column on one board is that group on every board, list and count alike", async () => {
+    f = await setup();
+    const c = await company();
+    const first = await c.board("Site", [
+      ["Revisão", "todo"],
+      ["Ready for dev", "in_progress"],
+      ["Concluído", "done"],
+    ]);
+    const second = await c.board("App", [
+      ["Ready for dev", "in_progress"],
+      ["Revisão", "in_review"],
+      ["Concluído", "done"],
+    ]);
+    await first.card("Do site", "Revisão");
+    await second.card("Do app", "Revisão");
+    const p = await read(c.spaceId);
+    expect(group(p, "revisão").count).toBe(2);
+    expect(group(p, "revisão").columns).toEqual(["revisão"]);
+    const tail = group(p, "tail");
+    expect(tail.count).toBe(0);
+    expect(tail.columns).not.toContain("revisão");
+  });
+
   test("a company of another workspace is not found", async () => {
     f = await setup();
     const [org] = await f.db.insert(schema.organizations).values({ name: "Outra" }).returning();

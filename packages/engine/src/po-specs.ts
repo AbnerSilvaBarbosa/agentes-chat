@@ -174,7 +174,7 @@ export async function pumpSpecs(deps: SpecDeps, spaceId: string): Promise<number
 
 /** The reasons a spec is stored with: a short fixed code, never the run's own error text (it can hold anything). */
 const SPEC_CODES = new Set(["po_missing", "card_gone", "no_spec_page", "run_missing", "stopped", "failed"]);
-const specCodeOf = (error: string) => (SPEC_CODES.has(error) ? error : "failed");
+export const specCodeOf = (error: string) => (SPEC_CODES.has(error) ? error : "failed");
 
 /** Why a spec did not finish, as the card's comment and the PO chat say it (`specError` holds one of the fixed codes). */
 export function specReasonText(code: string | null): string {

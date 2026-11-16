@@ -3,6 +3,7 @@ import { NotFoundError } from "./errors";
 import { boardColumnsOf, columnKey, effectiveColumnSql } from "./issue-columns";
 import type { IssueStatus } from "./issues";
 import { requireActiveMembership } from "./organizations";
+import { specCodeOf } from "./po-specs";
 import { taskSeenSql } from "./task-access";
 
 /**
@@ -24,7 +25,7 @@ export interface PoProgressSpec {
   state: "queued" | "running" | "done" | "failed" | "stopped";
   /** The spec's wiki page, when it exists and is not deleted or restricted. */
   page: { slug: string; title: string } | null;
-  /** A fixed code (`po_missing`, `stopped`…) or the run's short reason; null while nothing failed. */
+  /** One of the fixed codes (`po_missing`, `stopped`…, anything else reads `failed`), never free text; null while nothing failed. */
   error: string | null;
 }
 
@@ -70,6 +71,7 @@ interface Layout {
  * The groups a board's columns stand for, in board order: every open column up to and including "Ready for dev" (any
  * capitals) is its own group; every open column after it is the tail. A board without that column has its to-do
  * columns as groups and its in-progress and in-review ones as the tail. Done and canceled columns are never a group.
+ * After Ready for dev, a to-do column is in the tail too: no open card is left out of every group.
  */
 function layoutOf(columns: { name: string | null; stage: IssueStatus }[]): Layout {
   const ready = columns.findIndex((c) => c.name?.trim().toLowerCase() === READY_FOR_DEV);
@@ -79,7 +81,7 @@ function layoutOf(columns: { name: string | null; stage: IssueStatus }[]): Layou
     head: heads
       .filter((c) => OPEN_STAGES.includes(c.stage))
       .map((c) => ({ key: columnKey(c), name: c.name?.trim() || null, stage: c.stage })),
-    tail: new Set(tails.filter((c) => TAIL_STAGES.includes(c.stage)).map(columnKey)),
+    tail: new Set(tails.filter((c) => (ready >= 0 ? OPEN_STAGES : TAIL_STAGES).includes(c.stage)).map(columnKey)),
   };
 }
 
@@ -118,7 +120,6 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
 
   // The groups, from each board's own columns: head groups merge by key in the order each is first met, every
   // board's tail is the one tail group.
-  const layouts = new Map<string, Layout>();
   const heads = new Map<string, PoProgressGroup>();
   const tail: PoProgressGroup = {
     key: "tail",
@@ -132,7 +133,6 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
   const tailKeys = new Set<string>();
   for (const board of boards) {
     const layout = layoutOf(await boardColumnsOf(db, orgId, board.id));
-    layouts.set(board.id, layout);
     for (const h of layout.head)
       if (!heads.has(h.key))
         heads.set(h.key, {
@@ -146,7 +146,9 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
         });
     for (const key of layout.tail) tailKeys.add(key);
   }
-  tail.columns = [...tailKeys];
+  // A key is one group on every board (the task list is asked for by key): a key that is a head column on any board
+  // is that head group wherever it sits, so the group's count and its "Ver todos" list are the same cards.
+  for (const key of heads.keys()) tailKeys.delete(key);
   const groups = [...heads.values(), tail];
   if (boards.length === 0) return { space, groups: [], done: 0 };
 
@@ -172,14 +174,10 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
   );
 
   for (const r of rows) {
-    const layout = layouts.get(r.project_id);
     const key = columnKey({ name: r.column_name, stage: r.column_stage ?? r.status });
-    const group = layout?.head.some((h) => h.key === key)
-      ? heads.get(key)
-      : TAIL_STAGES.includes(r.status)
-        ? tail
-        : undefined;
-    if (!group) continue;
+    // Every open card has a group: its key's head group, else the tail.
+    const group = heads.get(key) ?? tail;
+    if (group === tail) tailKeys.add(key);
     group.count += 1;
     if (group.items.length >= PO_PROGRESS_GROUP_ROWS) continue;
     const page = r.page_slug ? { slug: r.page_slug, title: r.page_title ?? "" } : null;
@@ -191,11 +189,12 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
       boardName: r.project_name,
       since: new Date(r.column_since).toISOString(),
       spec: r.spec_state
-        ? { state: r.spec_state, page, error: r.spec_error }
+        ? { state: r.spec_state, page, error: r.spec_error ? specCodeOf(r.spec_error) : null }
         : page
           ? { state: "done", page, error: null }
           : null,
     });
   }
+  tail.columns = [...tailKeys];
   return { space, groups, done: doneRow?.done ?? 0 };
 }
