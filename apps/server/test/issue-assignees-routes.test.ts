@@ -126,6 +126,31 @@ test("PATCH refuses a sixth person, two agents and a non-member with their codes
   expect(still.alsoWith).toEqual([]);
 });
 
+test("POST refuses two agents and a sixth person also with, and makes no card", async () => {
+  const { ids, api, agentId, owner, orgId } = await team();
+  const before = async () => ((await (await api("/issues")).json()) as { issues: Card[] }).issues.length;
+  const count = await before();
+  const two = await api("/issues", {
+    json: { title: "dois", assignees: [who("agent", agentId), who("agent", crypto.randomUUID())] },
+  });
+  expect(two.status).toBe(400);
+  expect(await codeOf(two)).toBe("issue.two_agents");
+
+  const crowd = [];
+  for (const n of ["a", "b", "c", "d", "e"]) {
+    crowd.push(await idOf(await joinByInvitation(t, owner, orgId, `${n}@example.com`)));
+  }
+  // The principal and six people also with: the sixth is one too many.
+  const sixth = await api("/issues", {
+    json: {
+      title: "demais",
+      assignees: [ids.owner, ...crowd, ids.bia].map((id) => who("person", id)),
+    },
+  });
+  expect(sixth.status).toBe(400);
+  expect(await before()).toBe(count);
+});
+
 test("PATCH assignee naming an agent keeps the people", async () => {
   const { ids, make, patch, agentId } = await team();
   const card = await make({ title: "passa ao agente", assignees: [who("person", ids.owner), who("person", ids.bia)] });
