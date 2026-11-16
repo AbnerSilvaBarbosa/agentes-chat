@@ -20,6 +20,7 @@ import { ErrorState } from "@/components/Loading";
 import { NavToggle } from "@/components/NavDrawer";
 import { useOrg } from "@/components/org-context";
 import { ProfileTrigger } from "@/components/ProfileCard";
+import { PoProgressPanel } from "@/components/po/PoProgressPanel";
 import { LetMeTalkButton } from "@/components/ReachLines";
 import { RightHandIntro } from "@/components/RightHandIntro";
 import { HeaderSearch } from "@/components/search/HeaderSearch";
@@ -162,9 +163,9 @@ export function DmPage({
               iconOnly
               icon="sidebar"
               className="channel__icon dm-side-toggle"
-              aria-label={t("agentSide.label")}
+              aria-label={t(po ? "poProgress.label" : "agentSide.label")}
               aria-pressed={side.open}
-              title={t(side.open ? "agentSide.hide" : "agentSide.show")}
+              title={po ? t("poProgress.label") : t(side.open ? "agentSide.hide" : "agentSide.show")}
               onClick={side.toggle}
             />
           )}
@@ -195,6 +196,14 @@ export function DmPage({
           : setup && agent
             ? { intro: <AgentSetupIntro agent={agent} /> }
             : {}),
+        // The PO chat's right column is the company's progress, where an agent's own sidebar would be.
+        ...(po
+          ? {
+              sidePanel: ({ onClose }: { onClose?: () => void }) => (
+                <PoProgressPanel spaceId={po.spaceId} onClose={onClose} />
+              ),
+            }
+          : {}),
         dmAgentId: agent?.id,
         dmPersonId: person?.userId,
         locked:

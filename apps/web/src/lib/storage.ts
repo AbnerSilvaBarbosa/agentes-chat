@@ -70,6 +70,8 @@ export const STORAGE_KEYS = {
   membersColumn: "agentes.members.column",
   /** Prefix (`.<user id>.<org id>`): "1" or "0", the person opened or closed the sidebar of a DM with an agent there. */
   dmSidebar: "agentes.dm.sidebar",
+  /** Prefix (`.<user id>.<org id>`): "1" or "0", the person opened or closed the progress panel of a PO chat there. */
+  poSidebar: "agentes.po.sidebar",
   /** Offline-computer notices the person closed (`machineId@offlineSince`), until that computer comes back. */
   outagesDismissed: "agentes.outages.dismissed",
   /** The workspace computer's notice the person closed (`setupNoticeKey`), until its state changes. */

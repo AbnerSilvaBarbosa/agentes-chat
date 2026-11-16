@@ -472,6 +472,12 @@ export interface ChannelChrome {
   composerReplacement?: ReactNode;
   /** Under the composer (a mission someone only reads: "para pedir algo, peça para participar"). */
   composerNote?: ReactNode;
+  /**
+   * A DM with an agent that has something else to show in the column at its right (the PO chat's progress panel, ADR
+   * 0185 addendum): drawn where the agent's sidebar would be, a column on a wide window; `onClose` is given when it
+   * floats over the chat. The header's sidebar toggle opens and closes it.
+   */
+  sidePanel?: (p: { onClose?: () => void }) => ReactNode;
   /** A thread in the panel beside its channel: a section, not the page's main. */
   panel?: boolean;
   /** A thread view where a person's reply makes it a "Responder" thread (`openThread` on the post). */
@@ -1003,7 +1009,7 @@ function ChannelView({
   }, [draftKey]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const membersColumn = useMembersColumn();
-  const dmSidebar = useDmSidebar();
+  const dmSidebar = useDmSidebar(Boolean(chrome?.sidePanel));
   // Opened from a sidebar row's "Adicionar pessoas ou agentes": straight to adding, and closing that closes it all.
   const [addFirst, setAddFirst] = useState(false);
   // The members column's "Adicionar pessoa ou agente": the details' add flow alone, as from a sidebar row.
@@ -2971,10 +2977,19 @@ function ChannelView({
                   ) : (
                     side &&
                     dmAgent &&
-                    dmSidebar.sheet && <AgentSidebar agent={dmAgent} onClose={dmSidebar.closeSheet} />
+                    dmSidebar.sheet &&
+                    (chrome?.sidePanel ? (
+                      chrome.sidePanel({ onClose: dmSidebar.closeSheet })
+                    ) : (
+                      <AgentSidebar agent={dmAgent} onClose={dmSidebar.closeSheet} />
+                    ))
                   )}
                   {side && dmAgent && side.docked && !dmSidebar.sheet ? (
-                    <AgentSidebar agent={dmAgent} />
+                    chrome?.sidePanel ? (
+                      chrome.sidePanel({})
+                    ) : (
+                      <AgentSidebar agent={dmAgent} />
+                    )
                   ) : (
                     !chrome &&
                     membersColumn.column && (

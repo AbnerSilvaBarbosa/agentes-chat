@@ -11,10 +11,10 @@ export const DM_SIDE_WIDE_QUERY = "(min-width: 1100px)";
 /**
  * A column on the right of a conversation: open by default at `openQuery`, closed below it, the person's last choice
  * in this workspace wins. A personal workspace starts it closed at every width (ADR 0159 §3): only a choice never
- * saved follows the mode, so a saved one (from either mode) still wins. At `sheetQuery` it isn't a column: it opens
+ * saved follows the mode (unless `openAlways`), so a saved one (from either mode) still wins. At `sheetQuery` it isn't a column: it opens
  * over the conversation, and stays only until it closes.
  */
-function useSideColumn(prefix: string, sheetQuery: string, openQuery: string) {
+function useSideColumn(prefix: string, sheetQuery: string, openQuery: string, openAlways = false) {
   const { org, me } = useOrg();
   const compact = useMediaQuery(sheetQuery);
   const desktop = useMediaQuery(openQuery);
@@ -22,7 +22,8 @@ function useSideColumn(prefix: string, sheetQuery: string, openQuery: string) {
   // The key in the state: another workspace or person reads its own choice.
   const [saved, setSaved] = useState(() => ({ key, value: storage.get(key) }));
   const value = saved.key === key ? saved.value : storage.get(key);
-  const byDefault = desktop && !isPersonal(org);
+  // `openAlways`: a column that is the screen's point (the PO chat's progress) is open at first in any workspace.
+  const byDefault = desktop && (openAlways || !isPersonal(org));
   const column = !compact && (value === null ? byDefault : value === "1");
   const [sheet, setSheet] = useState(false);
   const toggle = useCallback(() => {
@@ -38,5 +39,14 @@ function useSideColumn(prefix: string, sheetQuery: string, openQuery: string) {
 /** A channel's members, as the header's toggle shows them: a column, or on a phone a sheet over the channel. */
 export const useMembersColumn = () => useSideColumn(STORAGE_KEYS.membersColumn, COMPACT_QUERY, DESKTOP_QUERY);
 
-/** The sidebar of a DM with an agent: a column on a wide window, else floating over the chat. */
-export const useDmSidebar = () => useSideColumn(STORAGE_KEYS.dmSidebar, DM_SIDE_NARROW_QUERY, DM_SIDE_WIDE_QUERY);
+/**
+ * The sidebar of a DM with an agent: a column on a wide window, else floating over the chat. `progress`: the PO chat's
+ * progress panel in its place, with its own saved choice and open at first in every workspace (ADR 0185 addendum).
+ */
+export const useDmSidebar = (progress = false) =>
+  useSideColumn(
+    progress ? STORAGE_KEYS.poSidebar : STORAGE_KEYS.dmSidebar,
+    DM_SIDE_NARROW_QUERY,
+    DM_SIDE_WIDE_QUERY,
+    progress,
+  );
