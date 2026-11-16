@@ -30,6 +30,7 @@ import {
   useOverview,
   usePlaceChannel,
   usePlaceChannelCategory,
+  usePoOverview,
   usePrefetchMessages,
   usePrefetchRecent,
   useSidebarItems,
@@ -243,6 +244,8 @@ export function Sidebar() {
   const alone = !dir.members.some((m) => m.userId !== me.user.id);
   const channels = useChannels(orgId);
   const overview = useOverview(orgId);
+  // The workspace's PO, if it has one (ADR 0185): its row sits under Início and opens its chat.
+  const hasPo = !!usePoOverview(orgId).data?.agentId;
   // A new channel: `true` with no category, or the category whose + opened it.
   const [creatingChannel, setCreatingChannel] = useState<boolean | string>(false);
   // A new category: empty, or with the channel whose menu asked for it.
@@ -316,7 +319,7 @@ export function Sidebar() {
       <UnreadCount count={taskMentions} mentions />
     ) : null;
   // The name is on the row: only the rail, which hides it, says it on hover.
-  const railTip = (id: SidebarItem | "home") => (rail ? t(`shell.${id}`) : undefined);
+  const railTip = (id: SidebarItem | "home" | "po") => (rail ? t(`shell.${id}`) : undefined);
   const toolRow = (id: SidebarItem) => (
     <Link
       key={id}
@@ -565,23 +568,25 @@ export function Sidebar() {
     </>
   );
   const blocks: Record<SectionKey, ReactNode> = {
-    // A personal workspace's list is its conversations (ADR 0159): a tool comes into sight only while something
-    // waits in it, or once the person put it there; Início, Go to… and the other tools are in More at the end.
-    tools: personal ? (
-      listed.length > 0 && (
-        <div className="sidebar__group sidebar__tools">
-          <ToolList items={listed} row={toolRow} />
-        </div>
-      )
-    ) : (
-      // The tools each person keeps in sight; the rest open beside the sidebar from More.
+    // Início and the PO are always in sight; the other tools each where the person put them (a personal workspace's
+    // list is its conversations, ADR 0159: a tool comes into sight only while something waits in it, or once the
+    // person put it there). The rest open beside the sidebar from More.
+    tools: (
       <div className="sidebar__group sidebar__tools">
         <Link to="/org/$orgId/home" params={{ orgId }} className="sidebar__item" title={railTip("home")}>
           <Icon name="home" />
           <span className="sidebar__item-label">{t("shell.home")}</span>
         </Link>
+        {hasPo && (
+          <Link to="/org/$orgId/po" params={{ orgId }} className="sidebar__item" title={railTip("po")}>
+            <Icon name="agent" />
+            <span className="sidebar__item-label">{t("shell.po")}</span>
+          </Link>
+        )}
         <ToolList items={listed} row={toolRow} />
-        <MoreTools items={inMore} row={toolRow} countOf={countOf} onCustomize={() => setCustomizing(true)} />
+        {!personal && (
+          <MoreTools items={inMore} row={toolRow} countOf={countOf} onCustomize={() => setCustomizing(true)} />
+        )}
       </div>
     ),
     channels: channelsShown && (
@@ -908,7 +913,7 @@ export function Sidebar() {
         {sectionOrder.order.filter((id) => blocks[id]).map((id) => sectionOrder.block(id, blocks[id], !rail))}
       </div>
 
-      {/* A personal workspace's end (ADR 0159): one More, holding Início, Go to… and every tool not in sight. */}
+      {/* A personal workspace's end (ADR 0159): one More, holding Go to… and every tool not in sight. */}
       {personal && (
         <div className="sidebar__end">
           <MoreTools items={inMore} row={toolRow} countOf={countOf} onCustomize={() => setCustomizing(true)} home />
@@ -1606,7 +1611,7 @@ function MoreTools({
   row: (id: SidebarItem) => ReactNode;
   countOf: (id: SidebarItem) => ReactNode;
   onCustomize: () => void;
-  /** At a personal workspace's end (ADR 0159): Início and Go to… open its list, and it opens upward. */
+  /** At a personal workspace's end (ADR 0159): Go to… opens its list, and it opens upward. */
   home?: boolean;
 }) {
   const { t } = useTranslation();
@@ -1633,18 +1638,6 @@ function MoreTools({
       >
         {home && (
           <>
-            <Link
-              to="/org/$orgId/home"
-              params={{ orgId: org.id }}
-              className="ac-menu__item sidebar__more-item"
-              onClick={() => setOpen(false)}
-            >
-              <Icon name="home" />
-              <span className="ac-menu__label">
-                {t("shell.home")}
-                <span className="ac-menu__desc">{t("shell.moreWhat.homePersonal")}</span>
-              </span>
-            </Link>
             <button
               type="button"
               className="ac-menu__item sidebar__more-item"
