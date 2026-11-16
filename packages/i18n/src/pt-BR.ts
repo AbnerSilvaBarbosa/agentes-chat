@@ -1832,6 +1832,8 @@ export const ptBR = {
     pendingProposals_one: "{{count}} proposta esperando você",
     pendingProposals_other: "{{count}} propostas esperando você",
     home: "Início",
+    /** The sidebar row that opens the workspace PO's chat (ADR 0185). */
+    po: "PO",
     notifications: "Notificações",
     unreadMark: "Não lida",
     unreadMentions_one: "{{count}} menção a você",

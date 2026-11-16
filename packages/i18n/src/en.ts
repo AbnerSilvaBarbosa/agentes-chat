@@ -1912,6 +1912,8 @@ export const en = {
     pendingProposals_one: "{{count}} proposal waiting for you",
     pendingProposals_other: "{{count}} proposals waiting for you",
     home: "Home",
+    /** The sidebar row that opens the workspace PO's chat (ADR 0185). */
+    po: "PO",
     notifications: "Notifications",
     /** Read by screen readers on an unread channel with no number (the pill at its edge). */
     unreadMark: "Unread",

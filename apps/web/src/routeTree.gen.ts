@@ -54,6 +54,7 @@ import { Route as OrgOrgIdDashboardsIndexRouteImport } from './routes/org.$orgId
 import { Route as OrgOrgIdDashboardsDashboardIdRouteImport } from './routes/org.$orgId.dashboards.$dashboardId'
 import { Route as OrgOrgIdIssuesIndexRouteImport } from './routes/org.$orgId.issues.index'
 import { Route as OrgOrgIdIssuesNumberRouteImport } from './routes/org.$orgId.issues.$number'
+import { Route as OrgOrgIdPoIndexRouteImport } from './routes/org.$orgId.po.index'
 import { Route as OrgOrgIdPoSpaceIdRouteImport } from './routes/org.$orgId.po.$spaceId'
 import { Route as OrgOrgIdSettingsSectionRouteImport } from './routes/org.$orgId.settings_.$section'
 import { Route as OrgOrgIdThreadsIndexRouteImport } from './routes/org.$orgId.threads.index'
@@ -295,6 +296,11 @@ const OrgOrgIdIssuesNumberRoute = OrgOrgIdIssuesNumberRouteImport.update({
   path: '/issues/$number',
   getParentRoute: () => OrgOrgIdRoute,
 } as any)
+const OrgOrgIdPoIndexRoute = OrgOrgIdPoIndexRouteImport.update({
+  id: '/po/',
+  path: '/po/',
+  getParentRoute: () => OrgOrgIdRoute,
+} as any)
 const OrgOrgIdPoSpaceIdRoute = OrgOrgIdPoSpaceIdRouteImport.update({
   id: '/po/$spaceId',
   path: '/po/$spaceId',
@@ -423,6 +429,7 @@ export interface FileRoutesByFullPath {
   '/org/$orgId/wiki/$slug': typeof OrgOrgIdWikiSlugRoute
   '/org/$orgId/dashboards/': typeof OrgOrgIdDashboardsIndexRoute
   '/org/$orgId/issues/': typeof OrgOrgIdIssuesIndexRoute
+  '/org/$orgId/po/': typeof OrgOrgIdPoIndexRoute
   '/org/$orgId/threads/': typeof OrgOrgIdThreadsIndexRoute
   '/org/$orgId/agents/$agentId/memory': typeof OrgOrgIdAgentsAgentIdMemoryRoute
   '/org/$orgId/dm/agent/$agentId': typeof OrgOrgIdDmAgentAgentIdRoute
@@ -483,6 +490,7 @@ export interface FileRoutesByTo {
   '/org/$orgId/wiki/$slug': typeof OrgOrgIdWikiSlugRoute
   '/org/$orgId/dashboards': typeof OrgOrgIdDashboardsIndexRoute
   '/org/$orgId/issues': typeof OrgOrgIdIssuesIndexRoute
+  '/org/$orgId/po': typeof OrgOrgIdPoIndexRoute
   '/org/$orgId/threads': typeof OrgOrgIdThreadsIndexRoute
   '/org/$orgId/agents/$agentId/memory': typeof OrgOrgIdAgentsAgentIdMemoryRoute
   '/org/$orgId/dm/agent/$agentId': typeof OrgOrgIdDmAgentAgentIdRoute
@@ -545,6 +553,7 @@ export interface FileRoutesById {
   '/org/$orgId/wiki_/$slug': typeof OrgOrgIdWikiSlugRoute
   '/org/$orgId/dashboards/': typeof OrgOrgIdDashboardsIndexRoute
   '/org/$orgId/issues/': typeof OrgOrgIdIssuesIndexRoute
+  '/org/$orgId/po/': typeof OrgOrgIdPoIndexRoute
   '/org/$orgId/threads/': typeof OrgOrgIdThreadsIndexRoute
   '/org/$orgId/agents/$agentId/memory': typeof OrgOrgIdAgentsAgentIdMemoryRoute
   '/org/$orgId/dm/agent/$agentId': typeof OrgOrgIdDmAgentAgentIdRoute
@@ -608,6 +617,7 @@ export interface FileRouteTypes {
     | '/org/$orgId/wiki/$slug'
     | '/org/$orgId/dashboards/'
     | '/org/$orgId/issues/'
+    | '/org/$orgId/po/'
     | '/org/$orgId/threads/'
     | '/org/$orgId/agents/$agentId/memory'
     | '/org/$orgId/dm/agent/$agentId'
@@ -668,6 +678,7 @@ export interface FileRouteTypes {
     | '/org/$orgId/wiki/$slug'
     | '/org/$orgId/dashboards'
     | '/org/$orgId/issues'
+    | '/org/$orgId/po'
     | '/org/$orgId/threads'
     | '/org/$orgId/agents/$agentId/memory'
     | '/org/$orgId/dm/agent/$agentId'
@@ -729,6 +740,7 @@ export interface FileRouteTypes {
     | '/org/$orgId/wiki_/$slug'
     | '/org/$orgId/dashboards/'
     | '/org/$orgId/issues/'
+    | '/org/$orgId/po/'
     | '/org/$orgId/threads/'
     | '/org/$orgId/agents/$agentId/memory'
     | '/org/$orgId/dm/agent/$agentId'
@@ -1083,6 +1095,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgOrgIdIssuesNumberRouteImport
       parentRoute: typeof OrgOrgIdRoute
     }
+    '/org/$orgId/po/': {
+      id: '/org/$orgId/po/'
+      path: '/po'
+      fullPath: '/org/$orgId/po/'
+      preLoaderRoute: typeof OrgOrgIdPoIndexRouteImport
+      parentRoute: typeof OrgOrgIdRoute
+    }
     '/org/$orgId/po/$spaceId': {
       id: '/org/$orgId/po/$spaceId'
       path: '/po/$spaceId'
@@ -1212,6 +1231,7 @@ interface OrgOrgIdRouteChildren {
   OrgOrgIdWikiSlugRoute: typeof OrgOrgIdWikiSlugRoute
   OrgOrgIdDashboardsIndexRoute: typeof OrgOrgIdDashboardsIndexRoute
   OrgOrgIdIssuesIndexRoute: typeof OrgOrgIdIssuesIndexRoute
+  OrgOrgIdPoIndexRoute: typeof OrgOrgIdPoIndexRoute
   OrgOrgIdThreadsIndexRoute: typeof OrgOrgIdThreadsIndexRoute
   OrgOrgIdAgentsAgentIdMemoryRoute: typeof OrgOrgIdAgentsAgentIdMemoryRoute
   OrgOrgIdDmAgentAgentIdRoute: typeof OrgOrgIdDmAgentAgentIdRoute
@@ -1252,6 +1272,7 @@ const OrgOrgIdRouteChildren: OrgOrgIdRouteChildren = {
   OrgOrgIdWikiSlugRoute: OrgOrgIdWikiSlugRoute,
   OrgOrgIdDashboardsIndexRoute: OrgOrgIdDashboardsIndexRoute,
   OrgOrgIdIssuesIndexRoute: OrgOrgIdIssuesIndexRoute,
+  OrgOrgIdPoIndexRoute: OrgOrgIdPoIndexRoute,
   OrgOrgIdThreadsIndexRoute: OrgOrgIdThreadsIndexRoute,
   OrgOrgIdAgentsAgentIdMemoryRoute: OrgOrgIdAgentsAgentIdMemoryRoute,
   OrgOrgIdDmAgentAgentIdRoute: OrgOrgIdDmAgentAgentIdRoute,

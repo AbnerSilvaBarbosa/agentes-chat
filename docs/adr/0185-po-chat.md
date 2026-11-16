@@ -136,3 +136,21 @@ button opens.
   statement (`columnKeys`), and Tarefas shows the company's tasks in those columns with a chip that clears only the
   filter.
 - **Out of scope.** The phone and the desktop shell, dragging a card in the panel, and cards of other companies.
+
+## Addendum: the sidebar opens the PO
+
+Section 1 said a PO chat is opened from the company, never from the sidebar. That changes: the person reached the PO
+through Início and its button, while the PO agent's own row opened a plain DM with no company and no progress panel.
+
+- The sidebar's tools show Início and, right under it, PO (while the workspace has a PO, `poAgentOf`), in team and
+  personal workspaces alike. PO links to `/org/$orgId/po`.
+- That route (`apps/web/src/routes/org.$orgId.po.index.tsx`) replaces itself with `/po/$spaceId` of the company the
+  person opened last, else the first live one (`poLanding` in `apps/web/src/lib/po-landing.ts`). With no PO or no
+  company it shows the page's empty state. The company route keeps the company it opens as the next one, per person
+  and workspace, in the browser: a convenience, never state that has to survive.
+- The PO agent's row opens the same route, and the address of a plain DM with the PO agent replaces itself with it:
+  the PO has no company-less conversation. Messages already in such a DM stay stored and searchable; every other
+  agent keeps its DM. The redirect keeps no `?m=`: the message belongs to the old conversation. A PO that is archived or no longer the workspace's PO is an ordinary agent again.
+- `listDms` still leaves out the company chats (section 1): the agent's row is the one entry, not one row per company.
+
+The phone and desktop shells are left for a later decision.
