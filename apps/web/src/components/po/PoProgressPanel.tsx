@@ -1,11 +1,13 @@
 import type { PoProgress, PoProgressCard, PoProgressGroup } from "@agenteschat/client";
-import { usePoProgress } from "@agenteschat/client";
+import { useIssueAction, usePoProgress } from "@agenteschat/client";
+import { errorText } from "@agenteschat/client/lib/errors";
 import {
   columnsParam,
   hasLiveSpec,
   isBacklog,
   type LiveSpec,
   liveSpecs,
+  releaseTarget,
   specBadge,
   specElapsed,
   specReasonKey,
@@ -60,6 +62,37 @@ function SpecLine({ card, group }: { card: PoProgressCard; group: PoProgressGrou
   );
 }
 
+/**
+ * "Liberar para dev": moves the card to its board's Ready for dev column as the person, through the board's own move
+ * (the issue update). The panel reads again when it settles, so the card shows in its new group. A refusal is said
+ * under the row and the card stays where it was.
+ */
+function ReleaseButton({ card, group }: { card: PoProgressCard; group: PoProgressGroup }) {
+  const { t, i18n } = useTranslation();
+  const { org } = useOrg();
+  const move = useIssueAction(org.id, { silent: true });
+  const target = releaseTarget(card, group);
+  if (!target) return null;
+  return (
+    <div className="po-row__release">
+      <Button
+        size="sm"
+        disabled={move.isPending}
+        loading={move.isPending}
+        onClick={() => move.mutate({ type: "update", id: card.id, patch: { columnId: target.id } })}
+      >
+        {t("poProgress.release")}
+      </Button>
+      {move.isError && (
+        <p className="po-row__spec po-row__spec--failed ac-iconline" role="alert">
+          <Icon name="alert" size={14} />
+          <span>{t("poProgress.releaseFailed", { reason: errorText(t, move.error, i18n.language) })}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Row({
   card,
   group,
@@ -88,6 +121,7 @@ function Row({
         </span>
       </Link>
       <SpecLine card={card} group={group} />
+      <ReleaseButton card={card} group={group} />
     </li>
   );
 }

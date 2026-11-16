@@ -43,6 +43,19 @@ export function specReasonKey(reason: string | null): SpecReasonKey {
   return Object.hasOwn(SPEC_REASONS, reason) ? SPEC_REASONS[reason as keyof typeof SPEC_REASONS] : SPEC_REASONS.failed;
 }
 
+/**
+ * The column a row's "Liberar para dev" moves its card to (ADR 0185 addendum): the server names it only for a card a
+ * finished spec left in Especificado (Priorizado on older boards) when the reader may move cards; the group is checked
+ * again here so no other group ever shows the button.
+ */
+export function releaseTarget(
+  card: Pick<PoProgressCard, "releaseTo">,
+  group: Pick<PoProgressGroup, "kind" | "key">,
+): { id: string; name: string } | null {
+  if (group.kind !== "column" || (group.key !== "especificado" && group.key !== "priorizado")) return null;
+  return card.releaseTo ?? null;
+}
+
 /** The `columns` the task list is asked for to see a whole group: its keys joined by a bar (`?columns=a|b`). */
 export const columnsParam = (group: Pick<PoProgressGroup, "columns">) => group.columns.join("|");
 

@@ -3337,6 +3337,8 @@ export const ptBR = {
     specReady: "Spec pronta",
     specFailed: "Spec falhou: {{reason}}",
     viewSpec: "Ver spec",
+    release: "Liberar para dev",
+    releaseFailed: "Não foi possível liberar: {{reason}}",
     liveTitle: "Gerando spec",
     liveRunning: "Gerando spec…",
     elapsedNow: "há menos de 1 min",

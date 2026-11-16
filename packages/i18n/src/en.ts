@@ -3414,6 +3414,8 @@ export const en = {
     specReady: "Spec ready",
     specFailed: "Spec failed: {{reason}}",
     viewSpec: "View spec",
+    release: "Release to dev",
+    releaseFailed: "Could not release: {{reason}}",
     liveTitle: "Writing spec",
     liveRunning: "Writing spec…",
     elapsedNow: "for under 1 min",

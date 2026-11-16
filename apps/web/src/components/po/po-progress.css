@@ -136,6 +136,15 @@ html:not([data-pointer]) .po-row__main:focus-visible {
   color: var(--ink2);
   overflow-wrap: anywhere;
 }
+/* "Liberar para dev": the small button on its own line under the row, its refusal under it. */
+.po-row__release {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-width: 0;
+}
 .po-row__spec--failed {
   color: var(--ink);
 }

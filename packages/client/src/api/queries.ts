@@ -4210,10 +4210,12 @@ export function useIssueLive(
   }, [connection, orgId, qc, issueId, channelId]);
 }
 
-export function useIssueAction(orgId: string) {
+/** `silent`: the caller says a failure itself (inline), so no toast says it twice. */
+export function useIssueAction(orgId: string, options: { silent?: boolean } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
+    ...(options.silent ? { meta: { silent: true } } : {}),
     mutationFn: (
       action:
         | { type: "create"; input: IssueInput }
