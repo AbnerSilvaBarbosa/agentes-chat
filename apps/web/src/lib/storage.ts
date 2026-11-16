@@ -72,6 +72,8 @@ export const STORAGE_KEYS = {
   dmSidebar: "agentes.dm.sidebar",
   /** Prefix (`.<user id>.<org id>`): "1" or "0", the person opened or closed the progress panel of a PO chat there. */
   poSidebar: "agentes.po.sidebar",
+  /** Prefix (`.<user id>.<org id>`): the progress panel's groups the person opened (JSON array of group keys; a Backlog starts closed). */
+  poGroups: "agentes.po.groups",
   /** Offline-computer notices the person closed (`machineId@offlineSince`), until that computer comes back. */
   outagesDismissed: "agentes.outages.dismissed",
   /** The workspace computer's notice the person closed (`setupNoticeKey`), until its state changes. */

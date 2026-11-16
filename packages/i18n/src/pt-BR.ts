@@ -3337,6 +3337,13 @@ export const ptBR = {
     specReady: "Spec pronta",
     specFailed: "Spec falhou: {{reason}}",
     viewSpec: "Ver spec",
+    liveTitle: "Gerando spec",
+    liveRunning: "Gerando spec…",
+    elapsedNow: "há menos de 1 min",
+    elapsedMin: "há {{minutes}} min",
+    elapsedHour: "há {{hours}}h {{minutes}}min",
+    expandGroup: "Mostrar os cards de {{name}}",
+    collapseGroup: "Ocultar os cards de {{name}}",
   },
   memoryCard: {
     remembered: "{{name}} lembrou",

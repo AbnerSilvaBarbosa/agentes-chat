@@ -3414,6 +3414,13 @@ export const en = {
     specReady: "Spec ready",
     specFailed: "Spec failed: {{reason}}",
     viewSpec: "View spec",
+    liveTitle: "Writing spec",
+    liveRunning: "Writing spec…",
+    elapsedNow: "for under 1 min",
+    elapsedMin: "for {{minutes}} min",
+    elapsedHour: "for {{hours}}h {{minutes}}min",
+    expandGroup: "Show the cards in {{name}}",
+    collapseGroup: "Hide the cards in {{name}}",
   },
   memoryCard: {
     remembered: "{{name}} remembered",
