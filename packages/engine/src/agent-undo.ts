@@ -68,6 +68,8 @@ export function issueSnapshot(i: IssueView): Record<string, unknown> {
     status: i.status,
     priority: i.priority,
     assignee: i.assignee ? { type: i.assignee.type, id: i.assignee.id } : null,
+    // The people also with the card, in order (ADR 0186): a change of people is a change of this field too.
+    alsoWith: i.alsoWith.map((a) => ({ type: a.type, id: a.id })),
     labels: i.labels,
     project: i.project?.id ?? null,
     dueDate: i.dueDate,
@@ -108,7 +110,15 @@ async function applyIssueFields(
   if ("description" in values) patch.description = String(values.description ?? "");
   if ("status" in values) patch.status = values.status as IssueView["status"];
   if ("priority" in values) patch.priority = values.priority as IssueView["priority"];
-  if ("assignee" in values) patch.assignee = (values.assignee as WorkActor | null) ?? null;
+  if ("assignee" in values || "alsoWith" in values) {
+    // One change for the principal and the people, whichever of them the agent moved: the one it did not move is read
+    // from the card as it is now, so the whole list goes back in order.
+    const now = await getIssue(deps.db, actor, orgId, { id: issueId });
+    const principal = "assignee" in values ? ((values.assignee as WorkActor | null) ?? null) : now.assignee;
+    const people = "alsoWith" in values ? ((values.alsoWith as WorkActor[] | null) ?? []) : now.alsoWith;
+    if (principal) patch.assignees = [principal, ...people];
+    else patch.assignee = null;
+  }
   if ("labels" in values) patch.labels = (values.labels as string[]) ?? [];
   if ("project" in values) patch.projectId = (values.project as string | null) ?? null;
   if ("dueDate" in values) patch.dueDate = (values.dueDate as string | null) ?? null;
