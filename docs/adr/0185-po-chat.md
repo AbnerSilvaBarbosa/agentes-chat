@@ -160,10 +160,17 @@ through Início and its button, while the PO agent's own row opened a plain DM w
   and workspace, in the browser: a convenience, never state that has to survive.
 - The PO agent's row opens the same route, and the address of a plain DM with the PO agent replaces itself with it:
   the PO has no company-less conversation. Messages already in such a DM stay stored and searchable; every other
-  agent keeps its DM. The redirect keeps no `?m=`: the message belongs to the old conversation. A PO that is archived or no longer the workspace's PO is an ordinary agent again.
+  agent keeps its DM. A PO that is archived or no longer the workspace's PO is an ordinary agent again.
 - `listDms` still leaves out the company chats (section 1): the agent's row is the one entry, not one row per company.
 
 The phone and desktop shells are left for a later decision.
+
+Correction: the PO has a plain DM again, for its own routines. Routines and hand-offs speak only through `hand_off` into
+the person's plain DM with that agent (ADR 0053), so those messages (and their notices and unread counts) still land
+there, and a DM with no way in left them unreachable. The PO view's header has "Avisos e rotinas" beside the company
+switch, which opens `/org/$orgId/po/general` (`DmPage` with `poGeneral`, no company, no redirect) with the DM's unread
+count on it and a way back; the sidebar's PO row carries that same count. The redirect now applies to the bare address
+only: a link with `?m=<message>` (a notice, a search hit) goes to `/po/general?m=`, so the message opens where it is.
 
 ## Addendum: releasing a finished spec to development
 
