@@ -5,7 +5,7 @@ setupDom();
 
 import type { PoCompany } from "@agenteschat/client";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
-import { ADA_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedState } from "./fake-api";
+import { ADA_ID, ATLAS_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
 /** The sidebar's Início and PO rows, and the PO agent's own row (ADR 0185 addendum). */
@@ -90,5 +90,29 @@ describe("Início and PO in the sidebar's tools", () => {
     await click(within(nav()).getByRole("link", { name: "PO" }));
     expect(state.calls.filter((c) => c.method === "po.openChat").map((c) => c.args[1])).toEqual(["s-acme"]);
     expect(screen().getByRole("heading", { level: 1, name: "Ada" })).toBeTruthy();
+  });
+});
+
+/** An agent's row in the sidebar's agent list: its link. */
+const agentLink = (id: string) => nav().querySelector(`[data-agent-row="${id}"] a.sidebar__item`) as HTMLElement;
+
+describe("the PO agent's row", () => {
+  test("the PO agent's row opens the PO view", async () => {
+    const state = await go(team());
+    expect(agentLink(ADA_ID).getAttribute("href")).toBe(`/org/${ORG_ID}/po`);
+    await click(agentLink(ADA_ID));
+    expect(state.calls.filter((c) => c.method === "po.openChat").map((c) => c.args[1])).toEqual(["s-acme"]);
+    expect(screen().getByRole("heading", { level: 1, name: "Ada" })).toBeTruthy();
+    expect(document.querySelector(".po-switch")).not.toBeNull();
+  });
+
+  test("another agent's row opens its own DM", async () => {
+    await go(team());
+    expect(agentLink(ATLAS_ID).getAttribute("href")).toBe(`/org/${ORG_ID}/dm/agent/${ATLAS_ID}`);
+  });
+
+  test("an unset PO gives an ordinary agent row", async () => {
+    await go(team({ poAgentId: null }));
+    expect(agentLink(ADA_ID).getAttribute("href")).toBe(`/org/${ORG_ID}/dm/agent/${ADA_ID}`);
   });
 });

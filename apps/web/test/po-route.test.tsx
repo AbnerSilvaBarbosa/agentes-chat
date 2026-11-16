@@ -6,7 +6,7 @@ setupDom();
 import type { PoCompany } from "@agenteschat/client";
 import { act, cleanup } from "@testing-library/react";
 import { rememberedPoCompany, rememberPoCompany } from "@/lib/po-landing";
-import { ADA_ID, createFakeApi, type FakeState, ORG_ID, seedState } from "./fake-api";
+import { ADA_ID, ATLAS_ID, createFakeApi, type FakeState, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
 /** The PO view without a company: `/po` opens the company the person used last (ADR 0185, the sidebar's PO row). */
@@ -99,5 +99,20 @@ describe("the PO route", () => {
     await act(async () => release(await real(ORG_ID)));
     await settle(8);
     expect(opened(state)).toEqual(["s-acme"]);
+  });
+
+  test("the plain DM of the PO is replaced by the PO view", async () => {
+    const state = withPo();
+    const app = await go(state, `dm/agent/${ADA_ID}`);
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/po/s-acme`);
+    expect(opened(state)).toEqual(["s-acme"]);
+    expect(state.calls.some((c) => c.method === "dms.open")).toBe(false);
+  });
+
+  test("another agent's DM address still opens its DM", async () => {
+    const state = withPo();
+    const app = await go(state, `dm/agent/${ATLAS_ID}`);
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/dm/agent/${ATLAS_ID}`);
+    expect(opened(state)).toEqual([]);
   });
 });

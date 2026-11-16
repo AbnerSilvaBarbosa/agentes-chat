@@ -149,8 +149,8 @@ describe("the header names the company and offers the others", () => {
     expect(acts.contains(within(header()).getByRole("combobox", { name: "Empresa" }))).toBe(true);
   });
 
-  test("a plain DM with the same agent has no company switch", async () => {
-    await go(withPo(), `dm/agent/${ADA_ID}`);
+  test("a plain DM with another agent has no company switch", async () => {
+    await go(withPo(), `dm/agent/${ATLAS_ID}`);
     expect(within(header()).queryByRole("combobox", { name: "Empresa" })).toBeNull();
     expect(header().querySelector(".channel__topic")?.textContent).not.toContain("PO ·");
   });
@@ -288,14 +288,16 @@ describe("a search hit in a PO chat", () => {
   });
 
   test("a plain DM's hit still opens the DM, not a PO chat", async () => {
-    const { router } = await go(scene(), `c/${ENG_ID}`);
+    const state = scene();
+    seedDm(state, { type: "agent", id: ATLAS_ID }, { body: "uma zebra na DM do Atlas" });
+    const { router } = await go(state, `c/${ENG_ID}`);
     await act(async () => fireEvent.click(screen().getByRole("button", { name: "Remover em: #eng" })));
     await typeIn("zebra");
     await enter();
-    const dm = within(results() as HTMLElement).getByRole("region", { name: "DM com Ada" });
-    await act(async () => fireEvent.click(within(dm).getByRole("button", { name: "Ir para a mensagem de Ada" })));
+    const dm = within(results() as HTMLElement).getByRole("region", { name: "DM com Atlas" });
+    await act(async () => fireEvent.click(within(dm).getByRole("button", { name: "Ir para a mensagem de Atlas" })));
     await settle(8);
-    expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/dm/agent/${ADA_ID}`);
+    expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/dm/agent/${ATLAS_ID}`);
   });
 
   test("the PO chat's own header search stays in that chat", async () => {

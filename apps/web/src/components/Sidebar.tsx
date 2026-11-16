@@ -1750,6 +1750,11 @@ function AgentRow({
   const channelList = useChannels(org.id).data;
   const here = workingIn ? channelList?.find((c) => c.id === workingIn)?.name : undefined;
   const navigate = useNavigate();
+  // The workspace's PO opens its chat about a company, the same view as the PO row (ADR 0185); any other agent its DM.
+  const isPo = usePoOverview(org.id).data?.agentId === a.id;
+  const opens = isPo
+    ? ({ to: "/org/$orgId/po", params: { orgId: org.id } } as const)
+    : ({ to: "/org/$orgId/dm/agent/$agentId", params: { orgId: org.id, agentId: a.id } } as const);
   const agentEntries = useAgentMenu();
   const rowMenu = entityMenu(() => agentEntries(a, menuExtra));
   // Its owner and the admins: its settings on hover, like a channel's.
@@ -1781,8 +1786,7 @@ function AgentRow({
     <div className="sidebar__row" data-agent-row={a.id} data-live={live || undefined} data-acts={edits ? 1 : undefined}>
       <Link
         {...rowMenu}
-        to="/org/$orgId/dm/agent/$agentId"
-        params={{ orgId: org.id, agentId: a.id }}
+        {...opens}
         className="sidebar__item"
         title={[a.name, a.role, now ?? word, line?.text].filter(Boolean).join(" · ")}
         onMouseEnter={onPrefetch}
@@ -1844,7 +1848,7 @@ function AgentRow({
             onClick={() => {
               if (requestAgentPanel(a.id, "settings")) return;
               onOpen();
-              void navigate({ to: "/org/$orgId/dm/agent/$agentId", params: { orgId: org.id, agentId: a.id } });
+              void navigate(opens);
             }}
           />
         </span>
