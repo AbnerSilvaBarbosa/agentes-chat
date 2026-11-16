@@ -3407,7 +3407,6 @@ export const en = {
     done_other: "{{count}} cards done",
     empty: "No cards in this company yet.",
     since: "for {{span}}",
-    board: "Board: {{name}}",
     specQueued: "Queued",
     specRunning: "Spec in progress",
     specReady: "Spec ready",

@@ -22,16 +22,25 @@ export function specBadge(card: Pick<PoProgressCard, "spec">, group: Pick<PoProg
   return { kind: "failed", reason: spec.error };
 }
 
-/** The fixed codes a spec's failure carries, as `poCard.specReason.*` words. */
-const SPEC_REASONS = new Set(["po_missing", "card_gone", "no_spec_page", "run_missing", "stopped", "failed"]);
+/** The fixed codes a spec's failure carries, each with its `poCard.specReason.*` words. */
+const SPEC_REASONS = {
+  po_missing: "poCard.specReason.po_missing",
+  card_gone: "poCard.specReason.card_gone",
+  no_spec_page: "poCard.specReason.no_spec_page",
+  run_missing: "poCard.specReason.run_missing",
+  stopped: "poCard.specReason.stopped",
+  failed: "poCard.specReason.failed",
+} as const;
+
+export type SpecReasonKey = (typeof SPEC_REASONS)[keyof typeof SPEC_REASONS];
 
 /**
  * The words key of a spec failure's reason: a known code has its own sentence, a stop with no reason reads "stopped",
  * any other text is the run's own and has no key (null: show it as written).
  */
-export function specReasonKey(reason: string | null): string | null {
-  if (!reason) return "poCard.specReason.stopped";
-  return SPEC_REASONS.has(reason) ? `poCard.specReason.${reason}` : null;
+export function specReasonKey(reason: string | null): SpecReasonKey | null {
+  if (!reason) return SPEC_REASONS.stopped;
+  return Object.hasOwn(SPEC_REASONS, reason) ? SPEC_REASONS[reason as keyof typeof SPEC_REASONS] : null;
 }
 
 /** The `columns` the task list is asked for to see a whole group: its keys joined by a bar (`?columns=a|b`). */

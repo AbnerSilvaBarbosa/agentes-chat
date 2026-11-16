@@ -3330,7 +3330,6 @@ export const ptBR = {
     done_other: "{{count}} cards concluídos",
     empty: "Nenhum card nesta empresa ainda.",
     since: "há {{span}}",
-    board: "Board: {{name}}",
     specQueued: "Na fila",
     specRunning: "Spec em andamento",
     specReady: "Spec pronta",

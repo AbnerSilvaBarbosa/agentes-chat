@@ -1,0 +1,141 @@
+/*
+ * The PO chat's progress panel (PoProgressPanel.tsx): the right column of a company's PO chat, the members column's
+ * surface and place. Floating (narrow windows): the panels' sheet. Either way it scrolls in `.po-side__scroll`.
+ */
+.members-side.po-side {
+  flex-basis: 320px;
+  width: 320px;
+  overflow: hidden;
+  padding: 0;
+  container-type: inline-size;
+}
+.thread-panel.po-side--float {
+  background: var(--pane);
+}
+/* Under this a panel is the whole screen, as a thread's is. */
+@media (min-width: 861px) {
+  .thread-panel.po-side--float {
+    width: min(360px, calc(100vw - 20px));
+  }
+}
+.po-side__scroll {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-4) var(--space-4) var(--space-6);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.po-side__close.ac-btn {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+}
+
+/* The head: what it is, the company, and the way to its board, wrapping where it must. */
+.po-prog__head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.po-prog__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 24px;
+  color: var(--ink);
+}
+.po-prog__company {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.po-prog__board {
+  margin-top: var(--space-2);
+}
+.po-prog__empty,
+.po-prog__done {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* A group: its heading on the list's outer edge, 8 above the rows. */
+.po-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.po-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.po-group__more {
+  align-self: flex-start;
+}
+
+/* A row: the card's link (number and title, then its board and how long) and under it the spec's state. */
+.po-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--row-py) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+.po-list > .po-row:first-child {
+  border-top: 0;
+}
+.po-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.po-row__title {
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.po-row__number {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.po-row__meta {
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.po-row__main:hover .po-row__title {
+  text-decoration: underline;
+}
+html:not([data-pointer]) .po-row__main:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+.po-row__spec {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+}
+.po-row__spec--failed {
+  color: var(--ink);
+}
