@@ -220,14 +220,20 @@ describe("poProgress", () => {
         issueId: card.id,
         specState: state,
         specError: error,
+        specQueuedAt: state === "running" ? new Date("2026-11-15T10:00:00Z") : null,
       });
     }
     await b.card("Sem spec", "Especificar");
     const items = group(await read(c.spaceId), "especificar").items;
     const by = (title: string) => must(items.find((i) => i.title === title));
-    expect(by("Na fila").spec).toEqual({ state: "queued", page: null, error: null });
-    expect(by("Rodando").spec).toEqual({ state: "running", page: null, error: null });
-    expect(by("Falhou").spec).toEqual({ state: "failed", page: null, error: "no_spec_page" });
+    expect(by("Na fila").spec).toEqual({ state: "queued", page: null, error: null, queuedAt: null });
+    expect(by("Rodando").spec).toEqual({
+      state: "running",
+      page: null,
+      error: null,
+      queuedAt: "2026-11-15T10:00:00.000Z",
+    });
+    expect(by("Falhou").spec).toEqual({ state: "failed", page: null, error: "no_spec_page", queuedAt: null });
     expect(by("Sem spec").spec).toBeNull();
   });
 
@@ -360,7 +366,7 @@ describe("poProgress", () => {
       specError: "stopped",
     });
     const item = must(group(await read(c.spaceId), "especificar").items[0]);
-    expect(item.spec).toEqual({ state: "stopped", page: null, error: "stopped" });
+    expect(item.spec).toEqual({ state: "stopped", page: null, error: "stopped", queuedAt: null });
   });
 
   test("a spec's reason is a fixed code, never the text the proposal holds", async () => {
@@ -382,7 +388,7 @@ describe("poProgress", () => {
       specError: "token sk-secret rejected by the provider",
     });
     const item = must(group(await read(c.spaceId), "especificar").items[0]);
-    expect(item.spec).toEqual({ state: "failed", page: null, error: "failed" });
+    expect(item.spec).toEqual({ state: "failed", page: null, error: "failed", queuedAt: null });
   });
 
   test("a to-do column listed after Ready for dev still has its cards in a group, none dropped", async () => {

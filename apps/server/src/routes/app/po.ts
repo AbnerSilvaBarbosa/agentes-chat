@@ -76,6 +76,7 @@ const ProgressCard = z.object({
       state: z.enum(["queued", "running", "done", "failed", "stopped"]),
       page: z.object({ slug: z.string(), title: z.string() }).nullable(),
       error: z.string().nullable(),
+      queuedAt: z.string().nullable().openapi({ description: "ISO time the spec was queued." }),
     })
     .nullable(),
 });

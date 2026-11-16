@@ -27,6 +27,8 @@ export interface PoProgressSpec {
   page: { slug: string; title: string } | null;
   /** One of the fixed codes (`po_missing`, `stopped`…, anything else reads `failed`), never free text; null while nothing failed. */
   error: string | null;
+  /** ISO time the spec was queued: the panel's clock for a spec still being written; null when not recorded. */
+  queuedAt: string | null;
 }
 
 export interface PoProgressCard {
@@ -97,6 +99,7 @@ interface CardRow {
   column_stage: IssueStatus | null;
   spec_state: PoProgressSpec["state"] | null;
   spec_error: string | null;
+  spec_queued_at: Date | string | null;
   page_slug: string | null;
   page_title: string | null;
 }
@@ -156,7 +159,7 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
   const rows = rowsOf<CardRow>(
     await db.execute(sql`select i.id, i.number, i.title, i.status, i.project_id, p.name as project_name,
         i.column_since, col.name as column_name, col.stage as column_stage,
-        pr.spec_state, pr.spec_error, w.slug as page_slug, w.title as page_title
+        pr.spec_state, pr.spec_error, pr.spec_queued_at, w.slug as page_slug, w.title as page_title
       from ${schema.issues} i
       join ${schema.issueProjects} p on p.id = i.project_id
       ${effectiveColumnSql("i")}
@@ -189,9 +192,14 @@ export async function poProgress(db: Database, userId: string, orgId: string, sp
       boardName: r.project_name,
       since: new Date(r.column_since).toISOString(),
       spec: r.spec_state
-        ? { state: r.spec_state, page, error: r.spec_error ? specCodeOf(r.spec_error) : null }
+        ? {
+            state: r.spec_state,
+            page,
+            error: r.spec_error ? specCodeOf(r.spec_error) : null,
+            queuedAt: r.spec_queued_at ? new Date(r.spec_queued_at).toISOString() : null,
+          }
         : page
-          ? { state: "done", page, error: null }
+          ? { state: "done", page, error: null, queuedAt: null }
           : null,
     });
   }

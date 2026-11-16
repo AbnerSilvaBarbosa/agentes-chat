@@ -4284,6 +4284,8 @@ export interface PoProgressSpec {
   page: { slug: string; title: string } | null;
   /** A fixed code (`stopped`, `no_spec_page`…) or the run's short reason; null while nothing failed. */
   error: string | null;
+  /** ISO time the spec was queued: the clock of a spec still being written. */
+  queuedAt?: string | null;
 }
 
 export interface PoProgressCard {
