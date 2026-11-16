@@ -134,3 +134,93 @@ export function planAssignees(before: Assignment, change: AssigneeChange): Assig
 }
 
 const notOnCard = () => new ValidationError("That person is not on the card", "issue.principal_not_on_card");
+
+/** A card's principal: its agent, else its first person. */
+function principalOf(a: Assignment): WorkActor | null {
+  if (a.agentId) return { type: "agent", id: a.agentId };
+  const first = a.people[0];
+  return first ? { type: "person", id: first } : null;
+}
+
+export interface AssigneeEvent {
+  text: string;
+  event: "assigned" | "agent_replaced" | "assignee_added" | "assignee_removed" | "principal_changed";
+  data: Record<string, unknown>;
+}
+
+/**
+ * What the card's history says about a change, pure. A principal that changed is one `assigned` event (or
+ * `agent_replaced` between two agents, or `principal_changed` for a swap among people); each person gained beside it is
+ * `assignee_added` and each person lost `assignee_removed`. Everyone taken off is the single `assigned` event with no
+ * assignee. Names go into `data` so the history reads right after a rename or a removal.
+ */
+export function assigneeEvents(
+  before: Assignment,
+  after: Assignment,
+  name: (who: WorkActor) => string,
+): AssigneeEvent[] {
+  const events: AssigneeEvent[] = [];
+  const was = principalOf(before);
+  const now = principalOf(after);
+  const same = was?.type === now?.type && was?.id === now?.id;
+  const person = (id: string): WorkActor => ({ type: "person", id });
+  let announced: string | null = null;
+
+  if (before.agentId && after.agentId && before.agentId !== after.agentId) {
+    const from = name({ type: "agent", id: before.agentId });
+    const to = name({ type: "agent", id: after.agentId });
+    events.push({
+      text: `handed the issue from ${from} to ${to}`,
+      event: "agent_replaced",
+      data: {
+        from: { agentId: before.agentId, name: from },
+        to: { agentId: after.agentId, name: to },
+        kept: after.people.length,
+      },
+    });
+  } else if (!same) {
+    if (!now) {
+      return [{ text: "removed the assignee", event: "assigned", data: { assignee: null } }];
+    }
+    const swap =
+      !before.agentId &&
+      !after.agentId &&
+      was !== null &&
+      before.people.includes(now.id) &&
+      after.people.includes(was.id);
+    if (swap) {
+      events.push({
+        text: `made ${name(now)} the principal`,
+        event: "principal_changed",
+        data: { assignee: now, name: name(now) },
+      });
+    } else {
+      // Promoted: a person who was already on the card became its principal (the agent left, or the principal did).
+      const promoted = now.type === "person" && before.people.includes(now.id);
+      events.push({
+        text: "assigned the issue",
+        event: "assigned",
+        data: { assignee: now, ...(promoted ? { promoted: true } : {}) },
+      });
+    }
+    if (now.type === "person") announced = now.id;
+  }
+
+  for (const id of after.people) {
+    if (before.people.includes(id) || id === announced) continue;
+    events.push({
+      text: `added ${name(person(id))} to the issue`,
+      event: "assignee_added",
+      data: { assignee: person(id), name: name(person(id)) },
+    });
+  }
+  for (const id of before.people) {
+    if (after.people.includes(id)) continue;
+    events.push({
+      text: `took ${name(person(id))} off the issue`,
+      event: "assignee_removed",
+      data: { assignee: person(id), name: name(person(id)) },
+    });
+  }
+  return events;
+}

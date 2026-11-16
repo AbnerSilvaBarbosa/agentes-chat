@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ValidationError } from "../src/errors";
-import { type Assignment, assignmentOf, columnsOf, planAssignees } from "../src/issue-assignees";
+import { type Assignment, assigneeEvents, assignmentOf, columnsOf, planAssignees } from "../src/issue-assignees";
 
 const p = (id: string) => ({ type: "person" as const, id });
 const a = (id: string) => ({ type: "agent" as const, id });
@@ -163,5 +163,89 @@ describe("planAssignees", () => {
     });
     expect(assignmentOf({ assigneeType: null, assigneeId: null }, [])).toEqual(none);
     expect(columnsOf({ agentId: "dev", people: ["ana"] })).toEqual({ assigneeType: "agent", assigneeId: "dev" });
+  });
+});
+
+const nameOf = (x: { type: "person" | "agent"; id: string }) => `${x.type}:${x.id}`;
+const kinds = (before: Assignment, after: Assignment) => assigneeEvents(before, after, nameOf).map((e) => e.event);
+
+describe("assigneeEvents", () => {
+  test("history events say each change: added, removed, swapped, agent replaced, promoted", () => {
+    // Added beside a principal that stays: one event for the person, none for the principal.
+    const added = assigneeEvents({ agentId: null, people: ["ana"] }, { agentId: null, people: ["ana", "bia"] }, nameOf);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({
+      event: "assignee_added",
+      data: { assignee: { type: "person", id: "bia" }, name: "person:bia" },
+    });
+    // Removed: the others stay.
+    const removed = assigneeEvents(
+      { agentId: null, people: ["ana", "bia"] },
+      { agentId: null, people: ["ana"] },
+      nameOf,
+    );
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toMatchObject({
+      event: "assignee_removed",
+      data: { assignee: { type: "person", id: "bia" }, name: "person:bia" },
+    });
+    // Swapped among people, no agent: one principal_changed and nothing else.
+    const swapped = assigneeEvents(
+      { agentId: null, people: ["ana", "bia"] },
+      { agentId: null, people: ["bia", "ana"] },
+      nameOf,
+    );
+    expect(swapped).toHaveLength(1);
+    expect(swapped[0]).toMatchObject({
+      event: "principal_changed",
+      data: { assignee: { type: "person", id: "bia" }, name: "person:bia" },
+    });
+    // Agent for another agent: one agent_replaced, never also assigned; the people stay unmentioned.
+    const replaced = assigneeEvents(
+      { agentId: "dev", people: ["ana", "bia"] },
+      { agentId: "qa", people: ["ana", "bia"] },
+      nameOf,
+    );
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0]).toMatchObject({
+      event: "agent_replaced",
+      data: { from: { agentId: "dev", name: "agent:dev" }, to: { agentId: "qa", name: "agent:qa" }, kept: 2 },
+    });
+    // The agent leaves and the first person is promoted: assigned with promoted, nobody "removed".
+    const promoted = assigneeEvents(
+      { agentId: "dev", people: ["ana", "bia"] },
+      { agentId: null, people: ["ana", "bia"] },
+      nameOf,
+    );
+    expect(promoted).toHaveLength(1);
+    expect(promoted[0]).toMatchObject({
+      event: "assigned",
+      data: { assignee: { type: "person", id: "ana" }, promoted: true },
+    });
+  });
+
+  test("everyone taken off is one assigned event with no assignee", () => {
+    const events = assigneeEvents({ agentId: null, people: ["ana", "bia"] }, { agentId: null, people: [] }, nameOf);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ event: "assigned", data: { assignee: null } });
+  });
+
+  test("a new principal is one assigned event and the person it replaced is taken off", () => {
+    expect(kinds({ agentId: null, people: ["ana"] }, { agentId: null, people: ["caio"] })).toEqual([
+      "assigned",
+      "assignee_removed",
+    ]);
+    // Nobody before: the first person is assigned, the rest are added.
+    expect(kinds(none, { agentId: null, people: ["ana", "bia"] })).toEqual(["assigned", "assignee_added"]);
+    const [assigned] = assigneeEvents(none, { agentId: null, people: ["ana"] }, nameOf);
+    expect(assigned?.data).not.toHaveProperty("promoted");
+  });
+
+  test("an agent over a person principal is assigned and the person is not removed", () => {
+    expect(kinds({ agentId: null, people: ["ana"] }, { agentId: "dev", people: ["ana"] })).toEqual(["assigned"]);
+  });
+
+  test("a card that did not change has no events", () => {
+    expect(kinds({ agentId: "dev", people: ["ana"] }, { agentId: "dev", people: ["ana"] })).toEqual([]);
   });
 });
