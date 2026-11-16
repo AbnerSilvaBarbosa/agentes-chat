@@ -4289,6 +4289,8 @@ export interface CardProposalEdits {
 export interface PoCompany extends IssueSpaceRef {
   open: number;
   channelId: string | null;
+  /** Messages of that chat they have not read (the PO's routines write there). */
+  unread: number;
 }
 
 /** The workspace's PO and the companies its chat opens for (ADR 0185); no PO: no agent and no companies. */

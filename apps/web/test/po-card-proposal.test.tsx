@@ -24,6 +24,7 @@ const company: PoCompany = {
   archived: false,
   open: 0,
   channelId: null,
+  unread: 0,
 };
 
 const proposal = (patch: Partial<CardProposalView> = {}): CardProposalView => ({

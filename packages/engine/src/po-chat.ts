@@ -8,10 +8,22 @@ import { keyOf, reopenDm } from "./dms";
 import { NotFoundError, ValidationError } from "./errors";
 import { publishUserEvent } from "./events";
 import { type IssueSpaceRef, listIssueProjects, spaceRef } from "./issue-projects";
+import { landedAfterSql } from "./message-place";
+import { quietNoticeSql } from "./notices";
 import { can, requirePermission } from "./organizations";
 import { closedRefusal } from "./standing";
 
-const { agents, channelMembers, channels, issueProjects, issueSpaces, organizationSettings, poCardProposals } = schema;
+const {
+  agents,
+  channelMembers,
+  channelReads,
+  channels,
+  issueProjects,
+  messages,
+  issueSpaces,
+  organizationSettings,
+  poCardProposals,
+} = schema;
 
 /**
  * A PO chat is the DM between a person and the workspace's PO about one company (ADR 0185): a DM whose key carries a
@@ -61,7 +73,37 @@ export async function poAgentOf(db: Database, orgId: string): Promise<Agent | nu
   return row?.agent ?? null;
 }
 
-export type PoCompany = IssueSpaceRef & { open: number; channelId: string | null };
+export type PoCompany = IssueSpaceRef & { open: number; channelId: string | null; unread: number };
+
+/** Messages in each of the person's PO chats they have not read: the routines' own count here (ADR 0185 addendum). */
+async function poChatUnread(db: Database, userId: string, orgId: string, channelIds: string[]) {
+  if (channelIds.length === 0) return new Map<string, number>();
+  const reads = await db
+    .select()
+    .from(channelReads)
+    .where(and(inArray(channelReads.channelId, channelIds), eq(channelReads.userId, userId)));
+  const readAt = new Map(reads.map((r) => [r.channelId, r.lastReadAt]));
+  const counts = await Promise.all(
+    channelIds.map(async (id) => {
+      const [row] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.orgId, orgId),
+            eq(messages.channelId, id),
+            isNull(messages.deletedAt),
+            sql`(${messages.authorUserId} is null or ${messages.authorUserId} <> ${userId})`,
+            sql`not ${quietNoticeSql(sql`${messages.meta}`)}`,
+            landedAfterSql(messages, readAt.get(id) ?? new Date(0)),
+            sql`${messages.meta}->>'mediaAfter' is null`,
+          ),
+        );
+      return [id, row?.n ?? 0] as const;
+    }),
+  );
+  return new Map(counts);
+}
 
 /**
  * The PO and the companies a PO chat can be opened for: the live ones (every active member sees every company), with
@@ -84,9 +126,18 @@ export async function listPoCompanies(
         .where(and(eq(channels.orgId, orgId), inArray(channels.dmKey, keys)))
     : [];
   const byKey = new Map(chats.map((c) => [c.dmKey, c.id]));
+  const unread = await poChatUnread(
+    db,
+    userId,
+    orgId,
+    chats.map((c) => c.id),
+  );
   return {
     agentId: po.id,
-    companies: live.map((s, i) => ({ ...s, channelId: byKey.get(keys[i] as string) ?? null })),
+    companies: live.map((s, i) => {
+      const channelId = byKey.get(keys[i] as string) ?? null;
+      return { ...s, channelId, unread: channelId ? (unread.get(channelId) ?? 0) : 0 };
+    }),
   };
 }
 

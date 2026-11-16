@@ -6,6 +6,7 @@ import {
   createIssueSpace,
   drainOutbox,
   listNotifications,
+  listPoCompanies,
   openDm,
   openPoChat,
   runRoutineNow,
@@ -114,9 +115,8 @@ test("the PO chat holds the routine's message as unread for the person", async (
   const acme = await company("Acme");
   await fire({ trigger: { type: "schedule", phrase: "30 8 * * *" } });
   const chat = await poChat(acme.id);
-  const messages = await f.db.select().from(schema.messages).where(eq(schema.messages.channelId, chat));
-  const [member] = await f.db.select().from(schema.channelMembers).where(eq(schema.channelMembers.channelId, chat));
-  expect(messages).toHaveLength(1);
-  // Opened before the message was written, never read since: it counts.
-  expect(messages[0]?.createdAt.getTime()).toBeGreaterThanOrEqual(member?.lastReadAt?.getTime() ?? 0);
+  const listed = async () => (await listPoCompanies(f.db, f.owner.id, f.org.id)).companies[0];
+  expect(await listed()).toMatchObject({ channelId: chat, unread: 1 });
+  await f.db.insert(schema.channelReads).values({ orgId: f.org.id, channelId: chat, userId: f.owner.id });
+  expect((await listed())?.unread).toBe(0);
 });

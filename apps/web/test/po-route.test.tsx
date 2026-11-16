@@ -24,6 +24,7 @@ const company = (id: string, name: string): PoCompany => ({
   archived: false,
   open: 3,
   channelId: null,
+  unread: 0,
 });
 
 const withPo = (patch: Partial<FakeState> = {}): FakeState =>

@@ -245,7 +245,8 @@ export function Sidebar() {
   const channels = useChannels(orgId);
   const overview = useOverview(orgId);
   // The workspace's PO, if it has one (ADR 0185): its row sits under Início and opens its chat.
-  const poAgentId = usePoOverview(orgId).data?.agentId ?? null;
+  const poOverview = usePoOverview(orgId).data;
+  const poAgentId = poOverview?.agentId ?? null;
   const hasPo = !!poAgentId;
   // A new channel: `true` with no category, or the category whose + opened it.
   const [creatingChannel, setCreatingChannel] = useState<boolean | string>(false);
@@ -354,8 +355,10 @@ export function Sidebar() {
   const rightHand = dir.agents.find((a) => isRightHand(a) && a.canTalk !== false);
   const dmOf = new Map((dms.data ?? []).map((d) => [d.with.id, d]));
   const rightHandDm = rightHand ? dmOf.get(rightHand.id) : undefined;
-  // The PO row lights with its plain DM, where its routines write (ADR 0185 addendum).
-  const poUnread = poAgentId ? (dmOf.get(poAgentId)?.unread ?? 0) : 0;
+  // The PO row lights with its chats, where its routines write (ADR 0185 addendum): each company's, and the plain DM's.
+  const poUnread = poAgentId
+    ? (dmOf.get(poAgentId)?.unread ?? 0) + (poOverview?.companies ?? []).reduce((n, c) => n + c.unread, 0)
+    : 0;
   // New agent: one dialog for every way in (ADR 0164); outside the shell (a test's page), the full form.
   const newAgentDialog = useNewAgent();
   const newAgent = () =>

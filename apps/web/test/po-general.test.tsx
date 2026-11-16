@@ -23,6 +23,7 @@ const company = (id: string, name: string): PoCompany => ({
   archived: false,
   open: 3,
   channelId: null,
+  unread: 0,
 });
 
 const scene = (unread = 0): FakeState => {
@@ -81,6 +82,13 @@ describe("the PO's plain DM", () => {
   test("the bare address of the PO's agent DM still goes to the PO view", async () => {
     const { router } = await go(scene(), `dm/agent/${ADA_ID}`);
     expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/po/s-acme`);
+  });
+
+  test("the sidebar's PO row also counts a company's PO chat, where the routines write", async () => {
+    const state = seedState({ poAgentId: ADA_ID, poCompanies: [{ ...company("s-acme", "Acme"), unread: 4 }] });
+    await go(state, `c/${ENG_ID}`);
+    expect(poRow()?.getAttribute("data-unread")).toBe("true");
+    expect(within(poRow() as HTMLElement).getByRole("img", { name: /4/ })).toBeTruthy();
   });
 
   test("the sidebar's PO row lights with the plain DM's unread, and not without", async () => {

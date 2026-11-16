@@ -144,6 +144,7 @@ import type {
   Person,
   PersonalTokenInput,
   PersonLimits,
+  PoOverview,
   Proposal,
   ReactionCount,
   ReminderInput,
@@ -6294,6 +6295,10 @@ function clearUnread(qc: QueryClient, orgId: string, channelId: string) {
   qc.setQueryData<DirectMessage[]>(keys.dms(orgId), (list) =>
     list?.map((d) => (d.channelId === channelId ? { ...d, unread: 0 } : d)),
   );
+  qc.setQueryData<PoOverview>(
+    keys.po(orgId),
+    (po) => po && { ...po, companies: po.companies.map((c) => (c.channelId === channelId ? { ...c, unread: 0 } : c)) },
+  );
 }
 
 /** Mutes or unmutes a channel for me: it never looks unread while muted (a mention of me still counts). */
@@ -6438,8 +6443,11 @@ export function applyUnreadEvent(qc: QueryClient, orgId: string, event: { type: 
     // conversation reads again when it is shown.
     if (!openScreens.get(qc)?.has(`${orgId}:${e.channelId}`))
       void qc.invalidateQueries({ queryKey: ["org", orgId, "channel", e.channelId], refetchType: "none" });
-    if (e.dm) readOncePerBurst(`${orgId}:dms`, () => void qc.invalidateQueries({ queryKey: keys.dms(orgId) }));
-    else readOncePerBurst(`${orgId}:channels`, () => void qc.invalidateQueries({ queryKey: keys.channels(orgId) }));
+    if (e.dm) {
+      readOncePerBurst(`${orgId}:dms`, () => void qc.invalidateQueries({ queryKey: keys.dms(orgId) }));
+      // A PO chat (ADR 0185) is a DM the DM list leaves out: its unread rides on the PO overview.
+      readOncePerBurst(`${orgId}:po`, () => void qc.invalidateQueries({ queryKey: keys.po(orgId) }));
+    } else readOncePerBurst(`${orgId}:channels`, () => void qc.invalidateQueries({ queryKey: keys.channels(orgId) }));
     if (e.threadId)
       readOncePerBurst(
         `${orgId}:threads`,
@@ -6449,6 +6457,7 @@ export function applyUnreadEvent(qc: QueryClient, orgId: string, event: { type: 
     clearUnread(qc, orgId, e.channelId);
     void qc.invalidateQueries({ queryKey: keys.channels(orgId) });
     void qc.invalidateQueries({ queryKey: keys.dms(orgId) });
+    void qc.invalidateQueries({ queryKey: keys.po(orgId) });
     void qc.invalidateQueries({ queryKey: keys.unreadThreads(orgId) });
   } else if (e.type === "channel.muted") setMuted(qc, orgId, e.channelId, e.muted);
   else if (e.type === "thread.read") {

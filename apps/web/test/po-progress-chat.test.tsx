@@ -45,6 +45,7 @@ const company = (id: string, name: string): PoCompany => ({
   archived: false,
   open: 1,
   channelId: null,
+  unread: 0,
 });
 
 const card = (over: Partial<PoProgressCard> = {}): PoProgressCard => ({

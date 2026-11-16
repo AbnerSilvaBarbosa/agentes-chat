@@ -44,6 +44,7 @@ const company = (id: string, name: string, patch: Partial<PoCompany> = {}): PoCo
   archived: false,
   open: 3,
   channelId: null,
+  unread: 0,
   ...patch,
 });
 

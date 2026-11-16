@@ -12,6 +12,7 @@ const Company = z
     image: z.string().nullable(),
     archived: z.boolean(),
     open: z.number().int().openapi({ description: "Open cards of the company that the reader sees." }),
+    unread: z.number().int().openapi({ description: "Messages of that chat the reader has not read." }),
     channelId: z.uuid().nullable().openapi({
       description: "The reader's PO chat for this company, once it exists; null before the first message.",
     }),
