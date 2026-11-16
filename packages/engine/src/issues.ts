@@ -2286,15 +2286,21 @@ export async function setIssueAudience(
 ) {
   const { db } = deps;
   const current = await findVisible(db, actor, orgId, { id: issueId });
-  const assignee = current.assigneeType === "person" ? current.assigneeId : null;
-  const scope = await chosenScope(db, actor, orgId, audience, assignee ? [assignee] : []);
+  // Every person on the card stays on it, as the assignee always did; so does each person on a step (ADR 0186).
+  const onCards = new Map<string, string[]>();
+  const stepRows = await stepsOf(db, current);
+  const coRows = await coAssigneesOf(db, [current.id, ...stepRows.map((s) => s.id)]);
+  for (const row of [current, ...stepRows]) {
+    onCards.set(row.id, assignmentOf(row, coRows.get(row.id) ?? []).people);
+  }
+  const scope = await chosenScope(db, actor, orgId, audience, onCards.get(current.id) ?? []);
   const tied = (await tiedPeople(db, [current])).has(current.channelId ?? "");
   const unchanged = current.restricted
     ? scope.restricted && sameList(scope.audienceUserIds, current.audienceUserIds)
     : !scope.restricted && !tied;
   if (unchanged) return one(db, current, readerOf(actor));
   const steps = scope.restricted
-    ? (await stepsOf(db, current)).filter(
+    ? stepRows.filter(
         (s) => !s.restricted || (current.restricted && sameList(s.audienceUserIds, current.audienceUserIds)),
       )
     : [];
@@ -2308,7 +2314,7 @@ export async function setIssueAudience(
       .returning();
     if (!updated) throw new NotFoundError("Issue not found");
     for (const s of steps) {
-      const assigned = s.assigneeType === "person" && s.assigneeId ? [s.assigneeId] : [];
+      const assigned = onCards.get(s.id) ?? [];
       await tx
         .update(issues)
         .set({ ...scope, audienceUserIds: [...new Set([...scope.audienceUserIds, ...assigned])].sort() })

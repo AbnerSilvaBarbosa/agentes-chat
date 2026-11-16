@@ -10,6 +10,7 @@ import {
   listIssues,
   NEW_AGENT_DEFAULTS,
   openTaskConversation,
+  setIssueAudience,
   updateIssue,
   ValidationError,
 } from "../src";
@@ -601,5 +602,50 @@ describe("filtering by who is on a card", () => {
       .where(eq(schema.issues.id, beside.id));
     const hers = await listIssues(f.db, person(bia.id), f.org.id, { assignee: actor("person", bia.id) });
     expect(ids(hers)).toEqual(ids([principal, amongPeople]));
+  });
+});
+
+describe("who sees a card that has several people", () => {
+  test("a limited audience keeps every person on the card", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio, dani, edu] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+      await addMember(f.db, f.org.id, "member", "Dani"),
+      await addMember(f.db, f.org.id, "member", "Edu"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "aberto",
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id), actor("person", caio.id)],
+    });
+    // A step with its own people: its principal and the person also with it.
+    const step = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "passo",
+      parentIssueId: card.id,
+      assignees: [actor("person", edu.id), actor("person", caio.id)],
+    });
+    const narrowed = await setIssueAudience(deps, person(f.owner.id), f.org.id, card.id, {
+      mode: "people",
+      userIds: [dani.id],
+    });
+    // The agent is not a person to list; the card's people stay with the one chosen.
+    expect([...narrowed.audience.userIds].sort()).toEqual([bia.id, caio.id, dani.id].sort());
+    const stepRow = await getIssue(f.db, person(f.owner.id), f.org.id, { id: step.id });
+    expect([...stepRow.audience.userIds].sort()).toEqual([bia.id, caio.id, dani.id, edu.id].sort());
+    // Each of them still sees the card.
+    for (const who of [bia, caio, dani]) {
+      expect((await getIssue(f.db, person(who.id), f.org.id, { id: card.id })).id).toBe(card.id);
+    }
+    // When the principal is a person, the same: nobody on the card is cut off.
+    const people = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "gente",
+      assignees: [actor("person", bia.id), actor("person", caio.id)],
+    });
+    const only = await setIssueAudience(deps, person(f.owner.id), f.org.id, people.id, {
+      mode: "people",
+      userIds: [dani.id],
+    });
+    expect([...only.audience.userIds].sort()).toEqual([bia.id, caio.id, dani.id].sort());
   });
 });
