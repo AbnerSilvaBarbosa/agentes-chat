@@ -1,0 +1,103 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { setupDom } from "@agenteschat/ui/testing/dom";
+
+setupDom();
+
+import type { PoCompany } from "@agenteschat/client";
+import { act, cleanup } from "@testing-library/react";
+import { rememberedPoCompany, rememberPoCompany } from "@/lib/po-landing";
+import { ADA_ID, createFakeApi, type FakeState, ORG_ID, seedState } from "./fake-api";
+import { renderApp, screen, settle } from "./render";
+
+/** The PO view without a company: `/po` opens the company the person used last (ADR 0185, the sidebar's PO row). */
+
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+
+const company = (id: string, name: string): PoCompany => ({
+  id,
+  name,
+  color: "#3366ff",
+  image: null,
+  archived: false,
+  open: 3,
+  channelId: null,
+});
+
+const withPo = (patch: Partial<FakeState> = {}): FakeState =>
+  seedState({ poAgentId: ADA_ID, poCompanies: [company("s-acme", "Acme"), company("s-beta", "Beta")], ...patch });
+
+const go = async (state: FakeState, path: string, api = createFakeApi(state)) => {
+  const app = await renderApp(`/org/${ORG_ID}/${path}`, { api });
+  await settle(8);
+  return app;
+};
+
+const meId = (state: FakeState) => state.me?.user.id ?? "";
+
+const opened = (state: FakeState) => state.calls.filter((c) => c.method === "po.openChat").map((c) => c.args[1]);
+
+describe("the PO route", () => {
+  test("the PO route opens the company opened last", async () => {
+    const state = withPo();
+    rememberPoCompany(meId(state), ORG_ID, "s-beta");
+    const app = await go(state, "po");
+    expect(opened(state)).toEqual(["s-beta"]);
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/po/s-beta`);
+  });
+
+  test("with nothing remembered the PO route opens the first company", async () => {
+    const state = withPo();
+    const app = await go(state, "po");
+    expect(opened(state)).toEqual(["s-acme"]);
+    expect(app.router.state.location.pathname).toBe(`/org/${ORG_ID}/po/s-acme`);
+  });
+
+  test("a remembered company that is gone gives the first one", async () => {
+    const state = withPo();
+    rememberPoCompany(meId(state), ORG_ID, "s-gone");
+    await go(state, "po");
+    expect(opened(state)).toEqual(["s-acme"]);
+    expect(rememberedPoCompany(meId(state), ORG_ID)).toBe("s-acme");
+  });
+
+  test("opening a company remembers it for the next time", async () => {
+    const state = withPo();
+    await go(state, "po/s-beta");
+    expect(rememberedPoCompany(meId(state), ORG_ID)).toBe("s-beta");
+  });
+
+  test("a PO with no company shows the empty message", async () => {
+    const state = withPo({ poCompanies: [] });
+    await go(state, "po");
+    expect(screen().getByText("Nenhum PO para conversar sobre essa empresa.")).toBeTruthy();
+    expect(screen().queryByRole("alert")).toBeNull();
+    expect(opened(state)).toEqual([]);
+  });
+
+  test("a workspace without a PO shows the empty message", async () => {
+    const state = withPo({ poAgentId: null });
+    await go(state, "po");
+    expect(screen().getByText("Nenhum PO para conversar sobre essa empresa.")).toBeTruthy();
+    expect(opened(state)).toEqual([]);
+  });
+
+  test("while the overview loads the skeleton shows", async () => {
+    const state = withPo();
+    const api = createFakeApi(state);
+    let release: (v: Awaited<ReturnType<typeof api.po.overview>>) => void = () => {};
+    const held = new Promise<Awaited<ReturnType<typeof api.po.overview>>>((r) => {
+      release = r;
+    });
+    const real = api.po.overview;
+    api.po.overview = () => held;
+    await go(state, "po", api);
+    expect(screen().queryByText("Nenhum PO para conversar sobre essa empresa.")).toBeNull();
+    expect(screen().getByRole("status", { name: "Carregando mensagens" })).toBeTruthy();
+    await act(async () => release(await real(ORG_ID)));
+    await settle(8);
+    expect(opened(state)).toEqual(["s-acme"]);
+  });
+});

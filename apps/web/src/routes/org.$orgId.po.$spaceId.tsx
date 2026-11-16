@@ -1,9 +1,12 @@
 import { usePoOverview } from "@agenteschat/client";
 import { EmptyState } from "@agenteschat/ui";
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/Loading";
+import { useOrg } from "@/components/org-context";
 import { threadSearch } from "@/lib/open-param";
+import { rememberPoCompany } from "@/lib/po-landing";
 import { ChannelSkeleton } from "@/pages/ChannelPage";
 import { DmPage } from "@/pages/DmPage";
 
@@ -20,8 +23,14 @@ export const Route = createFileRoute("/org/$orgId/po/$spaceId")({
   component: function PoChat() {
     const { t } = useTranslation();
     const { orgId, spaceId } = Route.useParams();
+    const { me } = useOrg();
     const overview = usePoOverview(orgId);
     const focus = Route.useSearch().m;
+    // The company the PO view opens on next time (the sidebar's PO row), once it is known to be a live one.
+    const live = !!overview.data?.agentId && !!overview.data.companies.some((c) => c.id === spaceId);
+    useEffect(() => {
+      if (live) rememberPoCompany(me.user.id, orgId, spaceId);
+    }, [live, me.user.id, orgId, spaceId]);
     if (overview.isError)
       return (
         <main className="shell__main">
