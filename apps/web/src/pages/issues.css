@@ -517,17 +517,10 @@ html:not([data-pointer]) .issue-card:focus-visible {
   font-weight: 600;
   color: var(--ink2);
 }
-/* The people also with the card: faces overlapped, each ringed in the card's own face, the count after them. */
+/* The people also with the card: the kit's avatar stack (its ring and its initials rule), the count after it. */
 .issue-card__also {
   --stack-ring: var(--raised);
   margin-inline-start: var(--space-2);
-}
-.issue-card__also > .ac-avatar {
-  margin-inline: 0;
-  box-shadow: 0 0 0 2px var(--stack-ring);
-}
-.issue-card__also > .ac-avatar + .ac-avatar {
-  margin-inline-start: -6px;
 }
 .issue-card__more {
   margin-inline-start: var(--space-1);

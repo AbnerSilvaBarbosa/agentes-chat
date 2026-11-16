@@ -26,6 +26,7 @@ import { NO_PROJECT, projectOfFilter, spaceOfFilter } from "@agenteschat/client/
 import { ISSUES_VIEW_DEFAULT, PRIORITY_ORDER, sortIssues } from "@agenteschat/client/lib/issues-view";
 import { can } from "@agenteschat/client/lib/permissions";
 import {
+  AvatarStack,
   Breadcrumb,
   type BreadcrumbItem,
   Button,
@@ -1221,7 +1222,7 @@ function AlsoWith({ people }: { people: Actor[] }) {
   const shown = people.slice(0, ALSO_FACES);
   return (
     <span className="ac-who issue-card__also" aria-hidden="true">
-      {shown.map((a) => actors.avatar(a, "sm"))}
+      <AvatarStack>{shown.map((a) => actors.avatar(a, "sm"))}</AvatarStack>
       {people.length > shown.length && (
         <span className="issue-card__more tabular">
           {t("issues.assignees.more", { count: people.length - shown.length })}

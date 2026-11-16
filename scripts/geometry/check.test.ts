@@ -112,6 +112,8 @@ describe("geometry check", () => {
     expect(fixture).toContain("good-midword--hyphens");
     // The face on a menu's top that changes the photo (`MenuFace`) is no row: neither its height nor its room.
     for (const twin of ["good-menuitem--face", "good-rim--face"]) expect(fixture).toContain(twin);
+    // The faces also with a task card are the kit's avatar stack, photo-less people included: no letter is cut.
+    expect(fixture).toContain("good-overlap--avatarstack");
     for (const rule of SELF_TESTED) {
       expect(fixture).toContain(`bad-${rule}`);
       expect(fixture).toContain(`good-${rule}`);

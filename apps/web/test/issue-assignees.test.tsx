@@ -290,12 +290,12 @@ describe("the board and the list", () => {
       const many = cardOf("Cinco pessoas");
       // Walter has it; João and two more show as faces after him, one more is a count.
       expect(many.querySelector(".issue-card__who > .ac-who > b")?.textContent).toBe("Walter");
-      expect(many.querySelectorAll(".issue-card__also > .ac-avatar")).toHaveLength(3);
+      expect(many.querySelectorAll(".issue-card__also > .ac-avatar-stack > .ac-avatar")).toHaveLength(3);
       expect(many.querySelector(".issue-card__also .issue-card__more")?.textContent).toBe("+1");
       expect(heardWho(many)).toBe("Responsável: Walter. Também com: João, Bea, Caio, Dora.");
       // The agent is the principal and Walter, who is also with it, is one face.
       const agent = cardOf("Com o agente");
-      expect(agent.querySelectorAll(".issue-card__also > .ac-avatar")).toHaveLength(1);
+      expect(agent.querySelectorAll(".issue-card__also > .ac-avatar-stack > .ac-avatar")).toHaveLength(1);
       expect(agent.querySelector(".issue-card__also .issue-card__more")).toBeNull();
       expect(heardWho(agent)).toBe("Responsável: Ada. Também com: Walter.");
       // One person alone looks as before: no faces, no count.
@@ -463,7 +463,7 @@ describe("at their worst", () => {
       await app(`/org/${ORG_ID}/my-tasks`, layout);
       const card = cardOf("Fechar o mês");
       expect(card.querySelector(".issue-card__who > .ac-who > b")?.textContent).toBe(LONG);
-      expect(card.querySelectorAll(".issue-card__also > .ac-avatar")).toHaveLength(3);
+      expect(card.querySelectorAll(".issue-card__also > .ac-avatar-stack > .ac-avatar")).toHaveLength(3);
       expect(card.querySelector(".issue-card__more")?.textContent).toBe("+2");
       expect(heardWho(card)).toBe(`Responsável: ${LONG}. Também com: Bea, Caio, Dora, Enzo, Walter.`);
       cleanup();
