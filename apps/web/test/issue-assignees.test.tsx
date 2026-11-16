@@ -5,6 +5,7 @@ setupDom();
 
 import type { Actor, Member } from "@agenteschat/client";
 import { assignmentWith } from "@agenteschat/client/lib/issue-assignees";
+import { ISSUES_VIEW_DEFAULT } from "@agenteschat/client/lib/issues-view";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { type AssigneesChange, AssigneesField } from "@/components/issues/AssigneesField";
@@ -242,5 +243,69 @@ describe("the new card dialog", () => {
     const made = (await api.issues.list(ORG_ID)).find((i) => i.title === "Testar o checkout");
     expect(made?.assignee).toEqual(walter);
     expect(made?.alsoWith).toEqual([joao]);
+  });
+});
+
+/** The board's or the list's cards for a set of tasks: `layout` and what Exibição shows are the view's. */
+async function cards(
+  layout: "board" | "list",
+  tasks: { title: string; assignees: Actor[] }[],
+  fields: Partial<(typeof ISSUES_VIEW_DEFAULT)["fields"]> = {},
+  extra: Member[] = CROWD,
+) {
+  const state = seedState();
+  state.members.push(...extra);
+  const base = structuredClone(ISSUES_VIEW_DEFAULT);
+  state.issuesView = { ...base, layout, fields: { ...base.fields, ...fields } };
+  const api = createFakeApi(state, { seed: false });
+  for (const t of tasks) await api.issues.create(ORG_ID, t);
+  // Minhas tarefas lists the cards the member is on, as the board's cards or the list's rows of the view.
+  await renderApp(`/org/${ORG_ID}/my-tasks`, { api });
+  await settle(8);
+  return api;
+}
+const crowd = CROWD.map((m) => ({ type: "person" as const, id: m.userId }));
+const cardOf = (title: string) =>
+  [...document.querySelectorAll<HTMLElement>("[data-card]")].find((c) => c.textContent?.includes(title)) as HTMLElement;
+/** What the card says to a screen reader about who has it. */
+const heardWho = (card: HTMLElement) =>
+  (card.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent)
+    .find((text) => text?.startsWith("Responsável")) ?? "";
+
+describe("the board and the list", () => {
+  test("a board card and a list row show the faces and read every name", async () => {
+    const tasks = [
+      { title: "Cinco pessoas", assignees: [walter, joao, crowd[0], crowd[1], crowd[2]] as Actor[] },
+      { title: "Com o agente", assignees: [ada, walter] as Actor[] },
+      { title: "Sozinho", assignees: [walter] as Actor[] },
+    ];
+    for (const layout of ["board", "list"] as const) {
+      await cards(layout, tasks);
+      const many = cardOf("Cinco pessoas");
+      // Walter has it; João and two more show as faces after him, one more is a count.
+      expect(many.querySelector(".issue-card__who > .ac-who > b")?.textContent).toBe("Walter");
+      expect(many.querySelectorAll(".issue-card__also > .ac-avatar")).toHaveLength(3);
+      expect(many.querySelector(".issue-card__also .issue-card__more")?.textContent).toBe("+1");
+      expect(heardWho(many)).toBe("Responsável: Walter. Também com: João, Bea, Caio, Dora.");
+      // The agent is the principal and Walter, who is also with it, is one face.
+      const agent = cardOf("Com o agente");
+      expect(agent.querySelectorAll(".issue-card__also > .ac-avatar")).toHaveLength(1);
+      expect(agent.querySelector(".issue-card__also .issue-card__more")).toBeNull();
+      expect(heardWho(agent)).toBe("Responsável: Ada. Também com: Walter.");
+      // One person alone looks as before: no faces, no count.
+      const alone = cardOf("Sozinho");
+      expect(alone.querySelector(".issue-card__also")).toBeNull();
+      expect(heardWho(alone)).toBe("Responsável: Walter");
+      cleanup();
+    }
+  });
+
+  test("with Responsável off in Exibição the faces go with the principal", async () => {
+    await cards("board", [{ title: "Dois", assignees: [walter, joao] }], { assignee: false });
+    const card = cardOf("Dois");
+    expect(card.querySelector(".issue-card__who")).toBeNull();
+    expect(card.querySelector(".issue-card__also")).toBeNull();
   });
 });

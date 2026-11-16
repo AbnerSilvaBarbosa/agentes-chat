@@ -1180,14 +1180,39 @@ function CardWho({ issue: i, state, assignee }: { issue: Issue; state: TaskState
   const who = assignee ? i.assignee : null;
   if (!who && !state) return null;
   const work = state?.kind === "running" ? "running" : state?.kind === "stalled" ? "stalled" : undefined;
+  const also = assignee ? (i.alsoWith ?? []) : [];
   return (
     <span className="issue-card__who">
       {who && <ActorWho actor={who} name={actors.name(who)} size="sm" work={work} />}
+      {also.length > 0 && <AlsoWith people={also} />}
       {state && (
         <>
           {who && " "}
           <StateWords state={state} />
         </>
+      )}
+    </span>
+  );
+}
+
+/** The faces shown beside the principal; the rest are a count. */
+const ALSO_FACES = 3;
+
+/**
+ * The people also with the card (ADR 0186): up to three faces overlapped after the principal's name, then how many more.
+ * Read by the card's description (`useTaskCard`), so a screen reader hears each name once.
+ */
+function AlsoWith({ people }: { people: Actor[] }) {
+  const { t } = useTranslation();
+  const actors = useActors();
+  const shown = people.slice(0, ALSO_FACES);
+  return (
+    <span className="ac-who issue-card__also" aria-hidden="true">
+      {shown.map((a) => actors.avatar(a, "sm"))}
+      {people.length > shown.length && (
+        <span className="issue-card__more tabular">
+          {t("issues.assignees.more", { count: people.length - shown.length })}
+        </span>
       )}
     </span>
   );
@@ -1275,9 +1300,16 @@ function useTaskCard(i: Issue) {
   const whoId = useId();
   const state = cardState(i, useTaskLive(i));
   const name = t("issues.open", { number: i.number, title: i.title });
+  const also = i.alsoWith ?? [];
+  // Everyone on the card, read once: the faces on it are not read one by one.
   const who = i.assignee && (
     <span id={whoId} hidden>
-      {`${t("issues.form.assignee")}: ${actors.name(i.assignee)}`}
+      {also.length > 0
+        ? t("issues.assignees.describedWith", {
+            principal: actors.name(i.assignee),
+            people: also.map((a) => actors.name(a)).join(", "),
+          })
+        : t("issues.assignees.described", { principal: actors.name(i.assignee) })}
     </span>
   );
   return {
