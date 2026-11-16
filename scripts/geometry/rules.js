@@ -1599,7 +1599,8 @@
         const roomy = touch || menu.matches(".ac-mo__group");
         const own = [...menu.querySelectorAll(OWN)].filter((x) => style(x).display !== "none");
         // A name or a description that wraps (a long one, a narrow window) adds its lines: words wrap, never cut. A
-        // row with a face is as tall as the face until the lines are taller than it, so it grows by what passes it.
+        // row with a face in a menu that wraps (`.ac-menu--wrap`) is as tall as the face until the lines are taller than
+        // it, so it grows by what passes it; any other menu keeps the plain rule.
         const grown = (box, face = 0) => {
           if (!box || !seen(box)) return 0;
           const lh = parseFloat(style(box).lineHeight);
@@ -1614,7 +1615,9 @@
               grown(el.querySelector(".ac-menu__desc"))
             : grown(
                 el.querySelector(".ac-menu__label, .ac-filter__label"),
-                el.querySelector(":scope > .ac-menu__leading")?.getBoundingClientRect().height ?? 0,
+                menu.matches(".ac-menu--wrap")
+                  ? (el.querySelector(":scope > .ac-menu__leading")?.getBoundingClientRect().height ?? 0)
+                  : 0,
               );
           const want = (faces ? (roomy ? 44 : 36) : desc ? (roomy ? 58 : 50) : roomy ? 40 : 32) + extra;
           const r = el.getBoundingClientRect();
