@@ -5,19 +5,21 @@
  */
 export type IssuesLevel = "root" | "company" | "board" | "all" | "mine";
 
-/** What the address says: `?project=` (a board, also "none"), `?space=` (a company), `?all=1`. */
+/** What the address says: `?project=` (a board, also "none"), `?space=` (a company), `?all=1`, `?columns=`. */
 export interface IssuesAddress {
   project?: string;
   space?: string;
   all?: boolean;
+  /** `?columns=` beside a company (ADR 0185 addendum): its tasks in those columns, read as the whole list of tasks. */
+  columns?: boolean;
   /** The page of the member's own tasks (`/my-tasks`), which no address parameter reaches. */
   mine?: boolean;
 }
 
-export function levelOf({ project, space, all, mine }: IssuesAddress): IssuesLevel {
+export function levelOf({ project, space, all, columns, mine }: IssuesAddress): IssuesLevel {
   if (mine) return "mine";
   if (project) return "board";
-  if (space) return "company";
+  if (space) return columns ? "all" : "company";
   return all ? "all" : "root";
 }
 

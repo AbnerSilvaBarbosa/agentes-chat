@@ -84,6 +84,18 @@ export function useStageName() {
   return (stage: IssueStatus) => (stage === "canceled" ? t("issues.canceledColumn") : t(`issues.status.${stage}`));
 }
 
+/**
+ * A column filter's key (`?columns=`, ADR 0185 addendum) as the person reads it: a column with no name is its stage's
+ * word, any other key is the name, which the key keeps in lower case, with its first letter raised.
+ */
+export function useColumnKeyLabel() {
+  const stageName = useStageName();
+  return (key: string) =>
+    key.startsWith("stage:")
+      ? stageName(key.slice("stage:".length) as IssueStatus)
+      : key.charAt(0).toLocaleUpperCase() + key.slice(1);
+}
+
 /** A column's title: its own name, or its stage's. */
 export function useColumnTitle() {
   const stageName = useStageName();

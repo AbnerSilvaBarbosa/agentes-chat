@@ -50,7 +50,7 @@ import {
   WorkSweep,
 } from "@agenteschat/ui";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { type ReactNode, useDeferredValue, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ActorAvatar, ActorWho, AgentAvatar } from "@/components/AgentAvatar";
 import { AskAgentButton } from "@/components/AskAgentButton";
@@ -80,6 +80,7 @@ import {
   STATUS_ICON,
   type CardState as TaskState,
   useAssigneeColor,
+  useColumnKeyLabel,
   useColumnTitle,
   useStageName,
   useStepText,
@@ -143,6 +144,7 @@ function useProjectParam(): [string | undefined, (value: string | undefined) => 
           space: _space,
           all: _all,
           waiting: _waiting,
+          columns: _columns,
           open: _open,
           m: _m,
           tab: _tab,
@@ -170,6 +172,7 @@ function useAllParam(): [boolean, (on: boolean) => void] {
           space: _space,
           all: _all,
           waiting: _waiting,
+          columns: _columns,
           open: _open,
           m: _m,
           tab: _tab,
@@ -201,6 +204,31 @@ function useWaitingParam(): [boolean, () => void] {
 }
 
 /**
+ * `?columns=a|b` beside `?space=<id>` (ADR 0185 addendum): the company's tasks in those columns, as the whole list of
+ * tasks, the server filtering them ("Ver todos" in the PO chat's progress panel opens this). Each key is a column's
+ * name in lower case, or `stage:<stage>` for a column with no name. Picking a company or a board leaves it.
+ */
+function useColumnsParam(): [string[], (next: string[]) => void] {
+  const value = useRouterState({
+    select: (s) => {
+      const columns = (s.location.search as Record<string, unknown>).columns;
+      return typeof columns === "string" ? columns : "";
+    },
+  });
+  const navigate = useNavigate();
+  const keys = useMemo(() => value.split("|").filter(Boolean), [value]);
+  const set = (next: string[]) =>
+    void navigate({
+      to: ".",
+      search: ((prev: Record<string, unknown>) => {
+        const { columns: _columns, ...rest } = prev;
+        return next.length > 0 ? { ...rest, columns: next.join("|") } : rest;
+      }) as never,
+    });
+  return [keys, set];
+}
+
+/**
  * The company whose board this is, in the URL (`?space=<id>`): its boards, and the tasks of all of them. Picking one
  * leaves the board of a single board, as picking a board leaves the company.
  */
@@ -216,6 +244,7 @@ function useSpaceParam(): [string | undefined, (value: string | undefined) => vo
           space: _space,
           all: _all,
           waiting: _waiting,
+          columns: _columns,
           open: _open,
           m: _m,
           tab: _tab,
@@ -302,7 +331,10 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   // A company's own page lists its boards: it asks for no tasks, and the board of one board is where tasks are read.
   const [allParam, setAllParam] = useAllParam();
   // Tarefas opens on the companies; inside one, on its boards; in a board, on its kanban (ADR 0179).
-  const level = levelOf({ project: projectParam, space: spaceParam, all: allParam, mine });
+  const [columnKeys, setColumnKeys] = useColumnsParam();
+  const columnLabel = useColumnKeyLabel();
+  const columnsOn = columnKeys.length > 0 && Boolean(spaceParam) && !projectParam && !mine;
+  const level = levelOf({ project: projectParam, space: spaceParam, all: allParam, columns: columnsOn, mine });
   const chrome = chromeFor(level);
   const onRootPage = level === "root";
   const onCompanyPage = level === "company";
@@ -321,7 +353,15 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   // The filter is a level of "Todas as tarefas": a board or a company has its own tasks to read.
   const [waitingParam, clearWaiting] = useWaitingParam();
   const waitingOn = waitingParam && level === "all";
-  const issues = useIssues(org.id, search, projectParam, spaceParam, mine ? "me" : "", waitingOn ? "person" : "");
+  const issues = useIssues(
+    org.id,
+    search,
+    projectParam,
+    spaceParam,
+    mine ? "me" : "",
+    waitingOn ? "person" : "",
+    columnsOn ? columnKeys : [],
+  );
   const columnsQuery = useIssueColumns(org.id, projectParam);
   const columns = columnsQuery.data;
   // The member's page never shows canceled tasks, whatever the display option says for the other pages.
@@ -602,6 +642,18 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
                     onChange={clearWaiting}
                     valueText={(o) => o.label}
                     clearLabel={t("issues.waitingFilterClear")}
+                  />
+                )}
+                {columnsOn && (
+                  <FilterChip
+                    label={t("issues.columnFilter")}
+                    icon="layers"
+                    multiple
+                    options={columnKeys.map((key) => ({ value: key, label: columnLabel(key) }))}
+                    value={columnKeys}
+                    onChange={setColumnKeys}
+                    valueText={(o) => `${t("issues.columnFilter")}: ${o.label}`}
+                    clearLabel={t("issues.columnFilterClear")}
                   />
                 )}
                 <IssueFilters view={view} issues={all} onChange={changeView} assignee={chrome.assignee !== false} />
