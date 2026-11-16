@@ -1570,12 +1570,25 @@ async function linkRun(deps: IssueDeps, actor: IssueActor, issue: IssueRow) {
   await startedWork(deps, issue, actor.agentId, [actor.runId]);
 }
 
+/**
+ * The workspace's PO writes specs and never develops (ADR 0185): its work on a card leaves the card's status and
+ * column alone, or a card a person put in "Especificar" would jump to the developers' column and end as "Feito".
+ */
+async function isPoAgent(db: Executor, orgId: string, agentId: string) {
+  const [row] = await db
+    .select({ poAgentId: schema.organizationSettings.poAgentId })
+    .from(schema.organizationSettings)
+    .where(eq(schema.organizationSettings.orgId, orgId));
+  return row?.poAgentId === agentId;
+}
+
 async function startedWork(deps: IssueDeps, issue: IssueRow, agentId: string, runIds: string[]) {
   if (runIds.length === 0) return;
   await deps.db
     .update(agentRuns)
     .set({ issueId: issue.id })
     .where(and(inArray(agentRuns.id, runIds), isNull(agentRuns.issueId), eq(agentRuns.orgId, issue.orgId)));
+  if (await isPoAgent(deps.db, issue.orgId, agentId)) return;
   const [current] = await deps.db.select().from(issues).where(eq(issues.id, issue.id));
   const isMineToStart =
     current?.status === "todo" && current.assigneeType === "agent" && current.assigneeId === agentId;
@@ -2219,6 +2232,8 @@ export async function setWorkIssueState(
     if (view.state && view.state !== "working")
       blocked = { reason: view.state, since: current.blocked?.since ?? now.toISOString() };
   }
+  // The PO's work on a card never moves it (ADR 0185): the status and the column stay where a person put them.
+  if (await isPoAgent(deps.db, work.orgId, work.agentId)) status = current.status;
   const author: WorkActor = { type: "agent", id: work.agentId };
   const row = await deps.db.transaction(async (tx) => {
     const [updated] = await tx
