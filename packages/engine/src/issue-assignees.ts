@@ -1,5 +1,8 @@
+import { asc, type Database, inArray, type SQL, schema, sql } from "@agenteschat/db";
 import { ValidationError } from "./errors";
 import type { WorkActor } from "./issues";
+
+const { issueCoAssignees } = schema;
 
 /**
  * Who is responsible on a card (ADR 0186). A card has at most one agent, which is always its principal, and people in
@@ -223,4 +226,27 @@ export function assigneeEvents(
     });
   }
   return events;
+}
+
+/** The people also with each card, in order, for any number of cards in one query. A card with none has no entry. */
+export async function coAssigneesOf(db: Database, issueIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (issueIds.length === 0) return out;
+  const rows = await db
+    .select({ issueId: issueCoAssignees.issueId, userId: issueCoAssignees.userId })
+    .from(issueCoAssignees)
+    .where(inArray(issueCoAssignees.issueId, issueIds))
+    .orderBy(asc(issueCoAssignees.issueId), asc(issueCoAssignees.position));
+  for (const r of rows) out.set(r.issueId, [...(out.get(r.issueId) ?? []), r.userId]);
+  return out;
+}
+
+/**
+ * Whether `userId` is a person on the `issues` row `alias`: its principal, or a person also with it. An agent
+ * principal matches nobody here (an agent filter reads the principal columns). Sight of the card is `taskSeenSql`.
+ */
+export function onCardSql(alias: string, userId: SQL): SQL {
+  const t = sql.raw(alias);
+  return sql`((${t}.assignee_type = 'person' and ${t}.assignee_id = ${userId})
+    or exists (select 1 from ${issueCoAssignees} ic where ic.issue_id = ${t}.id and ic.user_id = ${userId}))`;
 }
