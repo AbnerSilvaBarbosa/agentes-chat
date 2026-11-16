@@ -283,7 +283,8 @@
       "install.page.beta",
       "install.scene.finder",
       "install.scene.downloads",
-      "devices.armBuild"
+      "devices.armBuild",
+      "issues.assignees.principal"
     ],
     "es": [
       "devices.iphone.path.general",

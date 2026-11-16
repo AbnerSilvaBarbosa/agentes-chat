@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { resources } from "@agenteschat/i18n";
+import i18next from "i18next";
+import { ApiError } from "../src/api/http";
 import type { Actor, Issue } from "../src/api/types";
+import { actionTextValues } from "../src/lib/actions";
+import { knownErrorText } from "../src/lib/errors";
 import {
   ASSIGNEES_MAX,
   assigneeKeys,
@@ -8,6 +13,7 @@ import {
   matchesAssignees,
   peopleOn,
 } from "../src/lib/issue-assignees";
+import { issueEventText } from "../src/lib/issues";
 
 const person = (id: string): Actor => ({ type: "person", id });
 const agent = (id: string): Actor => ({ type: "agent", id });
@@ -118,5 +124,86 @@ describe("the optimistic card", () => {
     expect(assignmentWith(card(ana, five.slice(0, 4)), { addAssignees: [caio] })?.alsoWith).toHaveLength(5);
     // A card of six people given to an agent would make six also with.
     expect(assignmentWith(card(ana, five), { assignee: dev })).toBeNull();
+  });
+});
+
+describe("the words of several people on a card", () => {
+  const lang = (lng: string) => {
+    const instance = i18next.createInstance();
+    void instance.init({ lng, fallbackLng: "en", resources, initAsync: false, interpolation: { escapeValue: false } });
+    return instance.t;
+  };
+  const en = lang("en");
+  const pt = lang("pt-BR");
+
+  test("the new error codes and history words exist in both languages", () => {
+    // Each refusal reads as a sentence of its own in each language, never the server's English or a bare key.
+    const refusals = {
+      "issue.assignees_max": ["at most 5 people", "No máximo 5 pessoas"],
+      "issue.two_agents": ["at most one agent", "no máximo um agente"],
+      "issue.principal_is_agent": ["agent is its principal", "agente é o principal"],
+      "issue.principal_not_on_card": ["not on the task", "não está no card"],
+    } as const;
+    for (const [code, [inEnglish, inPortuguese]] of Object.entries(refusals)) {
+      const error = new ApiError(400, code, "server words");
+      expect(knownErrorText(en, error)?.toLowerCase()).toContain(inEnglish.toLowerCase());
+      expect(knownErrorText(pt, error, "pt-BR")?.toLowerCase()).toContain(inPortuguese.toLowerCase());
+    }
+
+    // The history: each event the card's people write, in the person's language, with the name or names it carries.
+    const event = (textCode: string, textParams: Record<string, string>) => ({
+      text: "fallback",
+      textCode,
+      textParams,
+    });
+    const words = {
+      assignee_added: [{ name: "Bia" }, "added Bia to the task", "pôs Bia também no card"],
+      assignee_removed: [{ name: "Bia" }, "took Bia off the task", "tirou Bia do card"],
+      principal_changed: [{ name: "Bia" }, "made Bia the principal", "tornou Bia o principal"],
+      agent_replaced: [
+        { from: "Dev", to: "QA" },
+        "handed the task from Dev to QA and the people stay",
+        "passou o card de Dev para QA e as pessoas ficam",
+      ],
+    } as const;
+    for (const [code, [params, inEnglish, inPortuguese]] of Object.entries(words)) {
+      expect(issueEventText(en, event(code, params))).toBe(inEnglish);
+      expect(issueEventText(pt, event(code, params))).toBe(inPortuguese);
+    }
+
+    // The agent's receipt names the field.
+    const receipt = {
+      kind: "issue.updated" as const,
+      target: { type: "issue" as const, id: "i1", number: 3 },
+      params: { fields: ["alsoWith"] },
+    };
+    expect(actionTextValues(receipt, en).fields).toBe("the people also on it");
+    expect(actionTextValues(receipt, pt).fields).toBe("as pessoas também no card");
+
+    // The picker's and the card's words, in both languages: none is missing (a missing key reads as itself).
+    const keys = [
+      "issues.assignees.label",
+      "issues.assignees.principal",
+      "issues.assignees.alsoWith",
+      "issues.assignees.makePrincipal",
+      "issues.assignees.add",
+      "issues.assignees.max",
+      "issues.assignees.swapsAgent",
+      "issues.drag.alsoWith",
+    ];
+    for (const key of keys) {
+      for (const t of [en, pt]) expect(t(key, { name: "Bia", count: 1 })).not.toBe(key);
+    }
+    expect(pt("issues.assignees.label")).toBe("Responsável");
+    expect(pt("issues.assignees.principal")).toBe("Principal");
+    expect(pt("issues.assignees.alsoWith")).toBe("Também com");
+    expect(pt("issues.assignees.makePrincipal")).toBe("Tornar principal");
+    expect(pt("issues.assignees.add")).toBe("Adicionar pessoa");
+    expect(pt("issues.assignees.max")).toBe("No máximo 5 pessoas também com");
+    expect(pt("issues.assignees.swapsAgent")).toBe("Troca o agente e as pessoas ficam");
+    expect(pt("issues.assignees.describedWith", { principal: "Ana", people: "Bia, Caio" })).toBe(
+      "Responsável: Ana. Também com: Bia, Caio.",
+    );
+    expect(pt("issues.drag.alsoWith", { name: "Bia" })).toBe("Bia entrou no card");
   });
 });
