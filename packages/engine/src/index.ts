@@ -231,6 +231,7 @@ export * from "./plan-usage";
 export * from "./po-chat";
 export * from "./po-chat-context";
 export * from "./po-columns";
+export * from "./po-progress";
 export * from "./po-proposals";
 export * from "./po-spec-brief";
 export * from "./po-specs";
