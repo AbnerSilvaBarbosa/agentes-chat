@@ -61,6 +61,7 @@ import { resolveRoutinePaused } from "./notification-producers";
 import { can, getMembership, requirePermission } from "./organizations";
 import { PermanentJobError } from "./outbox";
 import { maySql } from "./permissions";
+import { poRoutineChat } from "./po-chat";
 import {
   type RoutineAccess,
   type RoutineBrief,
@@ -125,7 +126,8 @@ const {
 
 export type RoutineTarget =
   | { type: "channel"; channelId: string }
-  | { type: "dm" }
+  /** `spaceId`: the company whose PO chat a PO routine reports to (ADR 0185 addendum); absent, it is derived. */
+  | { type: "dm"; spaceId?: string }
   | { type: "artifact" }
   /**
    * The conversation it was asked in (a thread, or a DM: `threadId` null).
@@ -2323,7 +2325,20 @@ async function fireClaimedRun(deps: RoutineDeps, run: RunRow) {
     deliverTo = { channelId: target.channelId, threadId: target.type === "conversation" ? target.threadId : null };
   } else {
     if (!can(membership, "post")) return paused("creator_no_access");
-    deliverTo = { channelId: (await openDm(db, creator, routine.orgId, { agentId: agent.id })).id, threadId: null };
+    const poChat =
+      target.type === "dm"
+        ? await poRoutineChat(db, {
+            orgId: routine.orgId,
+            agentId: agent.id,
+            userId: creator,
+            spaceId: target.spaceId,
+            eventFilter: routine.eventFilter,
+          })
+        : null;
+    deliverTo = {
+      channelId: poChat?.id ?? (await openDm(db, creator, routine.orgId, { agentId: agent.id })).id,
+      threadId: null,
+    };
   }
 
   const gate = await makeWayForRun(deps, routine, run);

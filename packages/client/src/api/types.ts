@@ -3997,7 +3997,10 @@ export interface RoutineEmailFilter {
 }
 
 /** Where a routine created here delivers. */
-export type RoutineTargetInput = { type: "channel"; channelId: string } | { type: "dm" } | { type: "artifact" };
+export type RoutineTargetInput =
+  | { type: "channel"; channelId: string }
+  | { type: "dm"; spaceId?: string }
+  | { type: "artifact" };
 
 /**
  * Also `conversation`: a thread or DM, from an agent's `schedule_reminder` or

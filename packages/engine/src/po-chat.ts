@@ -11,7 +11,7 @@ import { type IssueSpaceRef, listIssueProjects, spaceRef } from "./issue-project
 import { can, requirePermission } from "./organizations";
 import { closedRefusal } from "./standing";
 
-const { agents, channelMembers, channels, issueSpaces, organizationSettings, poCardProposals } = schema;
+const { agents, channelMembers, channels, issueProjects, issueSpaces, organizationSettings, poCardProposals } = schema;
 
 /**
  * A PO chat is the DM between a person and the workspace's PO about one company (ADR 0185): a DM whose key carries a
@@ -196,4 +196,44 @@ export async function poScopeOf(
     .from(issueSpaces)
     .where(and(eq(issueSpaces.id, spaceId), eq(issueSpaces.orgId, orgId)));
   return space ? { spaceId: space.id, name: space.name } : null;
+}
+
+/**
+ * Where a DM routine of the PO reports (ADR 0185 addendum): the person's PO chat of one company, so the PO's routines
+ * and its conversation are one thread. The company is the target's `spaceId`; else the one the routine's event filter
+ * names (its `spaceId`, or its board's company); else the only company the PO chat can open for the person. Null when
+ * the agent is not the PO or no single company applies (several, none, an archived one): the caller keeps the plain DM.
+ */
+export async function poRoutineChat(
+  db: Database,
+  input: {
+    orgId: string;
+    agentId: string;
+    userId: string;
+    spaceId?: string | null;
+    eventFilter?: Record<string, string> | null;
+  },
+): Promise<{ id: string } | null> {
+  const po = await poAgentOf(db, input.orgId);
+  if (!po || po.id !== input.agentId) return null;
+  let spaceId = input.spaceId ?? input.eventFilter?.spaceId ?? null;
+  const projectId = input.eventFilter?.projectId;
+  if (!spaceId && projectId) {
+    const [board] = await db
+      .select({ spaceId: issueProjects.spaceId })
+      .from(issueProjects)
+      .where(and(eq(issueProjects.id, projectId), eq(issueProjects.orgId, input.orgId)));
+    spaceId = board?.spaceId ?? null;
+  }
+  if (!spaceId) {
+    const { companies } = await listPoCompanies(db, input.userId, input.orgId);
+    if (companies.length !== 1) return null;
+    spaceId = (companies[0] as PoCompany).id;
+  }
+  try {
+    return { id: (await openPoChat(db, input.userId, input.orgId, spaceId)).channelId };
+  } catch (error) {
+    if (error instanceof NotFoundError || error instanceof ValidationError) return null; // an archived or gone company
+    throw error;
+  }
 }

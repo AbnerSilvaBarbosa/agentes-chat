@@ -83,7 +83,7 @@ const Reminder = z
   .openapi("Reminder");
 const Target = z.union([
   z.object({ type: z.literal("channel"), channelId: z.uuid() }),
-  z.object({ type: z.literal("dm") }),
+  z.object({ type: z.literal("dm"), spaceId: z.uuid().optional() }),
   z.object({ type: z.literal("artifact") }),
 ]);
 /** Where an edit may point a routine: also `conversation` (a thread or DM, from an agent's reminder or routine). */
