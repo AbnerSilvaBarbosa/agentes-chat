@@ -208,3 +208,39 @@ describe("the card's page", () => {
       expect(history()).toContain(words);
   });
 });
+
+describe("the new card dialog", () => {
+  test("the new card dialog takes several people", async () => {
+    const api = createFakeApi(seedState(), { seed: false });
+    await api.issues.create(ORG_ID, { title: "Algo meu", assignee: walter });
+    await renderApp(`/org/${ORG_ID}/my-tasks`, { api });
+    await settle(8);
+    // Minhas tarefas starts the card with the member as its first person.
+    await click(within(document.querySelector(".ac-pagehead__actions") as HTMLElement).getByRole("button"));
+    await settle(3);
+    const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
+    const field = within(dialog).getByRole("button", { name: /^Responsável: Walter/ });
+    field.focus();
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+      fireEvent.keyUp(field, { key: "Enter" });
+    });
+    await settle(3);
+    await click(within(screen().getByRole("menu")).getByRole("menuitemcheckbox", { name: /^João/ }));
+    await act(async () => fireEvent.keyDown(screen().getByRole("menu"), { key: "Escape" }));
+    await settle(3);
+    expect(
+      within(dialog)
+        .getByRole("button", { name: /^Responsável/ })
+        .getAttribute("aria-label"),
+    ).toBe("Responsável: Walter. Também com: João.");
+    await act(async () =>
+      fireEvent.change(within(dialog).getByLabelText("Título"), { target: { value: "Testar o checkout" } }),
+    );
+    await click(within(dialog).getByRole("button", { name: "Criar tarefa" }));
+    await settle(8);
+    const made = (await api.issues.list(ORG_ID)).find((i) => i.title === "Testar o checkout");
+    expect(made?.assignee).toEqual(walter);
+    expect(made?.alsoWith).toEqual([joao]);
+  });
+});
