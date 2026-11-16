@@ -309,3 +309,38 @@ describe("the panel follows the work", () => {
     expect(now[2]).toEqual({ name: "Ready for dev", rows: ["#12 Tela de login"] });
   });
 });
+describe("worst case", () => {
+  test("the worst case stays inside the panel", async () => {
+    widthIs(DM_SIDE_WIDE_QUERY);
+    // The limits' worst: 300-character titles, long board names, nine or more cards in each group, a failure's
+    // reason ending in an unbroken address. What the geometry check lays out at 1280 and 390 (`capture.ts` saves the screen).
+    const title = `${"Reestruturação completa do atendimento ao cliente da clínica com triagem ".repeat(5)}`
+      .trim()
+      .slice(0, 300);
+    // A run's own reason: a long sentence ending in an address that has no place to break.
+    const unbroken = `a execução parou porque o limite do plano foi atingido, veja https://exemplo.com.br/${"caminho-".repeat(8)}fim`;
+    const many = (n: number, over: Partial<PoProgressCard> = {}) =>
+      Array.from({ length: 8 }, (_, i) =>
+        card({
+          id: `${n}-${i}`,
+          number: n * 100 + i,
+          title,
+          boardName: `Board com um nome muito comprido número ${i} da operação`,
+          ...over,
+        }),
+      );
+    const failing = many(1, { spec: { state: "failed", page: null, error: unbroken } });
+    const groups_ = layout({ specify: failing, specified: many(2), ready: many(3), tail: many(4) }).map((g) => ({
+      ...g,
+      count: 14,
+    }));
+    await scene({ groups: groups_ });
+    const panel = side() as HTMLElement;
+    expect(panel.querySelectorAll(".po-row")).toHaveLength(32);
+    expect(panel.querySelector(".po-row__title")?.textContent).toContain(title);
+    expect(panel.textContent).toContain(unbroken);
+    expect(within(panel).getAllByRole("link", { name: "Ver todos" })).toHaveLength(4);
+    expect(panel.querySelector(".po-side__scroll")).toBeTruthy();
+    expect(panel.closest(".channel__body")).toBeTruthy();
+  });
+});
