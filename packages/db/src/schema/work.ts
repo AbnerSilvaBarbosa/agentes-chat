@@ -9,6 +9,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -225,6 +226,39 @@ export const issues = pgTable(
     uniqueIndex().on(t.conversationChannelId),
     // Every run reads its agent's open tasks, latest activity first (`openTasksBrief`).
     index().on(t.orgId, t.assigneeType, t.assigneeId, t.updatedAt),
+  ],
+);
+
+/**
+ * The people on a card besides its principal, in order (ADR 0186). The principal stays in `issues.assignee_*`, and an
+ * agent on a card is always its principal, so every agent-side reader keeps reading one column. People only: an agent
+ * is never a row here.
+ */
+export const issueCoAssignees = pgTable(
+  "issue_co_assignees",
+  {
+    issueId: uuid()
+      .notNull()
+      .references(() => issues.id, { onDelete: "cascade" }),
+    /** Always set: a test enforces it on every tenant table. */
+    orgId: uuid()
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Order among the people also with, lowest first. */
+    position: integer().notNull(),
+    /** `person` or `agent`: who added them. */
+    addedByType: text().notNull(),
+    addedById: text().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One entry per person: the same person twice is one.
+    primaryKey({ columns: [t.issueId, t.userId] }),
+    // "Minhas tarefas" and the person filter.
+    index().on(t.orgId, t.userId),
   ],
 );
 
