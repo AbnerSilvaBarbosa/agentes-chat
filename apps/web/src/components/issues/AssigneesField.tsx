@@ -38,7 +38,7 @@ export function AssigneesField({
 }: {
   value: OnCard;
   onChange: (change: AssigneesChange) => void;
-  /** Whether agents are offered: a card made here is asked of an agent afterwards, so the new-card dialog offers none. */
+  /** Whether agents are offered (default yes, the new-card dialog too: the card is made with its agent). Off for a field that only names people. */
   agents?: boolean;
   /** The trigger fills its row (a form's field). */
   block?: boolean;
