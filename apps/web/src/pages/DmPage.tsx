@@ -298,7 +298,10 @@ function PoGeneralLink({ agentId }: { agentId: string }) {
   const { t } = useTranslation();
   const { org } = useOrg();
   const navigate = useNavigate();
-  const unread = useDms(org.id).data?.find((d) => d.with.id === agentId)?.unread ?? 0;
+  // `listDms` shows a DM from its first message: no entry means no old history and no fallback message, so no button.
+  const plain = useDms(org.id).data?.find((d) => d.with.id === agentId);
+  if (!plain) return null;
+  const unread = plain.unread;
   return (
     <Button
       size="sm"

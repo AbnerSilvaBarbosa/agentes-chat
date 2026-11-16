@@ -51,6 +51,11 @@ describe("the PO's plain DM", () => {
     expect(entry()?.textContent).toContain("Conversa por empresa");
   });
 
+  test("with nothing in the plain DM (the routines speak in the company's PO chat) there is no entry", async () => {
+    await go(seedState({ poAgentId: ADA_ID, poCompanies: [company("s-acme", "Acme")] }), "po/s-acme");
+    expect(entry()).toBeNull();
+  });
+
   test("an unread plain DM shows its count on the entry", async () => {
     await go(scene(2), "po/s-acme");
     expect(within(entry() as HTMLElement).getByRole("img", { name: /2/ })).toBeTruthy();
