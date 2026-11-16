@@ -306,7 +306,7 @@ describe("the card tools keep to the company in scope", () => {
       if (!tool) throw new Error(`no ${name}`);
       return tool.execute(input, inPo);
     };
-    return { deps, company, beta, mine, theirs, loose, call, source };
+    return { deps, company, beta, mine, theirs, loose, call, source, chat };
   }
 
   test("list_issues in a PO chat keeps to the company", async () => {
@@ -395,6 +395,55 @@ describe("the card tools keep to the company in scope", () => {
     const unknown = await call("update_issue", { issue: `#${mine.number}`, project: "Entregas", company: "Gama" });
     expect(unknown.isError).toBe(true);
     expect(unknown.content).not.toContain("Beta");
+  });
+
+  test("update_issue sets Ready for dev only for a person's request in the chat, never in a routine's run", async () => {
+    f = await setup();
+    const { deps, mine, source, chat } = await twoCompanies();
+    const [board] = await f.db
+      .select()
+      .from(schema.issueProjects)
+      .where(eq(schema.issueProjects.id, mine.project?.id ?? ""));
+    if (!board) throw new Error("no board");
+    await createIssueColumn(deps, f.owner.id, f.org.id, {
+      name: "Ready for dev",
+      stage: "in_progress",
+      projectId: board.id,
+    });
+    const inPo = await runIn(f, chat.channelId);
+    const tool = async (ctx: typeof inPo) => {
+      const t = (await source.tools(ctx)).find((x) => x.name === "update_issue");
+      if (!t) throw new Error("no update_issue");
+      return t;
+    };
+
+    // A routine's run in the same chat: refused by the code, the card stays.
+    const routine = await runIn(f, inPo.channelId);
+    await f.db.update(schema.agentRuns).set({ background: true }).where(eq(schema.agentRuns.id, routine.runId));
+    const refused = await (await tool(routine)).execute({ issue: `#${mine.number}`, column: "ready for dev" }, routine);
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("person");
+    const [still] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, mine.id));
+    expect(still?.columnId).toBeNull();
+
+    // Any other column is not a release: a routine keeps its other moves.
+    // The person's run in their PO chat releases the card they asked for.
+    const released = await (await tool(inPo)).execute({ issue: `#${mine.number}`, column: "Ready for dev" }, inPo);
+    expect(released.isError).toBeFalsy();
+    const [moved] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, mine.id));
+    expect(moved?.columnId).not.toBeNull();
+  });
+
+  test("the chat's rule lets the PO release one card, only when asked for it in the message", async () => {
+    f = await setup();
+    const { company } = await workspace(f);
+    const text = await poChatBrief(f.db, f.org.id, { spaceId: company.id, name: company.name }, f.owner.id);
+    const rule = text.split("\n").find((l) => l.includes("Never assign a card to yourself")) ?? "";
+    expect(rule).toContain("never change a card's status or column");
+    expect(rule).toContain('"Ready for dev"');
+    expect(rule).toContain("current message");
+    expect(rule).toContain("one card at a time");
+    expect(rule).toContain("never on your own");
   });
 
   test("search_context keeps to the company: other companies' cards and specs are not hits", async () => {

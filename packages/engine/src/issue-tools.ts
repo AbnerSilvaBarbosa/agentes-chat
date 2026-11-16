@@ -334,6 +334,22 @@ async function chosenProject(deps: IssueDeps, ctx: ToolContext, input: Record<st
   return (await projectByName(deps, ctx.orgId, name, input.new_project === true ? "new" : "task", spaceId)).id;
 }
 
+/**
+ * The release to development is a person's decision (ADR 0185 addendum): in a PO chat only a run with a person behind
+ * it may set a card's column to "Ready for dev" (the PO's chat rule asks it to do so only on that person's request), and
+ * a routine's run or the PO's spec run never may. Code, not the prompt. Outside a PO context nothing changes.
+ */
+async function releaseRefusal(deps: IssueDeps, ctx: ToolContext, columnName: string) {
+  if (columnName.trim().toLowerCase() !== "ready for dev") return null;
+  const inChat = await poScopeOf(deps.db, ctx.orgId, ctx.channelId);
+  if (!inChat && !(await poScopeOf(deps.db, ctx.orgId, ctx.channelId, ctx.runId))) return null;
+  if (inChat && (await personBehindCall(ctx))) return null;
+  return {
+    content: "Only a person releases a card to Ready for dev: ask in the PO chat, or move it on the board.",
+    isError: true as const,
+  };
+}
+
 /** A card belongs to a board, so a company alone can't place it: say which boards that company has. */
 async function companyAloneRefusal(
   deps: IssueDeps,
@@ -1062,6 +1078,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           const projectId = await chosenProject(deps, ctx, input);
           const aloneRefusal = await companyAloneRefusal(deps, ctx, input, projectId);
           if (aloneRefusal) return aloneRefusal;
+          const releaseRefused = await releaseRefusal(deps, ctx, columnName);
+          if (releaseRefused) return releaseRefused;
           let before: Record<string, unknown> = {};
           const asked = givenFiles(input) ?? [];
           const files = asked.length
