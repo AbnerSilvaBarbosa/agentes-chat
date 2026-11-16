@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { orgTopic, type RealtimeEvent } from "@agenteschat/adapters";
-import { and, asc, eq, schema, sql } from "@agenteschat/db";
+import { and, asc, eq, schema, sql, tracingLogger } from "@agenteschat/db";
 import {
   addChannelMember,
   askAgentToImplement,
@@ -264,6 +264,87 @@ describe("writing who is responsible", () => {
     const state = await stateOf(card.id);
     expect(state.principal).toEqual(["person", f.owner.id]);
     expect([...state.also].sort()).toEqual([bia.id, caio.id].sort());
+  });
+
+  // Locks between connections: a real server only (`TEST_DATABASE_URL`), as po-specs.test.ts does; PGlite has one.
+  test.skipIf(!process.env.TEST_DATABASE_URL)(
+    "a change that waits inside the lock keeps the other change from losing its person",
+    async () => {
+      f = await setup();
+      const bia = await addMember(f.db, f.org.id, "member", "Bia");
+      const caio = await addMember(f.db, f.org.id, "member", "Caio");
+      const card = await createIssue({ db: f.db, pubsub: f.pubsub }, person(f.owner.id), f.org.id, {
+        title: "corrida real",
+        assignee: { type: "person", id: f.owner.id },
+      });
+      const slow = f.db.transaction((tx) =>
+        applyAssignees(
+          tx,
+          { id: card.id, orgId: f.org.id },
+          { add: [actor("person", bia.id)] },
+          actor("person", f.owner.id),
+          () => new Promise((r) => setTimeout(r, 300)),
+        ),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      await Promise.all([slow, change(card.id, f.org.id, { add: [actor("person", caio.id)] })]);
+      expect([...(await stateOf(card.id)).also].sort()).toEqual([bia.id, caio.id].sort());
+    },
+  );
+
+  test("the change takes the card's row lock before it checks who is added, and checks the locked row's people", async () => {
+    // PGlite is one connection, so two transactions cannot interleave here: this pins what keeps them apart on a real
+    // server (the order of the statements of one change) and the check that runs on what the lock read.
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "trava",
+      assignee: { type: "person", id: f.owner.id },
+    });
+    const seen: string[] = [];
+    const logger = tracingLogger as { logQuery: (query: string, params: unknown[]) => void };
+    const log = logger.logQuery;
+    logger.logQuery = (query, params) => {
+      seen.push(query);
+      log(query, params);
+    };
+    try {
+      await updateIssue(deps, person(f.owner.id), f.org.id, card.id, { addAssignees: [actor("person", bia.id)] });
+    } finally {
+      logger.logQuery = log;
+    }
+    const lock = seen.findIndex((q) => /from "issues"/.test(q) && /for update/i.test(q));
+    expect(lock).toBeGreaterThan(-1);
+    const write = seen.findIndex((q) => /insert into "issue_co_assignees"/.test(q));
+    expect(write).toBeGreaterThan(lock);
+    // The membership of the person added is read again after the lock (once before it, by the early check).
+    const members = seen.map((q, i) => (/organization_members/.test(q) ? i : -1)).filter((i) => i > -1);
+    expect(members.some((i) => i > lock && i < write)).toBe(true);
+
+    // The card read before the lock said Bia was on it; the locked row says she is not, so she is checked and refused.
+    const scope = { channelId: null, restricted: true, audienceUserIds: [f.owner.id, caio.id] };
+    const stale = { agentId: null, people: [f.owner.id, bia.id] };
+    await f.db.delete(schema.issueCoAssignees).where(eq(schema.issueCoAssignees.userId, bia.id));
+    const refused = await f.db
+      .transaction((tx) =>
+        applyAssignees(
+          tx,
+          { id: card.id, orgId: f.org.id },
+          { add: [actor("person", bia.id)] },
+          actor("person", f.owner.id),
+          (locked) =>
+            checkAssignees(tx as unknown as typeof f.db, f.org.id, locked, { add: [actor("person", bia.id)] }, scope),
+        ),
+      )
+      .catch((e) => e);
+    expect(stale.people).toContain(bia.id);
+    expect(refused).toBeInstanceOf(ValidationError);
+    expect(refused.code).toBe("issue.assignee_outside");
+    expect((await stateOf(card.id)).also).toEqual([]);
   });
 });
 

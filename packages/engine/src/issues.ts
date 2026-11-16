@@ -1391,7 +1391,12 @@ export async function updateIssue(
   }
   const { row, people } = await db.transaction(async (tx) => {
     // First, so the row is locked and planned before anything else of this change is written.
-    const people = changesPeople ? await applyAssignees(tx, current, change, author) : null;
+    const people = changesPeople
+      ? await applyAssignees(tx, current, change, author, (locked) =>
+          // Again on the locked row: whoever is on the card now counts, so a person removed meanwhile is checked.
+          checkAssignees(tx as unknown as Database, orgId, locked, change, current),
+        )
+      : null;
     const [updated] = await tx.update(issues).set(set).where(eq(issues.id, current.id)).returning();
     if (!updated) throw new NotFoundError("Issue not found");
     for (const e of [...events, ...(people?.events ?? [])])

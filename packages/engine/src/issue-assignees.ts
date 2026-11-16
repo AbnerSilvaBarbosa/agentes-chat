@@ -304,6 +304,8 @@ export async function applyAssignees(
   issue: { id: string; orgId: string },
   change: AssigneeChange,
   author: WorkActor,
+  /** Runs on the locked row's people, before the plan: who was on the card when the lock was taken (ADR 0186). */
+  check?: (before: Assignment) => Promise<void>,
 ): Promise<{ before: Assignment; after: Assignment; events: AssigneeEvent[] }> {
   const [row] = await tx
     .select({ assigneeType: issues.assigneeType, assigneeId: issues.assigneeId })
@@ -320,6 +322,7 @@ export async function applyAssignees(
     row,
     rows.map((r) => r.userId),
   );
+  await check?.(before);
   const after = planAssignees(before, change);
   const events = assigneeEvents(before, after, await namesFor(tx, issue.orgId, [before, after]));
   const alsoWith = alsoWithOf(after);
