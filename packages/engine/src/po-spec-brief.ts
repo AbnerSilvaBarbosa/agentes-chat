@@ -9,16 +9,20 @@ const { issueColumns, issueProjects, issueSpaces, issues, users } = schema;
 type IssueRow = typeof issues.$inferSelect;
 
 /**
- * The wiki folder a company's specs live in (ADR 0185): `Specs/<company>`. A `/` in the name would make a folder level
- * of its own, so it becomes `-`. The wiki tools of a PO chat keep to this folder among the `Specs/` pages.
+ * The wiki folder a company's specs live in (ADR 0185 addendum): `<company>/Specs`, the place the company's wiki
+ * already keeps them, one folder `<number>` per card under it. A `/` in the name would make a folder level of its own,
+ * so it becomes `-`. The wiki tools of a PO chat keep to this folder among the companies' `Specs` folders.
  */
-export const specFolder = (company: string) => cleanFolder(`Specs/${company.replace(/\//g, "-")}`);
+export const specFolder = (company: string) => cleanFolder(`${company.replace(/\//g, "-")}/Specs`);
+
+/** The folder of one card's spec pages under its company's: `<company>/Specs/<number>`. */
+export const cardSpecFolder = (companyFolder: string, number: number) => cleanFolder(`${companyFolder}/${number}`);
 
 /**
  * The folder of one company (ADR 0185): `specFolder` of its name, and two companies whose names make the same folder
  * ("A/B" and "A-B", or the same name in other capitals) must not share it, or each reads and writes the other's specs.
  * The earliest company keeps the plain folder, so pages already written stay where they are; each later one gets
- * its id's last six characters in brackets after the name ("Specs/A-B [1f3a9c]"), the same on every call.
+ * its id's last six characters in brackets after the name ("A-B [1f3a9c]/Specs"), the same on every call.
  */
 export async function specFolderOf(db: Executor, orgId: string, space: { id: string; name: string }) {
   const plain = specFolder(space.name);
@@ -30,14 +34,18 @@ export async function specFolderOf(db: Executor, orgId: string, space: { id: str
     .filter((c) => specFolder(c.name).toLowerCase() === plain.toLowerCase())
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
   if (sharing.length < 2 || sharing[0]?.id === space.id) return plain;
-  return cleanFolder(`${plain} [${space.id.replace(/-/g, "").slice(-6)}]`);
+  return cleanFolder(`${space.name.replace(/\//g, "-")} [${space.id.replace(/-/g, "").slice(-6)}]/Specs`);
 }
 
-/** Whether `folder` is, or is under, another company's folder in `Specs/` (compared in any capitals). */
+/**
+ * Whether `folder` is, or is under, another company's `Specs` folder (compared in any capitals): `<company>/Specs…`,
+ * or the first form's `Specs/<company>…`, unless it is the PO chat's own.
+ */
 export function otherCompanysSpecs(folder: string, own: string) {
   const f = folder.toLowerCase();
   const mine = own.toLowerCase();
-  return f.startsWith("specs/") && f !== mine && !f.startsWith(`${mine}/`);
+  const specs = /^[^/]+\/specs(\/|$)/.test(f) || f.startsWith("specs/");
+  return specs && f !== mine && !f.startsWith(`${mine}/`);
 }
 
 /**
@@ -131,7 +139,10 @@ export async function specBrief(
     .orderBy(desc(issues.updatedAt))
     .limit(BRIEF_NEIGHBOURS);
   const title = specPageTitle(issue.title);
-  const folder = await specFolderOf(db, orgId, { id: proposal.spaceId, name: company });
+  const folder = cardSpecFolder(await specFolderOf(db, orgId, { id: proposal.spaceId, name: company }), issue.number);
+  const pageTitle = (kind: "Spec" | "Design" | "Tarefas") =>
+    `${issue.number} · ${kind} — ${title}`.slice(0, 200).trim();
+  const [specTitle, designTitle, tasksTitle] = [pageTitle("Spec"), pageTitle("Design"), pageTitle("Tarefas")];
   const card = [
     `Title: ${issue.title}`,
     `Summary: ${proposal.summary.trim() || "(none)"}`,
@@ -148,22 +159,27 @@ export async function specBrief(
       ? `## Other cards of the company (do not repeat them)\n${untrustedBlock("cards", others)}`
       : "## Other cards of the company\nNone yet.",
     [
-      "## Write the spec the way your instructions describe (tlc-spec-driven, EARS). If they do not, use this form",
-      `# ${title} Specification`,
-      "## Problem Statement",
-      "## Goals (checkboxes)",
-      "## Out of Scope (table: Feature | Reason)",
-      "## Assumptions & Open Questions (table: Assumption | Chosen default | Rationale | Confirmed?)",
-      "## User Stories (P1, P2, P3, each with: User Story, Why, numbered Acceptance Criteria, Independent Test)",
+      "## Write the three pages of the tlc-spec-driven method, the way the company's other specs in the wiki are written",
+      `Save them all in the folder ${JSON.stringify(folder)}. Read one of the company's finished spec folders first (search the wiki for "Spec —") and copy its form, its tone and its links.`,
+      `1. ${JSON.stringify(specTitle)}: it opens with one line "Pasta ${issue.number}: [[the three titles]]", then "# ${issue.number} · ${title}", then "**Approved**: pendente (aguarda o sim do Abner)" and a line with the card, board and risk 1/2/3. Then the EARS spec:`,
+      "## Problem Statement · ## Goals (checkboxes) · ## Out of Scope (table: Feature | Reason) · ## Assumptions & Open Questions (table: Assumption | Chosen default | Rationale | Confirmed?) · ## User Stories (P1, P2, P3, each with: User Story, Why, numbered Acceptance Criteria, Independent Test) · ## Edge Cases · ## Requirement Traceability (ID | Story | Status Pending, IDs like <ABBR>-01) · ## Success Criteria",
       'Acceptance criteria are one behavior each: "WHEN <event> THEN the system SHALL <response>", "WHILE <state> ...", "IF <condition> THEN ...", or "The system SHALL ..." with a concrete value, never "quickly".',
-      "## Edge Cases",
-      "## Requirement Traceability (ID | Story | Status Pending), IDs like <ABBR>-01",
-      "## Success Criteria",
+      `2. ${JSON.stringify(designTitle)}: "# ${issue.number} · Design técnico": the repos and files to change with what changes in each, the decisions and why, the risks. Read the code first; name real files.`,
+      `3. ${JSON.stringify(tasksTitle)}: "# ${issue.number} · Tarefas": the "**Approved**: pendente" line, the **Build** and **Run <name>** commands, atomic tasks (each with Tests and Gate) in phases, and a ## Checks section with one check per acceptance criterion.`,
+      "A small card still gets the three pages; keep Design and Tarefas short, never empty.",
     ].join("\n"),
     [
       "## Save it",
-      `1. create_wiki_page with title ${JSON.stringify(title)}, folder ${JSON.stringify(folder)}, body the spec in Markdown. The page is a wiki page the whole workspace may read: write no secrets. If the title is taken, retry once with title ${JSON.stringify(specPageTitle(`${title} (${company})`))}.`,
-      "2. attach_spec with the page and the final acceptance criteria (one string each, copied from the spec's stories).",
+      `1. create_wiki_page for each of the three pages, with the folder ${JSON.stringify(folder)}, the title above and tags ${JSON.stringify(
+        [
+          company
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "") || "spec",
+          "spec",
+        ],
+      )}. They are wiki pages the whole workspace may read: write no secrets. If a title is taken, retry once with " (${company})" added to it.`,
+      `2. attach_spec with the page ${JSON.stringify(specTitle)} (the Spec, not the others) and the final acceptance criteria (one string each, copied from the spec's stories).`,
       "3. Answer in two sentences: where the spec is and what it assumes.",
       "Do not move the card, and do not ask anything: the system moves the card when you are done.",
     ].join("\n"),

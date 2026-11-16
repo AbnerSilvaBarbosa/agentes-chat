@@ -29,3 +29,19 @@
   flex: 1;
   min-width: 0;
 }
+
+/* The buttons close the proposal, under what it says (title, summary, criteria, board): one hairline frame like the
+   pill's, its first action without the divider the pill draws to its left. */
+.po-card__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-self: flex-start;
+  min-height: var(--control-h-sm);
+  margin-top: var(--space-1);
+  overflow: hidden;
+  border-radius: var(--control-r-sm);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+.po-card__actions > .ac-eventpill__action:first-child {
+  border-left: 0;
+}

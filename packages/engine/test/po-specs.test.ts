@@ -453,8 +453,11 @@ describe("the brief a spec run reads", () => {
     expect(brief).toContain("Entrar com e-mail e senha");
     expect(brief).toContain("1. Mostra erro de senha");
     // Where and under which name it is saved, and the retry title.
-    expect(brief).toContain('create_wiki_page with title "Tela de login", folder "Specs/Acme"');
-    expect(brief).toContain('retry once with title "Tela de login (Acme)"');
+    expect(brief).toContain('folder "Acme/Specs/1"');
+    expect(brief).toContain('"1 · Spec — Tela de login"');
+    expect(brief).toContain('"1 · Design — Tela de login"');
+    expect(brief).toContain('"1 · Tarefas — Tela de login"');
+    expect(brief).toContain('retry once with " (Acme)" added');
     // The form: problem, goals, out of scope, assumptions, stories with WHEN/THEN, edge cases, traceability, success.
     for (const part of [
       "## Problem Statement",
@@ -500,8 +503,8 @@ describe("the brief a spec run reads", () => {
   });
 
   test("a company's folder turns a slash in its name into a dash", () => {
-    expect(specFolder("Acme/Brasil")).toBe("Specs/Acme-Brasil");
-    expect(specFolder("  Acme  ")).toBe("Specs/Acme");
+    expect(specFolder("Acme/Brasil")).toBe("Acme-Brasil/Specs");
+    expect(specFolder("  Acme  ")).toBe("Acme/Specs");
   });
 
   test("companies whose names make one folder get one each: the earliest keeps the plain one", async () => {
@@ -513,8 +516,8 @@ describe("the brief a spec run reads", () => {
     const folders = await Promise.all(
       [first, second, alone].map((c) => specFolderOf(f.db, f.org.id, { id: c.id, name: c.name })),
     );
-    expect(folders[0]).toBe("Specs/A-B");
-    expect(folders[2]).toBe("Specs/Solta");
+    expect(folders[0]).toBe("A-B/Specs");
+    expect(folders[2]).toBe("Solta/Specs");
     // The same on every call, and all three are different, none under another.
     expect(await specFolderOf(f.db, f.org.id, { id: second.id, name: second.name })).toBe(folders[1] ?? "");
     expect(new Set(folders.map((x) => x.toLowerCase())).size).toBe(3);
@@ -576,7 +579,7 @@ describe("a spec run reads the spec brief", () => {
     if (!specRun) throw new Error("no spec run");
     const brief = systemText((await buildRunContext(f.db, specRun, f.agent, { maxMessages: 10 })).system);
     expect(brief).toContain(`# Your task: write the spec of card #${issue.number}`);
-    expect(brief).toContain('folder "Specs/Acme"');
+    expect(brief).toContain('folder "Acme/Specs/1"');
 
     // The same agent, in the same conversation, answering a person's other message: the generic task block.
     const [card] = await f.db.select().from(schema.issues).where(eq(schema.issues.id, issue.id));
@@ -664,16 +667,16 @@ describe("attach_spec registers a card's spec", () => {
     f = await setup();
     const { ctx, tool, card, page } = await specRunCtx();
     const loose = await page("Sem pasta");
-    const foreign = await page("De outra empresa", "Specs/Beta");
+    const foreign = await page("De outra empresa", "Beta/Specs");
     const refusedLoose = await tool?.execute({ page: loose.slug, criteria: ["A"] }, ctx);
     const refusedForeign = await tool?.execute({ page: foreign.slug, criteria: ["A"] }, ctx);
     const missing = await tool?.execute({ page: "nao-existe", criteria: ["A"] }, ctx);
     for (const r of [refusedLoose, refusedForeign, missing]) expect(r?.isError).toBe(true);
-    expect(refusedLoose?.content).toContain("Specs/Acme");
+    expect(refusedLoose?.content).toContain("Acme/Specs");
     expect((await card()).specPage).toBeNull();
     expect((await card()).criteria).toHaveLength(0);
 
-    const mine = await page("Spec do login", "Specs/Acme");
+    const mine = await page("Spec do login", "Acme/Specs");
     const ok = await tool?.execute({ page: mine.slug, criteria: ["A"] }, ctx);
     expect(ok?.isError).toBeFalsy();
     expect((await card()).specPage?.slug).toBe(mine.slug);
@@ -685,7 +688,7 @@ describe("attach_spec registers a card's spec", () => {
     await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, issue.id, {
       description: "Entrar com e-mail.",
     });
-    const spec = await page("Spec do login", "Specs/Acme");
+    const spec = await page("Spec do login", "Acme/Specs");
     const first = await tool?.execute({ page: spec.title, criteria: ["Mostra erro", "Lembra o e-mail"] }, ctx);
     expect(first?.isError).toBeFalsy();
     let after = await card();
@@ -742,7 +745,7 @@ describe("a finished spec run moves its card", () => {
     );
   }
   const attach = async (issueId: string, title: string) => {
-    const page = await createWikiPage(wikiDeps(), owner(), f.org.id, { title, body: "# Spec", folder: "Specs/Acme" });
+    const page = await createWikiPage(wikiDeps(), owner(), f.org.id, { title, body: "# Spec", folder: "Acme/Specs" });
     await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, issueId, { specPageId: page.id });
     return page;
   };
@@ -987,7 +990,7 @@ describe("the tick settles specs nobody heard end", () => {
     const page = await createWikiPage({ db: f.db, pubsub: f.pubsub, search: f.context }, owner(), f.org.id, {
       title: "Spec pronta",
       body: "# Spec",
-      folder: "Specs/Acme",
+      folder: "Acme/Specs",
     });
     await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, done.issue.id, { specPageId: page.id });
     await setRun(done.now?.specRunId, { status: "done" });
@@ -1118,7 +1121,7 @@ describe("confirming a card starts its spec", () => {
     const page = await createWikiPage({ db: f.db, pubsub: f.pubsub, search: f.context }, owner(), f.org.id, {
       title: "Spec A",
       body: "# Spec",
-      folder: "Specs/Acme",
+      folder: "Acme/Specs",
     });
     await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, a.issueId, { specPageId: page.id });
     await onConsultedRunFinished({ db: f.db, pubsub: f.pubsub }, a.run, "done");
@@ -1164,7 +1167,7 @@ describe("confirming a card starts its spec", () => {
       const page = await createWikiPage(wiki, owner(), f.org.id, {
         title: `Spec ${row.title}`,
         body: "# Spec",
-        folder: "Specs/Acme",
+        folder: "Acme/Specs",
       });
       await updateIssue({ db: f.db, pubsub: f.pubsub }, owner(), f.org.id, row.issueId, { specPageId: page.id });
       const [run] = await f.db
@@ -1274,13 +1277,13 @@ describe("a spec run keeps to its company like a PO chat", () => {
     const otherPage = await createWikiPage(wikiDeps(), owner(), f.org.id, {
       title: "Spec da Beta",
       body: "# Beta",
-      folder: "Specs/Beta",
+      folder: "Beta/Specs",
     });
     const read = await wikiTools.find((t) => t.name === "read_wiki_page")?.execute({ page: otherPage.slug }, ctx);
     expect(read?.isError).toBe(true);
     const write = await wikiTools
       .find((t) => t.name === "create_wiki_page")
-      ?.execute({ title: "Intruso", body: "x", folder: "Specs/Beta" }, ctx);
+      ?.execute({ title: "Intruso", body: "x", folder: "Beta/Specs" }, ctx);
     expect(write?.isError).toBe(true);
     expect(await f.db.select().from(schema.wikiPages).where(eq(schema.wikiPages.title, "Intruso"))).toHaveLength(0);
   });

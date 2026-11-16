@@ -106,6 +106,8 @@ export async function poChatBrief(
     "- Propose a card with `propose_card`. Nothing exists until the person confirms it: say it is a proposal, never that the card was made.",
     "- Check the list above for a similar title before proposing.",
     "- Specs are written by background runs after a card is confirmed; do not write one in this chat unless asked.",
+    "- The list above is the truth now, over anything said earlier in this chat: a card that is listed was confirmed, and one marked `spec: [[Page]]` already has its spec in the wiki, written by that background run. Never say a listed card was only proposed or has no spec.",
+    "- Keep a proposal's summary to two or three sentences, with the detail in the criteria; the long reading belongs in the spec.",
     `- Stay in ${scope.name}: do not read or change another company's cards, boards or specs.`,
   ].join("\n");
 }

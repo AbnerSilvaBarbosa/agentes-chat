@@ -403,9 +403,9 @@ describe("the card tools keep to the company in scope", () => {
     const wiki = { db: f.db, pubsub: f.pubsub, search: f.context };
     const page = (title: string, folder: string) =>
       createWikiPage(wiki, owner(), f.org.id, { title, folder, body: "Zebra checklist." });
-    const own = await page("Spec Acme zebra", "Specs/Acme");
-    const other = await page("Spec Beta zebra", "Specs/Beta");
-    const nested = await page("Spec Beta fundo zebra", "specs/beta/Fase 2");
+    const own = await page("Spec Acme zebra", "Acme/Specs");
+    const other = await page("Spec Beta zebra", "Beta/Specs");
+    const nested = await page("Spec Beta fundo zebra", "beta/specs/Fase 2");
     const general = await page("Guia geral zebra", "Guias");
     await f.db.update(schema.issues).set({ title: sql`${schema.issues.title} || ' zebra'` });
     for (const id of [mine.id, theirs.id, loose.id])
@@ -485,10 +485,10 @@ describe("the wiki tools keep to the company's Specs folder in a PO chat", () =>
     );
     const make = (title: string, folder: string, body: string) =>
       createWikiPage(wikiDeps(), owner(), f.org.id, { title, folder, body });
-    const mine = await make("Spec do login", "Specs/Acme", "Login com e-mail e senha, zebra azul.");
-    const nested = await make("Spec aninhada", "Specs/Acme/Extras", "Detalhe do login, zebra azul.");
-    const theirs = await make("Spec da campanha", "Specs/Beta", "Campanha de Natal, zebra azul.");
-    const theirsNested = await make("Spec profunda", "Specs/Beta/Fase 2", "Fase dois da campanha, zebra azul.");
+    const mine = await make("Spec do login", "Acme/Specs", "Login com e-mail e senha, zebra azul.");
+    const nested = await make("Spec aninhada", "Acme/Specs/Extras", "Detalhe do login, zebra azul.");
+    const theirs = await make("Spec da campanha", "Beta/Specs", "Campanha de Natal, zebra azul.");
+    const theirsNested = await make("Spec profunda", "Beta/Specs/Fase 2", "Fase dois da campanha, zebra azul.");
     const guide = await make("Guia de estilo", "Engenharia", "Estilo de codigo, zebra azul.");
     await drainOutbox(f.db, f.handlers);
     const source = createWikiToolSource({ pubsub: f.pubsub, search: f.context });
@@ -551,15 +551,15 @@ describe("the wiki tools keep to the company's Specs folder in a PO chat", () =>
     const created = await call("create_wiki_page", { title: "Spec nova", body: "Corpo." });
     expect(created.isError).toBeFalsy();
     const page = await getWikiPage(f.db, owner(), f.org.id, "spec-nova");
-    expect(page.folder).toBe("Specs/Acme");
+    expect(page.folder).toBe("Acme/Specs");
 
-    const own = await call("create_wiki_page", { title: "Spec sub", body: "Corpo.", folder: "Specs/Acme/Extras" });
+    const own = await call("create_wiki_page", { title: "Spec sub", body: "Corpo.", folder: "Acme/Specs/Extras" });
     expect(own.isError).toBeFalsy();
     const elsewhere = await call("create_wiki_page", { title: "Nota solta", body: "Corpo.", folder: "Notas" });
     expect(elsewhere.isError).toBeFalsy();
     expect((await getWikiPage(f.db, owner(), f.org.id, "nota-solta")).folder).toBe("Notas");
 
-    for (const folder of ["Specs/Beta", "specs/beta/Fase 3"]) {
+    for (const folder of ["Beta/Specs", "beta/specs/Fase 3"]) {
       const refused = await call("create_wiki_page", { title: `Intrusa ${folder}`, body: "x", folder });
       expect(refused.isError).toBe(true);
       expect(refused.content).toContain("Acme");
@@ -573,15 +573,15 @@ describe("the wiki tools keep to the company's Specs folder in a PO chat", () =>
     expect((await call("update_wiki_page", { page: mine.slug, mode: "append", content: "Mais." })).isError).toBeFalsy();
 
     // Moving into, or out of, another company's folder is refused; a move inside the company works.
-    const into = await call("move_wiki_page", { pages: [guide.slug], folder: "Specs/Beta" });
+    const into = await call("move_wiki_page", { pages: [guide.slug], folder: "Beta/Specs" });
     expect(into.isError).toBe(true);
     expect((await getWikiPage(f.db, owner(), f.org.id, guide.slug)).folder).toBe("Engenharia");
-    const out = await call("move_wiki_page", { pages: [theirs.slug], folder: "Specs/Acme" });
+    const out = await call("move_wiki_page", { pages: [theirs.slug], folder: "Acme/Specs" });
     expect(out.isError).toBe(true);
-    expect((await getWikiPage(f.db, owner(), f.org.id, theirs.slug)).folder).toBe("Specs/Beta");
-    const within = await call("move_wiki_page", { pages: [guide.slug], folder: "Specs/Acme" });
+    expect((await getWikiPage(f.db, owner(), f.org.id, theirs.slug)).folder).toBe("Beta/Specs");
+    const within = await call("move_wiki_page", { pages: [guide.slug], folder: "Acme/Specs" });
     expect(within.isError).toBeFalsy();
-    expect((await getWikiPage(f.db, owner(), f.org.id, guide.slug)).folder).toBe("Specs/Acme");
+    expect((await getWikiPage(f.db, owner(), f.org.id, guide.slug)).folder).toBe("Acme/Specs");
   });
 });
 

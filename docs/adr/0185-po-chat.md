@@ -102,3 +102,12 @@ in its header); search hits and notifications open the chat of their company; th
 - Existing cards get no spec: `attach_spec` exists only in a spec run.
 - The phone and desktop shells, a timeout for a spec run that waits, and a company field on wiki pages are left for
   later decisions.
+
+## Addendum: where a spec lives and what it holds
+
+A card's spec is three wiki pages, the form the company's wiki already uses, saved in `<company>/Specs/<number>`:
+`<number> · Spec — <title>` (the EARS spec, opened by a line linking the three), `<number> · Design — <title>` and
+`<number> · Tarefas — <title>`. `attach_spec` links the Spec page to the card. The first form, `Specs/<company>`, is
+still read as a company's folder by the PO chat's scope, so pages already there stay hidden from other companies.
+The proposal card shows its summary, criteria and board above its buttons, and the PO's summary is two or three
+sentences, with the detail in the criteria.

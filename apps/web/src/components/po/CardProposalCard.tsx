@@ -187,7 +187,6 @@ function ProposalEditor({
       mine={mine}
       icon="issues"
       label={label}
-      action={actions}
       below={
         <>
           {p.duplicateOf && (
@@ -267,6 +266,7 @@ function ProposalEditor({
               <p>{t("poCard.board", { name: p.project.name })}</p>
             </>
           )}
+          {actions && <div className="po-card__actions">{actions}</div>}
           {!mine && asker && <p>{t("poCard.waits", { name: asker })}</p>}
           {refusal && <Alert>{refusal}</Alert>}
         </>
