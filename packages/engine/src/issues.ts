@@ -1007,7 +1007,9 @@ export async function createIssue(
   const fresh = (await reload(db, row)) ?? row;
   const view = await one(db, fresh);
   await announce(deps, orgId, view, "issue.created");
-  if (fresh.assigneeType === "person") await notifyIssueChanged(deps, author, null, fresh).catch(() => {});
+  if (planned.people.length > 0) {
+    await notifyIssueChanged(deps, author, null, fresh, { before: [], after: planned.people }).catch(() => {});
+  }
   // Routines on `issue.created` (ADR 0053 §6.5): never for an issue a routine or an unattended run created
   // (a routine would trigger itself), only for routines whose creator can see the issue, and with its id,
   // not its title (the run reads it with its own tools).
@@ -1413,7 +1415,13 @@ export async function updateIssue(
   }
   // The inbox: a new assignee, a status change for whoever follows it.
   if (changesPeople || row.status !== current.status) {
-    await notifyIssueChanged(deps, author, current, row).catch(() => {});
+    await notifyIssueChanged(
+      deps,
+      author,
+      current,
+      row,
+      people ? { before: people.before.people, after: people.after.people } : undefined,
+    ).catch(() => {});
   }
   return view;
 }
