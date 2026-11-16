@@ -1189,6 +1189,8 @@ export async function removeMember(
   const { dropMailOfOwner } = await import("./tools/scopes");
   const { dropMemberDashboards } = await import("./dashboards/service");
   const { dropFromAssignments } = await import("./issue-assignees");
+  const { announceIssuesChanged } = await import("./issues");
+  let droppedCards: string[] = [];
   const { released, removed, handed, changed, heir, secrets, mailActions } = await db.transaction(async (tx) => {
     await lockOrgMembers(tx, orgId);
     if (target.role === "owner" && (await ownerCount(tx, orgId)) <= 1) {
@@ -1198,7 +1200,7 @@ export async function removeMember(
       .delete(organizationMembers)
       .where(and(eq(organizationMembers.orgId, orgId), eq(organizationMembers.userId, targetUserId)));
     // And its cards: promoted past them, or unassigned (ADR 0186).
-    await dropFromAssignments(tx, orgId, targetUserId, via);
+    droppedCards = await dropFromAssignments(tx, orgId, targetUserId, via);
     // Leaving the organization also leaves its channels.
     await tx
       .delete(channelMembers)
@@ -1332,6 +1334,8 @@ export async function removeMember(
   // Their open WebSocket connections lose every subscription now, not on reconnect.
   const quiet = actorId === targetUserId ? { quiet: true as const } : {};
   await publishOrgEvent(options.pubsub, { type: "membership.revoked", orgId, userId: targetUserId, ...quiet });
+  // Boards and Minhas tarefas open elsewhere drop them from the cards at once (ADR 0186).
+  await announceIssuesChanged({ db, pubsub: options.pubsub }, orgId, droppedCards).catch(() => undefined);
   await announceMembers(options.pubsub, orgId, changed);
   const { releaseQuestionsOf } = await import("./questions");
   await releaseQuestionsOf({ db, pubsub: options.pubsub }, orgId, targetUserId);
@@ -1388,6 +1392,7 @@ export async function deleteAccount(
   const { cancelMailboxApprovals, publishApproval } = await import("./approvals");
   const { dropMailOfOwner } = await import("./tools/scopes");
   const { dropFromAssignments } = await import("./issue-assignees");
+  const { announceIssuesChanged } = await import("./issues");
   const done = await db.transaction(async (tx) => {
     // First, as creating a workspace does: one made in another tab meanwhile is in the plan below and closes with them.
     await lockWorkspacesOf(tx, userId);
@@ -1454,7 +1459,8 @@ export async function deleteAccount(
     if (options.emails) await queueAccountDeletedEmail(tx, userId, closed, options.emails);
     await enqueueAccountContact(tx, userId);
     // Their cards: before the user row goes, so a card they led is promoted rather than left to a dangling id (ADR 0186).
-    for (const org of plan.leaves) await dropFromAssignments(tx, org.id, userId, "account");
+    const droppedCards = new Map<string, string[]>();
+    for (const org of plan.leaves) droppedCards.set(org.id, await dropFromAssignments(tx, org.id, userId, "account"));
     await tx.delete(users).where(eq(users.id, userId));
     for (const org of plan.leaves) await followOwner(tx, org.id);
     // The owner's own TypeSafe account would go on getting, and paying for, every workspace's Jev calls; and their
@@ -1476,10 +1482,10 @@ export async function deleteAccount(
       payload: { userId },
       maxAttempts: ORG_FILES_PURGE_ATTEMPTS,
     });
-    return { plan, closed, released, removed, mailActions, ownerless };
+    return { plan, closed, released, removed, mailActions, ownerless, droppedCards };
   });
   if (!done) return false;
-  const { plan, closed, released, removed, mailActions, ownerless } = done;
+  const { plan, closed, released, removed, mailActions, ownerless, droppedCards } = done;
   for (const row of mailActions) await publishApproval({ db, pubsub: options.pubsub }, row, "approval.decided");
   await announceReleasedAccounts(options.pubsub, released);
   for (const { computer, freed } of removed) {
@@ -1491,6 +1497,10 @@ export async function deleteAccount(
   }
   const { releaseQuestionsOf } = await import("./questions");
   for (const org of plan.leaves) {
+    // Their cards, as `removeMember` tells it (ADR 0186).
+    await announceIssuesChanged({ db, pubsub: options.pubsub }, org.id, droppedCards.get(org.id) ?? []).catch(
+      () => undefined,
+    );
     await releaseQuestionsOf({ db, pubsub: options.pubsub }, org.id, userId);
     const changed = [
       ...released.agents.filter((a) => a.orgId === org.id).flatMap((a) => a.agentIds),

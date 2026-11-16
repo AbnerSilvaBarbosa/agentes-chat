@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { orgTopic, type RealtimeEvent } from "@agenteschat/adapters";
 import { asc, eq, schema } from "@agenteschat/db";
 import { createIssue, createOrganization, deleteAccount, removeMember } from "../src";
 import { dropFromAssignments } from "../src/issue-assignees";
@@ -152,5 +153,36 @@ describe("leaving through the engine's doors", () => {
     expect(await stateOf(second.id)).toEqual({ principal: [null, null], also: [] });
     expect(await stateOf(third.id)).toEqual({ principal: [null, null], also: [] });
     expect((await history(second.id)).map((e) => e.authorId)).toContain(caio.id);
+  });
+
+  test("removing a member and deleting an account tell the boards each card changed", async () => {
+    f = await setup();
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const first = await createIssue(deps(), owner(), f.org.id, {
+      title: "da Bia",
+      assignees: [who("person", bia.id), who("person", caio.id)],
+    });
+    const second = await createIssue(deps(), owner(), f.org.id, { title: "da Caio", assignee: who("person", caio.id) });
+    const heard: RealtimeEvent[] = [];
+    f.pubsub.subscribe(orgTopic(f.org.id), (e) => heard.push(e));
+    const updates = () =>
+      heard.flatMap((e) => {
+        const inner = (e as { event?: { type?: string; issue?: { id: string; assignee: unknown } } }).event;
+        return inner?.type === "issue.updated" && inner.issue ? [inner.issue] : [];
+      });
+
+    await removeMember(f.db, f.owner.id, f.org.id, bia.id, { pubsub: f.pubsub });
+    const afterRemoval = updates();
+    expect(afterRemoval.map((i) => i.id)).toEqual([first.id]);
+    expect(afterRemoval[0]?.assignee).toEqual(who("person", caio.id));
+
+    heard.length = 0;
+    await deleteAccount(f.db, caio.id, { pubsub: f.pubsub });
+    const afterDeletion = updates();
+    expect(afterDeletion.map((i) => i.id).sort()).toEqual([first.id, second.id].sort());
+    expect(afterDeletion.every((i) => i.assignee === null)).toBe(true);
   });
 });

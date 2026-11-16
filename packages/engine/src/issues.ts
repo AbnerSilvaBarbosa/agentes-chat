@@ -884,6 +884,21 @@ export async function publishToTaskReaders(
 const announce = (deps: IssueDeps, orgId: string, issue: IssueView, type: "issue.created" | "issue.updated") =>
   publishToTaskReaders(deps, orgId, issue, { type, issue });
 
+/**
+ * Tells whoever sees each card that it changed, for cards changed outside `updateIssue` (a person who left was dropped
+ * from them, ADR 0186). The views are read in batches of 100 cards, one query for each batch, then one event a card.
+ */
+export async function announceIssuesChanged(deps: IssueDeps, orgId: string, ids: string[]) {
+  if (!deps.pubsub) return;
+  for (let at = 0; at < ids.length; at += 100) {
+    const rows = await deps.db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.orgId, orgId), inArray(issues.id, ids.slice(at, at + 100))));
+    for (const view of await views(deps.db, rows)) await announce(deps, orgId, view, "issue.updated");
+  }
+}
+
 /** Creates an issue with the next number of the org. */
 export async function createIssue(
   deps: IssueDeps,
