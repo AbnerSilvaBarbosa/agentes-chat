@@ -277,7 +277,7 @@ export function describeAction(a: Pick<AgentActionView, "kind" | "target" | "par
     case "issue.created":
       return `created ${issue}`;
     case "issue.updated":
-      return `changed ${Array.isArray(p.fields) ? p.fields.join(", ") : "fields"} of ${issue}`;
+      return `changed ${Array.isArray(p.fields) ? p.fields.map((x) => (x === "alsoWith" ? "people also with" : x)).join(", ") : "fields"} of ${issue}`;
     case "issue.assigned":
       return `assigned ${issue}${typeof p.assigneeName === "string" ? ` to ${p.assigneeName}` : ""}`;
     case "memory.saved":

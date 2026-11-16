@@ -78,7 +78,7 @@ const failed = (error: unknown): ToolOutput => ({
 async function assigneeNames(deps: IssueDeps, ctx: ToolContext, list: IssueView[]) {
   const names = new Map<string, string>();
   const agentIds = [...new Set(list.flatMap((i) => (i.assignee?.type === "agent" ? [i.assignee.id] : [])))];
-  const hasPeople = list.some((i) => i.assignee?.type === "person");
+  const hasPeople = list.some((i) => i.assignee?.type === "person" || i.alsoWith.length > 0);
   const [agentRows, people] = await Promise.all([
     agentIds.length
       ? deps.db
@@ -100,7 +100,7 @@ const specOf = (i: IssueView, none: string) =>
 const line = (i: IssueView, names: Map<string, string>, place?: string, inPo = false) =>
   `#${i.number} [${i.status}] ${i.title}${place ? ` [${place}]` : ""}${
     i.assignee ? ` (assignee: ${names.get(i.assignee.id) ?? `${i.assignee.type} ${i.assignee.id}`})` : ""
-  }${i.dueDate ? ` due ${i.dueDate}` : ""} id=${i.id}${specOf(i, inPo ? " no spec" : "")}`;
+  }${i.alsoWith.length ? ` (also with: ${i.alsoWith.map((a) => names.get(a.id) ?? a.id).join(", ")})` : ""}${i.dueDate ? ` due ${i.dueDate}` : ""} id=${i.id}${specOf(i, inPo ? " no spec" : "")}`;
 
 /**
  * The words that stand for a stage, as a person or a model writes them.
@@ -443,7 +443,10 @@ async function assigneeOf(deps: IssueDeps, ctx: ToolContext, ref: string): Promi
   );
 }
 
-/** The receipt of an issue change: `issue.assigned` when only the assignee changed, else `issue.updated`. */
+/**
+ * The receipt of an issue change: `issue.assigned` when the principal changed (the people moving with it count as the
+ * same change), else `issue.updated`; a change of people alone is `issue.updated` with `alsoWithNames` (ADR 0186).
+ */
 async function issueChange(
   deps: IssueDeps,
   ctx: ToolContext,
@@ -468,6 +471,10 @@ async function issueChange(
       title !== "",
     );
   }
+  if (diff.fields.includes("alsoWith")) {
+    const names = await assigneeNames(deps, ctx, [i]);
+    params.alsoWithNames = i.alsoWith.map((a) => (names.get(a.id) ?? a.id).replace(/ \(@[^)]*\)$/, ""));
+  }
   if (diff.fields.includes("assignee")) {
     params.assigneeType = assignee?.type ?? null;
     params.assigneeId = assignee?.id ?? null;
@@ -479,7 +486,7 @@ async function issueChange(
     // says so: "assigned" must not hide a task closed in the same call.
     kind:
       diff.fields.includes("assignee") &&
-      diff.fields.every((f) => f === "assignee" || (f === "status" && i.status === "in_progress"))
+      diff.fields.every((f) => f === "assignee" || f === "alsoWith" || (f === "status" && i.status === "in_progress"))
         ? "issue.assigned"
         : "issue.updated",
     target: { type: "issue", id: i.id, number: i.number, title },
@@ -493,8 +500,37 @@ const assigneeField = {
   type: "string",
   minLength: 1,
   maxLength: 200,
-  description: 'Who owns the issue: "me", "none", or an agent\'s or person\'s handle (@ana).',
+  description:
+    'Who owns the issue: "me", "none", or an agent\'s or person\'s handle (@ana). On a card that has an agent, another agent replaces it and the people stay; a person is added beside the agent.',
 };
+
+const peopleField = (what: string) => ({
+  type: "array",
+  items: { type: "string", minLength: 1, maxLength: 200 },
+  minItems: 1,
+  maxItems: 5,
+  description: what,
+});
+
+const TWO_AGENTS = "A card has at most one agent: name the agent only in assignee, which hands the card over.";
+
+/**
+ * `add_assignee` / `remove_assignee` (ADR 0186): people by handle, name or email, never "me" or "none" (those are
+ * `assignee`'s). An agent resolves like any name: whether it is allowed there is the caller's rule.
+ */
+async function peopleOf(deps: IssueDeps, ctx: ToolContext, field: string, raw: unknown): Promise<WorkActor[]> {
+  if (!Array.isArray(raw)) return [];
+  const out: WorkActor[] = [];
+  for (const ref of raw.map(String)) {
+    const word = ref.trim().replace(/^@/, "").toLowerCase();
+    if (word === "me" || word === "none") {
+      throw new Error(`${field} takes people by handle: "me" and "none" belong in assignee`);
+    }
+    const who = await assigneeOf(deps, ctx, ref);
+    if (who) out.push(who);
+  }
+  return out;
+}
 
 const STATUSES = ["todo", "in_progress", "in_review", "done", "canceled"];
 const PRIORITIES = ["low", "normal", "high"];
@@ -1001,8 +1037,7 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
     },
     {
       name: UPDATE_ISSUE_TOOL,
-      description:
-        "Change an issue's status, priority, title, description, assignee, labels, project or due date, check acceptance criteria you met, attach files or link a pull request to it. Linking a PR moves the issue to review on its own. No permission needed: the person sees the change with Undo.",
+      description: `Change an issue's status, priority, title, description, assignee, labels, project or due date, check acceptance criteria you met, attach files or link a pull request to it. Linking a PR moves the issue to review on its own. A card has at most one agent: naming another agent in assignee hands the card over and keeps the people on it; naming a person on a card that has an agent adds them beside the agent; "none" takes everyone off. To share a card without replacing anyone use add_assignee (people only, up to 5 beside the principal) and remove_assignee. Never name two agents in one call: it is refused. No permission needed: the person sees the change with Undo.`,
       scope: "issues:write",
       inputSchema: {
         type: "object",
@@ -1014,6 +1049,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           title: { type: "string", maxLength: 300 },
           description: { type: "string", maxLength: 20000 },
           assignee: assigneeField,
+          add_assignee: peopleField("People to put on the card beside whoever is on it (handles, names or emails)."),
+          remove_assignee: peopleField("People to take off the card."),
           labels: {
             type: "array",
             items: { type: "string", maxLength: 40 },
@@ -1052,6 +1089,15 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
           const fromUrl = Number(/\/pull\/(\d+)/.exec(url)?.[1] ?? Number.NaN);
           const prNumber = number ?? (Number.isFinite(fromUrl) ? fromUrl : undefined);
           const assignee = str(input.assignee) ? await assigneeOf(deps, ctx, str(input.assignee)) : undefined;
+          const add = await peopleOf(deps, ctx, "add_assignee", input.add_assignee);
+          const remove = await peopleOf(deps, ctx, "remove_assignee", input.remove_assignee);
+          // Code, not the prompt: the engine refuses the same (`issue.two_agents`), this is the agent's own sentence.
+          if (add.some((a) => a.type === "agent"))
+            throw new Error(
+              assignee?.type === "agent"
+                ? TWO_AGENTS
+                : "add_assignee takes people; to hand the card to an agent put it in assignee",
+            );
           if (reader) {
             await getIssue(deps.db, { type: "person", userId: reader }, ctx.orgId, issueKey(str(input.issue)));
             const refused = assignee !== undefined && (await rightHandTaskRefusal(deps, ctx, reader, assignee, null));
@@ -1090,6 +1136,8 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
                 title: str(input.title) || undefined,
                 description: typeof input.description === "string" ? input.description : undefined,
                 ...(assignee !== undefined ? { assignee } : {}),
+                ...(add.length ? { addAssignees: add } : {}),
+                ...(remove.length ? { removeAssignees: remove } : {}),
                 ...(Array.isArray(input.labels) ? { labels: input.labels.map(String) } : {}),
                 ...(projectId !== undefined ? { projectId } : {}),
                 ...(due !== undefined ? { dueDate: due || null } : {}),
@@ -1107,8 +1155,14 @@ export function createIssueToolSource(deps: ArtifactDeps): ToolSource {
             (i, db) => issueChange({ ...deps, db }, ctx, before, i),
           );
           const reassigned = (before.assignee as { id?: string } | null | undefined)?.id !== latest.assignee?.id;
+          // A hand-off keeps the people: the agent hears who is still on the card.
+          const names = await assigneeNames(deps, ctx, [latest]);
+          const kept =
+            assignee?.type === "agent" && latest.alsoWith.length
+              ? `\nKept on it: ${latest.alsoWith.map((a) => names.get(a.id) ?? a.id).join(", ")}.`
+              : "";
           return {
-            content: `Updated ${await lineOf(deps, ctx, latest)}${filesNote(latest, files)}${reassigned ? await handOverLine(deps, ctx, latest) : ""}`,
+            content: `Updated ${await lineOf(deps, ctx, latest)}${filesNote(latest, files)}${kept}${reassigned ? await handOverLine(deps, ctx, latest) : ""}`,
             data: { issue: { id: latest.id, number: latest.number } },
           };
         } catch (error) {

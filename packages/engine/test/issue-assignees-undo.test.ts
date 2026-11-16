@@ -4,9 +4,11 @@ import {
   actionsFor,
   createIssue,
   createIssueToolSource,
+  describeAction,
   getIssue,
   insertMessage,
   linkRunActions,
+  listMembers,
   replyThreadOf,
   type ToolContext,
   type ToolDefinition,
@@ -135,5 +137,32 @@ describe("undo an agent's change of people", () => {
     const back = await getIssue(f.db, person(f.owner.id), f.org.id, { id: card.id });
     expect(back.assignee).toEqual(actor("person", f.owner.id));
     expect(back.alsoWith).toEqual([actor("person", bia.id)]);
+  });
+
+  test("the receipt of a people-only change names the people", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const caio = await addMember(f.db, f.org.id, "member", "Caio");
+    await listMembers(f.db, f.org.id); // assigns the handles
+    const ctx = await runContext(f);
+    const call = await toolsOf([createIssueToolSource(f.artifactDeps)], ctx);
+    const card = await createIssue(deps(f), person(f.owner.id), f.org.id, {
+      title: "so gente",
+      assignee: actor("agent", f.agent.id),
+    });
+    await call("update_issue", { issue: "#1", add_assignee: ["@bia", "@caio"] });
+    const m = await reply(f, ctx);
+    const [action] = (await actionsFor(f.db, f.org.id, [m.id])).get(m.id) ?? [];
+    // The principal did not change, so this is a change of fields, not an assignment.
+    // (An agent working a card also moves it to "in progress", so the status is among the fields.)
+    expect(action).toMatchObject({ kind: "issue.updated", params: { fields: ["status", "alsoWith"] } });
+    expect(action?.params.alsoWithNames).toEqual(["Bia", "Caio"]);
+    expect(describeAction(action as NonNullable<typeof action>)).toContain("people also with");
+    if (!action) throw new Error("no action");
+    await undoAgentAction(deps(f), f.owner.id, f.org.id, action.id);
+    const back = await getIssue(f.db, person(f.owner.id), f.org.id, { id: card.id });
+    expect(back.assignee).toEqual(actor("agent", f.agent.id));
+    expect(back.alsoWith).toEqual([]);
+    expect(bia.id && caio.id).toBeTruthy();
   });
 });
