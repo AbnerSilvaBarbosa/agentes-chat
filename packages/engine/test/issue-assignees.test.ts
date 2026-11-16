@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { asc, eq, schema, sql } from "@agenteschat/db";
-import { createIssue, getIssue, getIssueDetail, listIssues, ValidationError } from "../src";
+import { orgTopic, type RealtimeEvent } from "@agenteschat/adapters";
+import { and, asc, eq, schema, sql } from "@agenteschat/db";
+import {
+  createAgent,
+  createIssue,
+  getIssue,
+  getIssueDetail,
+  listIssueActivity,
+  listIssues,
+  NEW_AGENT_DEFAULTS,
+  openTaskConversation,
+  updateIssue,
+  ValidationError,
+} from "../src";
 import { applyAssignees, checkAssignees, coAssigneesOf, onCardSql } from "../src/issue-assignees";
 import { addMember, addUser, type Fixture, setup } from "./fixtures";
 
@@ -380,5 +392,176 @@ describe("creating a card with several people", () => {
     expect(card.audience.mode).toBe("people");
     expect([...card.audience.userIds].sort()).toEqual([bia.id, caio.id].sort());
     expect(card.alsoWith).toEqual([actor("person", caio.id)]);
+  });
+});
+
+describe("changing who is responsible on a card", () => {
+  const events = async (issueId: string) =>
+    (await listIssueActivity(f.db, person(f.owner.id), f.org.id, issueId)).filter((a) => a.kind === "event");
+  const deps = () => ({ db: f.db, pubsub: f.pubsub });
+
+  test("adding someone records an assignee_added event and keeps the principal", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "dupla",
+      assignee: actor("person", f.owner.id),
+    });
+    const heard: RealtimeEvent[] = [];
+    f.pubsub.subscribe(orgTopic(f.org.id), (e) => heard.push(e));
+    const view = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, {
+      addAssignees: [actor("person", bia.id)],
+    });
+    expect(view.assignee).toEqual(actor("person", f.owner.id));
+    expect(view.alsoWith).toEqual([actor("person", bia.id)]);
+    const added = (await events(card.id)).filter((e) => e.event === "assignee_added");
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({
+      author: { type: "person", id: f.owner.id },
+      textCode: "assignee_added",
+      textParams: { name: "Bia" },
+    });
+    // The principal was not re-announced.
+    expect((await events(card.id)).filter((e) => e.event === "assigned")).toHaveLength(0);
+    // The screen hears the card with its people inside the update.
+    const update = heard
+      .map((h) => (h as unknown as { event?: { type: string; issue?: { alsoWith?: unknown } } }).event)
+      .find((e) => e?.type === "issue.updated");
+    expect(update?.issue?.alsoWith).toEqual([actor("person", bia.id)]);
+  });
+
+  test("removing someone records an assignee_removed event and keeps the others", async () => {
+    f = await setup();
+    const [bia, caio] = [
+      await addMember(f.db, f.org.id, "member", "Bia"),
+      await addMember(f.db, f.org.id, "member", "Caio"),
+    ];
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "trio",
+      assignees: [actor("person", f.owner.id), actor("person", bia.id), actor("person", caio.id)],
+    });
+    const view = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, {
+      removeAssignees: [actor("person", bia.id)],
+    });
+    expect(view.assignee).toEqual(actor("person", f.owner.id));
+    expect(view.alsoWith).toEqual([actor("person", caio.id)]);
+    const removed = (await events(card.id)).filter((e) => e.event === "assignee_removed");
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toMatchObject({ textCode: "assignee_removed", textParams: { name: "Bia" } });
+  });
+
+  test("handing the card to another agent keeps the people and says so in the history", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const qa = await createAgent(f.db, f.owner.id, f.org.id, { name: "QA", handle: "qa" }, NEW_AGENT_DEFAULTS);
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "passa a bola",
+      assignees: [actor("agent", f.agent.id), actor("person", bia.id)],
+    });
+    const view = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, { assignee: actor("agent", qa.id) });
+    expect(view.assignee).toEqual(actor("agent", qa.id));
+    expect(view.alsoWith).toEqual([actor("person", bia.id)]);
+    expect(await stateOf(card.id)).toMatchObject({ principal: ["agent", qa.id], also: [bia.id] });
+    const replaced = (await events(card.id)).filter((e) => e.event === "agent_replaced");
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0]).toMatchObject({ textCode: "agent_replaced", textParams: { to: "QA" } });
+    expect((await events(card.id)).filter((e) => e.event === "assigned")).toHaveLength(0);
+    // A person given to a card that has an agent joins beside it; the agent stays the principal.
+    const caio = await addMember(f.db, f.org.id, "member", "Caio");
+    const joined = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, {
+      assignee: actor("person", caio.id),
+    });
+    expect(joined.assignee).toEqual(actor("agent", qa.id));
+    expect(joined.alsoWith).toEqual([actor("person", bia.id), actor("person", caio.id)]);
+  });
+
+  test("handing the card to another agent admits it to the task conversation", async () => {
+    f = await setup();
+    const qa = await createAgent(f.db, f.owner.id, f.org.id, { name: "QA", handle: "qa" }, NEW_AGENT_DEFAULTS);
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "sala",
+      assignee: actor("agent", f.agent.id),
+    });
+    const room = await openTaskConversation(f.db, person(f.owner.id), f.org.id, card.id);
+    const inRoom = async (agentId: string) =>
+      (
+        await f.db
+          .select()
+          .from(schema.channelMembers)
+          .where(and(eq(schema.channelMembers.channelId, room.channelId), eq(schema.channelMembers.agentId, agentId)))
+      ).length;
+    expect(await inRoom(qa.id)).toBe(0);
+    await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, { assignee: actor("agent", qa.id) });
+    expect(await inRoom(qa.id)).toBe(1);
+    // An agent put on a card that had a person as principal joins as well.
+    const other = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "outra sala",
+      assignee: actor("person", f.owner.id),
+    });
+    const otherRoom = await openTaskConversation(f.db, person(f.owner.id), f.org.id, other.id);
+    await updateIssue(deps(), person(f.owner.id), f.org.id, other.id, { assignee: actor("agent", f.agent.id) });
+    const joinedOther = await f.db
+      .select()
+      .from(schema.channelMembers)
+      .where(
+        and(eq(schema.channelMembers.channelId, otherRoom.channelId), eq(schema.channelMembers.agentId, f.agent.id)),
+      );
+    expect(joinedOther).toHaveLength(1);
+  });
+
+  test("a plain assignee change still works as it did", async () => {
+    f = await setup();
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, { title: "antigo" });
+    const first = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, {
+      assignee: actor("person", f.owner.id),
+    });
+    expect(first.assignee).toEqual(actor("person", f.owner.id));
+    expect(first.alsoWith).toEqual([]);
+    const second = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, {
+      assignee: actor("person", bia.id),
+    });
+    expect(second.assignee).toEqual(actor("person", bia.id));
+    expect(second.alsoWith).toEqual([]);
+    const cleared = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, { assignee: null });
+    expect(cleared.assignee).toBeNull();
+    const kinds = (await events(card.id)).map((e) => [e.event, e.textCode]);
+    expect(kinds.filter(([e]) => e === "assigned")).toEqual([
+      ["assigned", "assigned"],
+      ["assigned", "assigned"],
+      ["assigned", "unassigned"],
+    ]);
+  });
+
+  test("the card refuses a sixth person, two agents and a non-member through updateIssue and changes nothing", async () => {
+    f = await setup();
+    const people = [];
+    for (const n of ["A", "B", "C", "D", "E", "F", "G"]) people.push(await addMember(f.db, f.org.id, "member", n));
+    const outsider = await addUser(f.db, "Fora");
+    const card = await createIssue(deps(), person(f.owner.id), f.org.id, {
+      title: "cheio",
+      assignees: people.slice(0, 6).map((p) => actor("person", p.id)),
+    });
+    const before = await stateOf(card.id);
+    const code = async (patch: Parameters<typeof updateIssue>[4]) =>
+      (await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, patch).catch((e) => e)).code;
+    expect(await code({ addAssignees: [actor("person", people[6]?.id as string)] })).toBe("issue.assignees_max");
+    expect(await code({ assignees: [actor("agent", f.agent.id), actor("agent", crypto.randomUUID())] })).toBe(
+      "issue.two_agents",
+    );
+    expect(await code({ principal: actor("person", outsider.id) })).toBe("issue.principal_not_on_card");
+    const roomy = await createIssue(deps(), person(f.owner.id), f.org.id, { title: "vazio" });
+    const nonMember = await updateIssue(deps(), person(f.owner.id), f.org.id, roomy.id, {
+      addAssignees: [actor("person", outsider.id)],
+    }).catch((e) => e);
+    expect(nonMember.message).toBe("That person is not a member of this organization");
+    expect(await stateOf(roomy.id)).toMatchObject({ principal: [null, null], also: [] });
+    expect(await stateOf(card.id)).toEqual(before);
+    // Making a person also with the principal swaps them.
+    const swapped = await updateIssue(deps(), person(f.owner.id), f.org.id, card.id, {
+      principal: actor("person", people[2]?.id as string),
+    });
+    expect(swapped.assignee).toEqual(actor("person", people[2]?.id as string));
+    expect((await events(card.id)).some((e) => e.event === "principal_changed")).toBe(true);
   });
 });
