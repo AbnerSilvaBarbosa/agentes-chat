@@ -139,3 +139,87 @@ html:not([data-pointer]) .po-row__main:focus-visible {
 .po-row__spec--failed {
   color: var(--ink);
 }
+
+/*
+ * "Gerando spec": the block over every group while a spec is queued or running. A row is the working mark (five cells
+ * the size of the kit's pixel marks), the card and under it the state with the time it has waited.
+ */
+.po-live {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.po-live__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--row-py) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+.po-list > .po-live__row:first-child {
+  border-top: 0;
+}
+.po-live__main {
+  flex: 1;
+  min-width: 0;
+}
+.po-live__state {
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--ink2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+/* The mark sits on the title's first line (20 high), its cells 4 wide with 2 between. */
+.po-pix {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  color: var(--ink);
+}
+.po-pix > span {
+  width: 4px;
+  height: 8px;
+  background: currentColor;
+  opacity: 0.3;
+}
+.po-live__row[data-state="running"] .po-pix > span {
+  opacity: 0.85;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .po-pix--run > span {
+    animation: po-pix-sweep 1100ms ease-in-out infinite;
+    animation-delay: calc(var(--i) * 120ms);
+  }
+}
+@keyframes po-pix-sweep {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scaleY(0.6);
+  }
+  40% {
+    opacity: 1;
+    transform: scaleY(1.5);
+  }
+}
+
+/* A spec that just finished: the row's background lights once and settles. */
+@media (prefers-reduced-motion: no-preference) {
+  .po-row--settled {
+    animation: po-row-settle 1200ms ease-out 1;
+  }
+}
+@keyframes po-row-settle {
+  from {
+    background: color-mix(in srgb, var(--ok) 18%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
