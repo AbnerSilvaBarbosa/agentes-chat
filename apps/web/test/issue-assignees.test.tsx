@@ -78,6 +78,7 @@ const open = async () => {
   return screen().getByRole("menu");
 };
 const click = (el: Element) => act(async () => fireEvent.click(el));
+const hints = (list: HTMLElement[]) => list.map((e) => e.querySelector(".ac-menu__hint")?.textContent ?? "");
 const names = (list: HTMLElement[]) => list.map((e) => e.querySelector(".ac-menu__label")?.textContent ?? "");
 
 describe("the responsible picker", () => {
@@ -98,7 +99,8 @@ describe("the responsible picker", () => {
     const headings = [...menu.querySelectorAll(".ac-menu__heading")].map((h) => h.textContent);
     expect(headings).toEqual(["Responsável", "Também com", "Adicionar pessoa"]);
     const rows = within(menu).getAllByRole("menuitem");
-    expect(names(rows)).toEqual(["WalterPrincipal", "JoãoTornar principal"]);
+    expect(names(rows)).toEqual(["Walter", "João"]);
+    expect(hints(rows)).toEqual(["Principal", "Tornar principal"]);
   });
 
   test("adding and removing a person sends the whole list in order", async () => {
@@ -129,7 +131,8 @@ describe("the responsible picker", () => {
     const again = await open();
     expect(within(again).queryByText("Tornar principal")).toBeNull();
     const rows = within(again).getAllByRole("menuitem");
-    expect(names(rows)).toEqual(["AdaPrincipal", "Walter", "João"]);
+    expect(names(rows)).toEqual(["Ada", "Walter", "João"]);
+    expect(hints(rows)).toEqual(["Principal", "", ""]);
     expect(within(again).getByRole("menuitemcheckbox", { name: /^Atlas/ }).textContent).toContain(
       "Troca o agente e as pessoas ficam",
     );
@@ -428,5 +431,61 @@ describe("grouped by assignee", () => {
     expect(moved.alsoWith).toEqual([]);
     expect(cardIn(column("João"))).toContain("Da Walter");
     expect(toast()).toContain("#2 agora está com João.");
+  });
+});
+
+/** Eighty characters of a real name: it wraps where it is shown, never ends in "…", and is there whole to be read. */
+const LONG = "Christopher Alexander Montgomery de Albuquerque Cavalcanti Nascimento Silvestres";
+
+describe("at their worst", () => {
+  test("a long name and the maximum of people fit the card and the picker", async () => {
+    expect(LONG).toHaveLength(80);
+    const longOne = member("u-long", LONG);
+    const six: Actor[] = [{ type: "person", id: "u-long" }, ...crowd];
+    const app = async (path: string, layout: "board" | "list" = "board") => {
+      const state = seedState();
+      state.members.push(longOne, ...CROWD);
+      const base = structuredClone(ISSUES_VIEW_DEFAULT);
+      state.issuesView = { ...base, layout };
+      const api = createFakeApi(state, { seed: false });
+      // Walter is the sixth person, so the card shows on his own page too.
+      const card = await api.issues.create(ORG_ID, {
+        title: "Fechar o mês",
+        assignees: [...six.slice(0, 5), walter],
+      });
+      await renderApp(path, { api });
+      await settle(8);
+      return card;
+    };
+
+    // The board's card and the list's row: the principal's whole name, three faces and the count of the rest.
+    for (const layout of ["board", "list"] as const) {
+      await app(`/org/${ORG_ID}/my-tasks`, layout);
+      const card = cardOf("Fechar o mês");
+      expect(card.querySelector(".issue-card__who > .ac-who > b")?.textContent).toBe(LONG);
+      expect(card.querySelectorAll(".issue-card__also > .ac-avatar")).toHaveLength(3);
+      expect(card.querySelector(".issue-card__more")?.textContent).toBe("+2");
+      expect(heardWho(card)).toBe(`Responsável: ${LONG}. Também com: Bea, Caio, Dora, Enzo, Walter.`);
+      cleanup();
+    }
+
+    // The properties line and its picker: the name whole in the trigger, six people ticked, the limit said.
+    const card = await app(`/org/${ORG_ID}/issues/1`);
+    expect(card.number).toBe(1);
+    const field = within(strip()).getByRole("button", { name: /^Responsável/ });
+    expect(field.querySelector(".issue-assignees__name")?.textContent).toBe(LONG);
+    expect(field.querySelectorAll(".ac-avatar")).toHaveLength(3);
+    expect(field.textContent).toContain("+5");
+    const menu = await open();
+    const ticked = within(menu)
+      .getAllByRole("menuitemcheckbox")
+      .filter((c) => c.getAttribute("aria-checked") === "true");
+    expect(ticked).toHaveLength(6);
+    expect(within(menu).getByText("No máximo 5 pessoas também com")).toBeTruthy();
+    // Everyone not on it is out of reach, and a name is never cut by the menu's own markup.
+    const rows = within(menu).getAllByRole("menuitem");
+    expect(rows[0]?.querySelector(".ac-menu__label")?.textContent).toBe(LONG);
+    expect(rows[0]?.querySelector(".ac-menu__hint")?.textContent).toBe("Principal");
+    expect(menu.querySelector('[style*="ellipsis"]')).toBeNull();
   });
 });

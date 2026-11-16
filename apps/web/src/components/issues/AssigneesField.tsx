@@ -73,6 +73,7 @@ export function AssigneesField({
   return (
     <Menu
       label={t("issues.assignees.label")}
+      className="ac-menu--wrap"
       trigger={
         <Button
           size="sm"
@@ -100,7 +101,7 @@ export function AssigneesField({
       {principal && (
         <>
           <MenuHeading>{t("issues.assignees.label")}</MenuHeading>
-          <MenuItem leading={actors.avatar(principal, "sm")} description={t("issues.assignees.principal")}>
+          <MenuItem leading={actors.avatar(principal, "sm")} hint={t("issues.assignees.principal")}>
             {actors.name(principal)}
           </MenuItem>
         </>
@@ -112,7 +113,7 @@ export function AssigneesField({
             <MenuItem
               key={`${a.type}:${a.id}`}
               leading={actors.avatar(a, "sm")}
-              description={hasAgent ? undefined : t("issues.assignees.makePrincipal")}
+              hint={hasAgent ? undefined : t("issues.assignees.makePrincipal")}
               onSelect={hasAgent ? undefined : () => onChange({ principal: a })}
             >
               {actors.name(a)}
