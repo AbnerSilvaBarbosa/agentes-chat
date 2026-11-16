@@ -269,6 +269,7 @@ describe("poProgress", () => {
       state: "done",
       page: { slug: "spec-pronto", title: "Spec spec-pronto" },
       error: null,
+      queuedAt: null,
     });
     // A page the viewer may not open is no link.
     expect(by("Secreto").spec).toBeNull();
