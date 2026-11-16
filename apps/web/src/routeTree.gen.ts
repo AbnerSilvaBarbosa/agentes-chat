@@ -56,6 +56,7 @@ import { Route as OrgOrgIdIssuesIndexRouteImport } from './routes/org.$orgId.iss
 import { Route as OrgOrgIdIssuesNumberRouteImport } from './routes/org.$orgId.issues.$number'
 import { Route as OrgOrgIdPoIndexRouteImport } from './routes/org.$orgId.po.index'
 import { Route as OrgOrgIdPoSpaceIdRouteImport } from './routes/org.$orgId.po.$spaceId'
+import { Route as OrgOrgIdPoGeneralRouteImport } from './routes/org.$orgId.po.general'
 import { Route as OrgOrgIdSettingsSectionRouteImport } from './routes/org.$orgId.settings_.$section'
 import { Route as OrgOrgIdThreadsIndexRouteImport } from './routes/org.$orgId.threads.index'
 import { Route as OrgOrgIdThreadsThreadIdRouteImport } from './routes/org.$orgId.threads.$threadId'
@@ -306,6 +307,11 @@ const OrgOrgIdPoSpaceIdRoute = OrgOrgIdPoSpaceIdRouteImport.update({
   path: '/po/$spaceId',
   getParentRoute: () => OrgOrgIdRoute,
 } as any)
+const OrgOrgIdPoGeneralRoute = OrgOrgIdPoGeneralRouteImport.update({
+  id: '/po/general',
+  path: '/po/general',
+  getParentRoute: () => OrgOrgIdRoute,
+} as any)
 const OrgOrgIdSettingsSectionRoute = OrgOrgIdSettingsSectionRouteImport.update({
   id: '/settings_/$section',
   path: '/settings/$section',
@@ -424,6 +430,7 @@ export interface FileRoutesByFullPath {
   '/org/$orgId/dashboards/$dashboardId': typeof OrgOrgIdDashboardsDashboardIdRoute
   '/org/$orgId/issues/$number': typeof OrgOrgIdIssuesNumberRoute
   '/org/$orgId/po/$spaceId': typeof OrgOrgIdPoSpaceIdRoute
+  '/org/$orgId/po/general': typeof OrgOrgIdPoGeneralRoute
   '/org/$orgId/settings/$section': typeof OrgOrgIdSettingsSectionRoute
   '/org/$orgId/threads/$threadId': typeof OrgOrgIdThreadsThreadIdRoute
   '/org/$orgId/wiki/$slug': typeof OrgOrgIdWikiSlugRoute
@@ -485,6 +492,7 @@ export interface FileRoutesByTo {
   '/org/$orgId/dashboards/$dashboardId': typeof OrgOrgIdDashboardsDashboardIdRoute
   '/org/$orgId/issues/$number': typeof OrgOrgIdIssuesNumberRoute
   '/org/$orgId/po/$spaceId': typeof OrgOrgIdPoSpaceIdRoute
+  '/org/$orgId/po/general': typeof OrgOrgIdPoGeneralRoute
   '/org/$orgId/settings/$section': typeof OrgOrgIdSettingsSectionRoute
   '/org/$orgId/threads/$threadId': typeof OrgOrgIdThreadsThreadIdRoute
   '/org/$orgId/wiki/$slug': typeof OrgOrgIdWikiSlugRoute
@@ -548,6 +556,7 @@ export interface FileRoutesById {
   '/org/$orgId/dashboards/$dashboardId': typeof OrgOrgIdDashboardsDashboardIdRoute
   '/org/$orgId/issues/$number': typeof OrgOrgIdIssuesNumberRoute
   '/org/$orgId/po/$spaceId': typeof OrgOrgIdPoSpaceIdRoute
+  '/org/$orgId/po/general': typeof OrgOrgIdPoGeneralRoute
   '/org/$orgId/settings_/$section': typeof OrgOrgIdSettingsSectionRoute
   '/org/$orgId/threads/$threadId': typeof OrgOrgIdThreadsThreadIdRoute
   '/org/$orgId/wiki_/$slug': typeof OrgOrgIdWikiSlugRoute
@@ -612,6 +621,7 @@ export interface FileRouteTypes {
     | '/org/$orgId/dashboards/$dashboardId'
     | '/org/$orgId/issues/$number'
     | '/org/$orgId/po/$spaceId'
+    | '/org/$orgId/po/general'
     | '/org/$orgId/settings/$section'
     | '/org/$orgId/threads/$threadId'
     | '/org/$orgId/wiki/$slug'
@@ -673,6 +683,7 @@ export interface FileRouteTypes {
     | '/org/$orgId/dashboards/$dashboardId'
     | '/org/$orgId/issues/$number'
     | '/org/$orgId/po/$spaceId'
+    | '/org/$orgId/po/general'
     | '/org/$orgId/settings/$section'
     | '/org/$orgId/threads/$threadId'
     | '/org/$orgId/wiki/$slug'
@@ -735,6 +746,7 @@ export interface FileRouteTypes {
     | '/org/$orgId/dashboards/$dashboardId'
     | '/org/$orgId/issues/$number'
     | '/org/$orgId/po/$spaceId'
+    | '/org/$orgId/po/general'
     | '/org/$orgId/settings_/$section'
     | '/org/$orgId/threads/$threadId'
     | '/org/$orgId/wiki_/$slug'
@@ -1109,6 +1121,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgOrgIdPoSpaceIdRouteImport
       parentRoute: typeof OrgOrgIdRoute
     }
+    '/org/$orgId/po/general': {
+      id: '/org/$orgId/po/general'
+      path: '/po/general'
+      fullPath: '/org/$orgId/po/general'
+      preLoaderRoute: typeof OrgOrgIdPoGeneralRouteImport
+      parentRoute: typeof OrgOrgIdRoute
+    }
     '/org/$orgId/settings_/$section': {
       id: '/org/$orgId/settings_/$section'
       path: '/settings/$section'
@@ -1226,6 +1245,7 @@ interface OrgOrgIdRouteChildren {
   OrgOrgIdDashboardsDashboardIdRoute: typeof OrgOrgIdDashboardsDashboardIdRoute
   OrgOrgIdIssuesNumberRoute: typeof OrgOrgIdIssuesNumberRoute
   OrgOrgIdPoSpaceIdRoute: typeof OrgOrgIdPoSpaceIdRoute
+  OrgOrgIdPoGeneralRoute: typeof OrgOrgIdPoGeneralRoute
   OrgOrgIdSettingsSectionRoute: typeof OrgOrgIdSettingsSectionRoute
   OrgOrgIdThreadsThreadIdRoute: typeof OrgOrgIdThreadsThreadIdRoute
   OrgOrgIdWikiSlugRoute: typeof OrgOrgIdWikiSlugRoute
@@ -1267,6 +1287,7 @@ const OrgOrgIdRouteChildren: OrgOrgIdRouteChildren = {
   OrgOrgIdDashboardsDashboardIdRoute: OrgOrgIdDashboardsDashboardIdRoute,
   OrgOrgIdIssuesNumberRoute: OrgOrgIdIssuesNumberRoute,
   OrgOrgIdPoSpaceIdRoute: OrgOrgIdPoSpaceIdRoute,
+  OrgOrgIdPoGeneralRoute: OrgOrgIdPoGeneralRoute,
   OrgOrgIdSettingsSectionRoute: OrgOrgIdSettingsSectionRoute,
   OrgOrgIdThreadsThreadIdRoute: OrgOrgIdThreadsThreadIdRoute,
   OrgOrgIdWikiSlugRoute: OrgOrgIdWikiSlugRoute,

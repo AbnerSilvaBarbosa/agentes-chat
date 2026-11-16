@@ -6,7 +6,7 @@ import { threadSearch } from "@/lib/open-param";
 import { ChannelSkeleton } from "@/pages/ChannelPage";
 import { DmPage } from "@/pages/DmPage";
 
-/** Direct message with an agent (sidebar "Agentes"); the workspace's PO opens its PO view instead (ADR 0185). */
+/** Direct message with an agent (sidebar "Agentes"); the workspace's PO opens its PO view instead, its plain DM at a message (ADR 0185). */
 export const Route = createFileRoute("/org/$orgId/dm/agent/$agentId")({
   // `?m=<message>` opens the DM at that message (a search hit); `?paid`: back from paying for the workspace (the hold
   // banner says the payment is being confirmed), where a new workspace opens its right hand's DM (ADR 0137); `?thread=`
@@ -31,7 +31,13 @@ export const Route = createFileRoute("/org/$orgId/dm/agent/$agentId")({
         </main>
       );
     if (!po.data) return <ChannelSkeleton dm="agent" />;
-    if (po.data.agentId === agentId) return <Navigate to="/org/$orgId/po" params={{ orgId }} replace />;
+    // …but a link to one of its messages (a notice, a search hit) is its plain DM, where routines write, at that message.
+    if (po.data.agentId === agentId)
+      return focus ? (
+        <Navigate to="/org/$orgId/po/general" params={{ orgId }} search={{ m: focus }} replace />
+      ) : (
+        <Navigate to="/org/$orgId/po" params={{ orgId }} replace />
+      );
     return <DmPage key={agentId} target={{ agentId }} focusMessageId={focus} />;
   },
 });

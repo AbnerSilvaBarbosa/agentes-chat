@@ -3291,6 +3291,10 @@ export const ptBR = {
     poNone: "Nenhum PO para conversar sobre essa empresa.",
     poTopic: "PO · {{company}}",
     poCompany: "Empresa",
+    /** The PO's plain DM, where its routines and hand-offs write (ADR 0185 addendum). */
+    poGeneral: "Avisos e rotinas",
+    poGeneralTopic: "PO · avisos e rotinas",
+    poBack: "Conversa por empresa",
   },
   poCard: {
     create: "Criar",

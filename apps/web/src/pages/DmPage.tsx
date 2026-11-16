@@ -1,11 +1,12 @@
 import type { DmTarget } from "@agenteschat/client";
-import { addDm, useOpenPoChat, usePoOverview } from "@agenteschat/client";
+import { addDm, useDms, useOpenPoChat, usePoOverview } from "@agenteschat/client";
 import { audienceNotice, canTalk, seesDetails } from "@agenteschat/client/lib/audience";
 import { greetingSuggestions } from "@agenteschat/client/lib/chat";
 import { isGone } from "@agenteschat/client/lib/errors";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
 import { isRightHand, rightHandSeenKey } from "@agenteschat/client/lib/right-hand";
-import { Avatar, BrainIcon, Button, EmptyState, ProviderLogo, Select } from "@agenteschat/ui";
+import { badgeCount } from "@agenteschat/client/lib/unread";
+import { Avatar, BrainIcon, Button, CountBadge, EmptyState, ProviderLogo, Select } from "@agenteschat/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
@@ -34,15 +35,18 @@ import { SpaceMark } from "./IssueProjects";
 /**
  * A direct message with an agent or a person: the channel layout with its own header and empty state. With `po`, the
  * person's chat with that agent about one company (ADR 0185): opened for the company, each company its own history.
+ * With `poGeneral`, the PO's plain DM (where its routines and hand-offs write), reached from the PO view.
  */
 export function DmPage({
   target,
   focusMessageId,
   po,
+  poGeneral,
 }: {
   target: DmTarget;
   focusMessageId?: string;
   po?: { spaceId: string };
+  poGeneral?: boolean;
 }) {
   const { t } = useTranslation();
   const { org, me } = useOrg();
@@ -121,7 +125,8 @@ export function DmPage({
                 <PoTopic spaceId={po.spaceId} />
               </span>
             )}
-            {agent && !po && (
+            {agent && poGeneral && <span className="channel__topic">{t("dm.poGeneralTopic")}</span>}
+            {agent && !po && !poGeneral && (
               <span className="channel__topic" data-right-hand={rightHand || undefined}>
                 {rightHand
                   ? `${t("rightHand.label")} · ${t("rightHand.actsAsYou")}`
@@ -154,6 +159,9 @@ export function DmPage({
           {agent && !rightHand && <ComputerButton agent={agent} queueOnly={side?.docked && seesDetails(agent)} />}
           {/* The PO chat's company (ADR 0185): another company opens that company's own chat. */}
           {po && <PoCompanySwitch spaceId={po.spaceId} />}
+          {/* …and the PO's plain DM beside it, lit while it holds unread messages (ADR 0185 addendum). */}
+          {po && agent && <PoGeneralLink agentId={agent.id} />}
+          {poGeneral && <PoBackLink />}
           {/* The same field as a channel's, held to this DM. */}
           <HeaderSearch channelId={dm.data.channelId} onOpen={onSearch} dm />
           {side && (
@@ -282,5 +290,46 @@ function DmWho({
         </ProfileTrigger>
       ) : null}
     </div>
+  );
+}
+
+/** "Avisos e rotinas": the PO's plain DM, where its routines and hand-offs write; its unread count rides on it. */
+function PoGeneralLink({ agentId }: { agentId: string }) {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const navigate = useNavigate();
+  const unread = useDms(org.id).data?.find((d) => d.with.id === agentId)?.unread ?? 0;
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="po-general"
+      data-unread={unread > 0 || undefined}
+      onClick={() => void navigate({ to: "/org/$orgId/po/general", params: { orgId: org.id } })}
+    >
+      {t("dm.poGeneral")}
+      {unread > 0 && (
+        <CountBadge role="img" aria-label={t("shell.unread", { count: unread })}>
+          {badgeCount(unread)}
+        </CountBadge>
+      )}
+    </Button>
+  );
+}
+
+/** From the plain DM back to the PO's chat by company (the one opened last). */
+function PoBackLink() {
+  const { t } = useTranslation();
+  const { org } = useOrg();
+  const navigate = useNavigate();
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="po-general"
+      onClick={() => void navigate({ to: "/org/$orgId/po", params: { orgId: org.id } })}
+    >
+      {t("dm.poBack")}
+    </Button>
   );
 }

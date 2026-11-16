@@ -245,7 +245,8 @@ export function Sidebar() {
   const channels = useChannels(orgId);
   const overview = useOverview(orgId);
   // The workspace's PO, if it has one (ADR 0185): its row sits under Início and opens its chat.
-  const hasPo = !!usePoOverview(orgId).data?.agentId;
+  const poAgentId = usePoOverview(orgId).data?.agentId ?? null;
+  const hasPo = !!poAgentId;
   // A new channel: `true` with no category, or the category whose + opened it.
   const [creatingChannel, setCreatingChannel] = useState<boolean | string>(false);
   // A new category: empty, or with the channel whose menu asked for it.
@@ -353,6 +354,8 @@ export function Sidebar() {
   const rightHand = dir.agents.find((a) => isRightHand(a) && a.canTalk !== false);
   const dmOf = new Map((dms.data ?? []).map((d) => [d.with.id, d]));
   const rightHandDm = rightHand ? dmOf.get(rightHand.id) : undefined;
+  // The PO row lights with its plain DM, where its routines write (ADR 0185 addendum).
+  const poUnread = poAgentId ? (dmOf.get(poAgentId)?.unread ?? 0) : 0;
   // New agent: one dialog for every way in (ADR 0164); outside the shell (a test's page), the full form.
   const newAgentDialog = useNewAgent();
   const newAgent = () =>
@@ -578,9 +581,16 @@ export function Sidebar() {
           <span className="sidebar__item-label">{t("shell.home")}</span>
         </Link>
         {hasPo && (
-          <Link to="/org/$orgId/po" params={{ orgId }} className="sidebar__item" title={railTip("po")}>
+          <Link
+            to="/org/$orgId/po"
+            params={{ orgId }}
+            className="sidebar__item"
+            title={railTip("po")}
+            data-unread={poUnread > 0 || undefined}
+          >
             <Icon name="agent" />
             <span className="sidebar__item-label">{t("shell.po")}</span>
+            {poUnread > 0 && <UnreadCount count={poUnread} />}
           </Link>
         )}
         <ToolList items={listed} row={toolRow} />

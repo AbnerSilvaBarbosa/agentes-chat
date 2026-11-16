@@ -3368,6 +3368,10 @@ export const en = {
     poNone: "No PO to talk to about this company.",
     poTopic: "PO · {{company}}",
     poCompany: "Company",
+    /** The PO's plain DM, where its routines and hand-offs write (ADR 0185 addendum). */
+    poGeneral: "Alerts and routines",
+    poGeneralTopic: "PO · alerts and routines",
+    poBack: "Chat by company",
   },
   poCard: {
     create: "Create",
