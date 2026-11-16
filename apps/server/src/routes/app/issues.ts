@@ -212,7 +212,12 @@ const Issue = z
     boardRank: z.number().openapi({ description: "Order inside the column, lowest first." }),
     priority: Priority,
     project: ProjectRef.nullable(),
-    assignee: Actor.nullable(),
+    assignee: Actor.nullable().openapi({
+      description: "The principal: the card's agent when it has one, else its first person (ADR 0186).",
+    }),
+    alsoWith: z.array(Actor).openapi({
+      description: "The people also with the card, in order. Always people; at most 5. Empty when there are none.",
+    }),
     labels: z.array(z.string()),
     dueDate: z.string().nullable(),
     criteria: z.array(
@@ -383,10 +388,10 @@ export function issueRoutes(deps: AppDeps) {
             .uuid()
             .optional()
             .openapi({ description: "Only the tasks of that space's boards: a company's whole board." }),
-          assignee: z
-            .literal("me")
-            .optional()
-            .openapi({ description: "Only the tasks assigned to you as a person (ADR 0181)." }),
+          assignee: z.literal("me").optional().openapi({
+            description:
+              "Only the tasks you are on as a person, as their principal or also with them (ADR 0181, 0186).",
+          }),
           waiting: z
             .literal("person")
             .optional()
@@ -481,6 +486,10 @@ export function issueRoutes(deps: AppDeps) {
             description: z.string().max(50_000).optional(),
             criteria: z.array(z.string().max(500)).max(50).optional(),
             assignee: Actor.nullable().optional(),
+            assignees: z.array(Actor).max(6).optional().openapi({
+              description:
+                "Everyone responsible, in order: at most one agent (it is the principal), else the first person is. Left out: `assignee` alone.",
+            }),
             priority: Priority.optional(),
             dueDate: DueDate.optional(),
             labels: z.array(z.string().max(40)).max(20).optional(),
@@ -531,7 +540,22 @@ export function issueRoutes(deps: AppDeps) {
               .openapi({ description: "Move to a board column; the issue takes that column's stage." }),
             boardRank: z.number().optional().openapi({ description: "Its order inside the column (lowest first)." }),
             priority: Priority.optional(),
-            assignee: Actor.nullable().optional(),
+            assignee: Actor.nullable().optional().openapi({
+              description:
+                "The hand-off: an agent replaces the card's agent and the people stay; a person is added beside an agent, or replaces the principal when there is none; `null` takes everyone off.",
+            }),
+            assignees: z.array(Actor).max(6).optional().openapi({
+              description: "Everyone responsible, in order, replacing the agent and the people.",
+            }),
+            addAssignees: z.array(Actor).max(5).optional().openapi({ description: "People to put on the card." }),
+            removeAssignees: z
+              .array(Actor)
+              .max(6)
+              .optional()
+              .openapi({ description: "People (or the agent) to take off." }),
+            principal: Actor.optional().openapi({
+              description: "A person on the card who becomes its principal. Refused while an agent is on it.",
+            }),
             dueDate: DueDate.optional(),
             labels: z.array(z.string().max(40)).max(20).optional(),
             projectId: ProjectId.optional(),

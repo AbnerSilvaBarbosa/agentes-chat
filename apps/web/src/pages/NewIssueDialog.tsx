@@ -1,8 +1,9 @@
-import type { Issue, IssueColumn, IssuePriority } from "@agenteschat/client";
+import type { Actor, Issue, IssueColumn, IssuePriority } from "@agenteschat/client";
 import { useIssueAction, useIssueProjects, useStartAgentOnTask } from "@agenteschat/client";
 import { errorText } from "@agenteschat/client/lib/errors";
 import { MAX_UPLOAD_MB } from "@agenteschat/client/lib/files";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
+import { assignmentWith, peopleOn } from "@agenteschat/client/lib/issue-assignees";
 import { boardLabels, NO_PROJECT, pickableProjects } from "@agenteschat/client/lib/issue-projects";
 import { type AudienceChoice, EVERYONE } from "@agenteschat/client/lib/who-sees";
 import {
@@ -27,10 +28,10 @@ import {
 } from "@agenteschat/ui";
 import { type ClipboardEvent, type KeyboardEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ActorAvatar } from "@/components/AgentAvatar";
-import { actorFromKey, NO_ACTOR, useActors } from "@/components/actors";
+import { actorFromKey, useActors } from "@/components/actors";
 import { useFileDrop } from "@/components/drive/DriveUploads";
 import { PendingTile } from "@/components/IssueFiles";
+import { AssigneesField } from "@/components/issues/AssigneesField";
 import { useOrg } from "@/components/org-context";
 import { WhoSeesButton, WhoSeesDialog } from "@/components/WhoSees";
 import { useComposerFiles } from "@/hooks/useComposerFiles";
@@ -39,6 +40,11 @@ import { usePersonalView } from "@/hooks/usePersonalView";
 import { columnIdOf, columnsOf, PRIORITIES, splitCriteria, useColumnTitle } from "@/lib/issues";
 import { useToast } from "@/lib/toast";
 import { ProjectDialog } from "./IssueProjects";
+
+type Who = { assignee: Actor | null; alsoWith: Actor[] };
+const NOBODY: Who = { assignee: null, alsoWith: [] };
+/** The member the page starts the task with (an actor key: Minhas tarefas), else nobody. */
+const startingWho = (key: string | undefined): Who => ({ assignee: key ? actorFromKey(key) : null, alsoWith: [] });
 
 /** Description + criteria back into the quick box's text ("-" lines are criteria there). */
 const joinCriteria = (description: string, criteria: string[]) =>
@@ -74,7 +80,8 @@ export function NewIssueDialog({
   const columnTitle = useColumnTitle();
   const todoColumns = columnsOf(columns, "todo");
   const [column, setColumn] = useState<string | null>(null);
-  const [assignee, setAssignee] = useState(NO_ACTOR);
+  // Who is responsible, as the server will have it (ADR 0186): the principal and the people also with them.
+  const [who, setWho] = useState<Who>(NOBODY);
   const [openedWith, setOpenedWith] = useState<string | null | undefined>(undefined);
   const [project, setProject] = useState<string | null>(null);
   const [newProject, setNewProject] = useState(false);
@@ -82,7 +89,7 @@ export function NewIssueDialog({
     setOpenedWith(columnId);
     setColumn(columnId);
     setProject(projectId);
-    setAssignee(presetAssignee ?? NO_ACTOR);
+    setWho(startingWho(presetAssignee));
   }
   if (!open && openedWith !== undefined) setOpenedWith(undefined);
   const chosenColumn = todoColumns.find((c) => c.id === column) ?? todoColumns[0];
@@ -131,8 +138,10 @@ export function NewIssueDialog({
   // The org's Drive: the task has no channel yet.
   const files = useComposerFiles(null, () => textRef.current?.focus());
   const drop = useFileDrop(files.onFiles, open);
-  const chosen = actorFromKey(assignee);
-  const agent = chosen?.type === "agent" ? actors.dir.agentById.get(chosen.id) : undefined;
+  // An agent picked here is asked once the card exists (its people stay beside it); the people go with the card.
+  const chosen = who.assignee?.type === "agent" ? who.assignee : null;
+  const agent = chosen ? actors.dir.agentById.get(chosen.id) : undefined;
+  const people = peopleOn(who).filter((a) => a.type === "person");
   const quickCriteria = wide ? [] : splitCriteria(text).criteria;
   // The text box as tall as its text, also where the engine can't size it from CSS (`field-sizing`, which the Mac
   // app's WebKit lacks); measured again when the form swaps the quick box for the full one (another textarea).
@@ -159,7 +168,7 @@ export function NewIssueDialog({
     setDue(null);
     files.clear();
     if (!keepChoices) {
-      setAssignee(NO_ACTOR);
+      setWho(NOBODY);
       setPriority("normal");
       setAudience(EVERYONE);
       setWide(false);
@@ -198,7 +207,7 @@ export function NewIssueDialog({
           title: title.trim(),
           description: body.description,
           criteria: body.criteria,
-          assignee: chosen?.type === "person" ? chosen : null,
+          assignees: people,
           priority,
           dueDate: due,
           ...(chosenProject ? { projectId: chosenProject.id } : {}),
@@ -210,11 +219,11 @@ export function NewIssueDialog({
         onSuccess: (created) => {
           const issue = created as Issue;
           // New tasks land in the first column of A fazer; another one was chosen.
-          if (chosenColumn && chosenColumn.id !== columnIdOf(issue, columns) && chosen?.type !== "agent")
+          if (chosenColumn && chosenColumn.id !== columnIdOf(issue, columns) && !chosen)
             action.mutate({ type: "update", id: issue.id, patch: { columnId: chosenColumn.id } });
           toast.show(t("issues.form.created", { number: issue.number }));
           // An agent picked here starts right away ("Pedir"): assigned, its run linked, in progress.
-          if (chosen?.type === "agent") startAgent(issue, { id: chosen.id, name: agent?.name ?? "" });
+          if (chosen) startAgent(issue, { id: chosen.id, name: agent?.name ?? "" });
           if (another) {
             reset(true);
             // After the form unlocks: a disabled field takes no focus.
@@ -312,25 +321,13 @@ export function NewIssueDialog({
           {t("issues.projects.new")}
         </MenuItem>
       </Menu>
-      <Menu
-        label={t("issues.form.assignee")}
-        trigger={
-          <Button
-            size="sm"
-            icon={chosen ? undefined : "person"}
-            aria-label={chosen ? `${t("issues.form.assignee")}: ${actors.name(chosen)}` : t("issues.form.assignee")}
-          >
-            {chosen && <ActorAvatar actor={chosen} name={actors.name(chosen)} size="xs" />}
-            {chosen ? actors.name(chosen) : t("issues.form.assignee")}
-          </Button>
-        }
-      >
-        {actors.options(true).map((o) => (
-          <MenuItem key={o.value} leading={o.leading} onSelect={() => setAssignee(o.value)}>
-            {o.label}
-          </MenuItem>
-        ))}
-      </Menu>
+      <AssigneesField
+        value={who}
+        onChange={(change) => {
+          const next = assignmentWith(who, change);
+          if (next) setWho(next);
+        }}
+      />
       <Menu
         label={t("issues.form.priority")}
         trigger={

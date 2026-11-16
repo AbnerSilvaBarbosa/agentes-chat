@@ -138,7 +138,11 @@ describe("what agents can do with cards", () => {
     expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
     const toPerson = await run("update_issue", { issue: id, assignee: "bia" });
     expect(toPerson.isError).toBe(false);
-    expect(await assigneeOf()).toEqual({ type: "person", id: bia.id });
+    // A person named on a card that has an agent joins beside it; the agent stays the principal (ADR 0186).
+    expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
+    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).alsoWith).toEqual([
+      { type: "person", id: bia.id },
+    ]);
     await run("update_issue", { issue: id, assignee: "none" });
     expect(await assigneeOf()).toBeNull();
   });

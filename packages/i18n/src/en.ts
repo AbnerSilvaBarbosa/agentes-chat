@@ -3598,6 +3598,7 @@ export const en = {
       githubUrl: "the GitHub link",
       criteria: "the criteria",
       files: "the attachments",
+      alsoWith: "the people also on it",
     },
     routineFields: {
       name: "the name",
@@ -7556,6 +7557,7 @@ export const en = {
       assigned: "#{{number}} is now with {{name}}.",
       unassigned: "#{{number}} has no assignee now.",
       prioritized: "#{{number}} now has {{priority}} priority.",
+      alsoWith: "{{name}} joined the task",
     },
     canceledColumn: "Canceled",
     /** A task's one project: the toolbar's chip and its menu, the task's field, a project board's ⋯ menu. */
@@ -7938,6 +7940,24 @@ export const en = {
       criterion_checked: 'checked the criterion "{{text}}"',
       criterion_unchecked: 'unchecked the criterion "{{text}}"',
       agent_asked: "asked {{name}} to do it",
+      assignee_added: "added {{name}} to the task",
+      assignee_removed: "took {{name}} off the task",
+      principal_changed: "made {{name}} the principal",
+      agent_replaced: "handed the task from {{from}} to {{to}} and the people stay",
+    },
+    /** The picker of who is responsible on a task, and how a card reads its people (ADR 0186). */
+    assignees: {
+      label: "Assignee",
+      principal: "Principal",
+      alsoWith: "Also with",
+      makePrincipal: "Make principal",
+      add: "Add person",
+      max: "At most 5 people also with",
+      swapsAgent: "Replaces the agent and the people stay",
+      remove: "Take {{name}} off",
+      more: "+{{count}}",
+      described: "Assignee: {{principal}}",
+      describedWith: "Assignee: {{principal}}. Also with: {{people}}.",
     },
   },
   routines: {
@@ -13358,6 +13378,10 @@ export const en = {
       stageFull: "A stage holds at most {{max}} columns. Delete one of its columns first.",
       deleteForbidden: "Only who created this task or an administrator can delete it.",
       audienceEmpty: "Choose who sees it.",
+      assigneesMax: "A task has at most 5 people beside its principal. Take someone off the task first.",
+      twoAgents: "A task has at most one agent. Hand it to the agent you want instead.",
+      principalIsAgent: "The task's agent is its principal. Hand the task to a person to change that.",
+      principalNotOnCard: "That person is not on the task.",
     },
     connector: {
       labelTaken: "Another connector already has this name.",

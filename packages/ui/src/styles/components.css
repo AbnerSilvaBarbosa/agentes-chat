@@ -2609,6 +2609,18 @@ html:not([data-pointer]) .ac-menu__item:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/*
+ * A menu of people (`ac-menu--wrap`, the responsible picker's): a long name wraps in its row, the row growing by its
+ * lines as the geometry check counts them, instead of being cut at the menu's edge. A row with a description keeps its
+ * one line, its description ending the name.
+ */
+:is(.ac-menu, .ac-palette__list).ac-menu--wrap:has(.ac-menu__leading > .ac-avatar)
+  .ac-menu__item:not(:has(.ac-menu__desc))
+  > .ac-menu__label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+}
 .ac-menu__heading {
   padding: 6px var(--menu-item-px) 2px;
   font-size: 12px;

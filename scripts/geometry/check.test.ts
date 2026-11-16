@@ -112,6 +112,11 @@ describe("geometry check", () => {
     expect(fixture).toContain("good-midword--hyphens");
     // The face on a menu's top that changes the photo (`MenuFace`) is no row: neither its height nor its room.
     for (const twin of ["good-menuitem--face", "good-rim--face"]) expect(fixture).toContain(twin);
+    // The faces also with a task card are the kit's avatar stack, photo-less people included: no letter is cut.
+    expect(fixture).toContain("good-overlap--avatarstack");
+    // The face's room in a wrapped row is for `ac-menu--wrap` menus only: another menu keeps the plain tolerance.
+    for (const twin of ["good-menuitem--facewrap", "bad-menuitem--facenowrap"]) expect(fixture).toContain(twin);
+    expect(rules).toContain('menu.matches(".ac-menu--wrap")');
     for (const rule of SELF_TESTED) {
       expect(fixture).toContain(`bad-${rule}`);
       expect(fixture).toContain(`good-${rule}`);

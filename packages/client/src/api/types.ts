@@ -3003,9 +3003,10 @@ export interface AgentActionTarget {
  * Values for the sentence, by kind:
  * - `issue.created`: `number`, `title`
  * - `issue.updated`: `number`, `title`, `fields` (any of title, description, status, priority,
- *   assignee, labels, dueDate, criteria) and the new `status`, `priority`, `dueDate`, `labels`,
+ *   assignee, alsoWith, labels, dueDate, criteria) and the new `status`, `priority`, `dueDate`, `labels`,
  *   `assigneeType`/`assigneeId`/`assigneeName`/`assigneeIsSelf` for the fields that changed
  * - `issue.assigned`: `number`, `title`, `assigneeType`, `assigneeId`, `assigneeName`, `assigneeIsSelf`
+ * - `issue.updated` with `alsoWith` in `fields` also has `alsoWithNames` (the people also with the card, in order)
  * - `memory.saved`: `text` (and `previousText` when it replaced one); `memory.updated`: `text`, `previousText`;
  *   `memory.forgotten`: `text`
  * - `routine.created`: `name`, `rule` (an `ApiRule`, said in the person's language), `schedule` (the server's
@@ -3597,7 +3598,13 @@ export interface Issue {
   priority: IssuePriority;
   /** Its one project, or none (a server from before projects sends nothing). */
   project?: IssueProjectRef | null;
+  /** The principal: the card's agent when it has one, else its first person (ADR 0186). */
   assignee: Actor | null;
+  /**
+   * The people also with the card, in order (at most 5, always people). A server from before sends nothing: read it
+   * as none.
+   */
+  alsoWith?: Actor[];
   labels: string[];
   /** Day only, `YYYY-MM-DD`. */
   dueDate: string | null;
@@ -3675,6 +3682,8 @@ export interface IssueInput {
   description?: string;
   criteria?: string[];
   assignee?: Actor | null;
+  /** Everyone responsible, in order (at most one agent, which is the principal; else the first person is). */
+  assignees?: Actor[];
   priority?: IssuePriority;
   dueDate?: string | null;
   labels?: string[];
@@ -3694,6 +3703,14 @@ export type IssuePatch = Partial<
 > & {
   /** Move to a board column: the issue takes that column's stage. */
   columnId?: string;
+  /** Everyone responsible, in order: replaces the agent and the people (ADR 0186). */
+  assignees?: Actor[];
+  /** People to put on the card beside whoever is on it. */
+  addAssignees?: Actor[];
+  /** People (or the agent) to take off. */
+  removeAssignees?: Actor[];
+  /** A person on the card who becomes its principal; refused while an agent is on it. */
+  principal?: Actor;
   /** Null takes it out of its project. */
   projectId?: string | null;
   /**

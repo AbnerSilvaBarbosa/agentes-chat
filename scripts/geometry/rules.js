@@ -1598,18 +1598,27 @@
         // The workspace menu (MenuOverlay) fills the screen in 15px type: its rows are the touch ones everywhere.
         const roomy = touch || menu.matches(".ac-mo__group");
         const own = [...menu.querySelectorAll(OWN)].filter((x) => style(x).display !== "none");
-        // A name or a description that wraps (a long one, a narrow window) adds its lines: words wrap, never cut.
-        const grown = (box) => {
+        // A name or a description that wraps (a long one, a narrow window) adds its lines: words wrap, never cut. A
+        // row with a face in a menu that wraps (`.ac-menu--wrap`) is as tall as the face until the lines are taller than
+        // it, so it grows by what passes it; any other menu keeps the plain rule.
+        const grown = (box, face = 0) => {
           if (!box || !seen(box)) return 0;
           const lh = parseFloat(style(box).lineHeight);
-          return lh > 0 ? Math.max(0, Math.round(box.getBoundingClientRect().height / lh) - 1) * lh : 0;
+          if (!(lh > 0)) return 0;
+          const lines = Math.round(box.getBoundingClientRect().height / lh);
+          return Math.max(0, lines * lh - Math.max(lh, face));
         };
         for (const [i, el] of items.entries()) {
           const desc = [...el.querySelectorAll(".ac-menu__desc")].some(seen);
           const extra = desc
             ? grown(el.querySelector(".ac-menu__label > :first-child:not(.ac-menu__desc)")) +
               grown(el.querySelector(".ac-menu__desc"))
-            : grown(el.querySelector(".ac-menu__label, .ac-filter__label"));
+            : grown(
+                el.querySelector(".ac-menu__label, .ac-filter__label"),
+                menu.matches(".ac-menu--wrap")
+                  ? (el.querySelector(":scope > .ac-menu__leading")?.getBoundingClientRect().height ?? 0)
+                  : 0,
+              );
           const want = (faces ? (roomy ? 44 : 36) : desc ? (roomy ? 58 : 50) : roomy ? 40 : 32) + extra;
           const r = el.getBoundingClientRect();
           const base = { rule: "menuitem", node: el, el: sig(el), box: sig(menu) };

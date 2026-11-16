@@ -21,10 +21,12 @@ import {
 } from "@agenteschat/client";
 import { dueLabel, dueTone, relativeTime } from "@agenteschat/client/lib/format";
 import { githubLinkLabel } from "@agenteschat/client/lib/github-link";
+import { assignmentWith, matchesAssignees, peopleOn } from "@agenteschat/client/lib/issue-assignees";
 import { NO_PROJECT, projectOfFilter, spaceOfFilter } from "@agenteschat/client/lib/issue-projects";
 import { ISSUES_VIEW_DEFAULT, PRIORITY_ORDER, sortIssues } from "@agenteschat/client/lib/issues-view";
 import { can } from "@agenteschat/client/lib/permissions";
 import {
+  AvatarStack,
   Breadcrumb,
   type BreadcrumbItem,
   Button,
@@ -369,7 +371,7 @@ export function IssuesPage({ mine = false }: { mine?: boolean } = {}) {
   const filtered = all.filter(
     (i) =>
       // The assignee filter saved for the other pages would empty the page that is that filter.
-      (chrome.assignee === false || view.assignees.length === 0 || view.assignees.includes(actorKey(i.assignee))) &&
+      (chrome.assignee === false || matchesAssignees(i, view.assignees)) &&
       (view.priorities.length === 0 || view.priorities.includes(i.priority)),
   );
   const noIssues = !mine && issues.isSuccess && all.length === 0 && !search && !projectParam;
@@ -987,9 +989,21 @@ function IssuesBody({
     return to.type === "agent" ? { text, who: { name, appearance: lookOf(actors.dir.agentById.get(to.id)) } } : text;
   };
   const reassign = (issue: Issue, to: Actor | null) => {
-    const was = issue.assignee;
-    const back = () => patch({ ...issue, assignee: to }, { assignee: was }, { assignee: was });
-    patch(issue, { assignee: to }, { assignee: to }, () => toast.show(assignedText(issue, to), "info", undo(back)));
+    // Undo puts the whole list back as it was, in order (ADR 0186).
+    const was = peopleOn(issue);
+    const shownBefore = { assignee: issue.assignee, alsoWith: issue.alsoWith ?? [] };
+    const back = () => patch({ ...issue, ...shownBefore }, { assignees: was }, shownBefore);
+    // As the server will have it: a card an agent holds stays with the agent when a person is dropped on it, so the
+    // card does not move; the server's answer says who joined.
+    const after = assignmentWith(issue, { assignee: to });
+    patch(issue, { assignee: to }, after ?? {}, (answer) => {
+      const joined = to?.type === "person" && (answer.alsoWith ?? []).some((a) => a.type === to.type && a.id === to.id);
+      toast.show(
+        joined ? t("issues.drag.alsoWith", { name: actors.name(to) }) : assignedText(issue, to),
+        "info",
+        undo(back),
+      );
+    });
   };
   const prioritize = (issue: Issue, priority: IssuePriority) => {
     const was = issue.priority;
@@ -1180,14 +1194,39 @@ function CardWho({ issue: i, state, assignee }: { issue: Issue; state: TaskState
   const who = assignee ? i.assignee : null;
   if (!who && !state) return null;
   const work = state?.kind === "running" ? "running" : state?.kind === "stalled" ? "stalled" : undefined;
+  const also = assignee ? (i.alsoWith ?? []) : [];
   return (
     <span className="issue-card__who">
       {who && <ActorWho actor={who} name={actors.name(who)} size="sm" work={work} />}
+      {also.length > 0 && <AlsoWith people={also} />}
       {state && (
         <>
           {who && " "}
           <StateWords state={state} />
         </>
+      )}
+    </span>
+  );
+}
+
+/** The faces shown beside the principal; the rest are a count. */
+const ALSO_FACES = 3;
+
+/**
+ * The people also with the card (ADR 0186): up to three faces overlapped after the principal's name, then how many more.
+ * Read by the card's description (`useTaskCard`), so a screen reader hears each name once.
+ */
+function AlsoWith({ people }: { people: Actor[] }) {
+  const { t } = useTranslation();
+  const actors = useActors();
+  const shown = people.slice(0, ALSO_FACES);
+  return (
+    <span className="ac-who issue-card__also" aria-hidden="true">
+      <AvatarStack>{shown.map((a) => actors.avatar(a, "sm"))}</AvatarStack>
+      {people.length > shown.length && (
+        <span className="issue-card__more tabular">
+          {t("issues.assignees.more", { count: people.length - shown.length })}
+        </span>
       )}
     </span>
   );
@@ -1275,9 +1314,16 @@ function useTaskCard(i: Issue) {
   const whoId = useId();
   const state = cardState(i, useTaskLive(i));
   const name = t("issues.open", { number: i.number, title: i.title });
+  const also = i.alsoWith ?? [];
+  // Everyone on the card, read once: the faces on it are not read one by one.
   const who = i.assignee && (
     <span id={whoId} hidden>
-      {`${t("issues.form.assignee")}: ${actors.name(i.assignee)}`}
+      {also.length > 0
+        ? t("issues.assignees.describedWith", {
+            principal: actors.name(i.assignee),
+            people: also.map((a) => actors.name(a)).join(", "),
+          })
+        : t("issues.assignees.described", { principal: actors.name(i.assignee) })}
     </span>
   );
   return {

@@ -6,6 +6,7 @@ import { accountablePerson, runAuthorityById } from "./authority";
 import { autonomyNoteFor, proposalCardOf } from "./brakes";
 import { readableChannelIds } from "./channels";
 import { threadFollowChoices } from "./follows";
+import { coAssigneesOf } from "./issue-assignees";
 import { type TaskEnd, taskEndLine } from "./machine-task-text";
 import { isMediaAfterReply } from "./media";
 import { type PreviewMeta, previewMediaKind, previewMeta, readableBody } from "./message-preview";
@@ -629,6 +630,8 @@ async function issueFollowers(deps: NotificationDeps, issue: IssueRow) {
   const ids = new Set<string>([...acted.map((a) => a.userId), ...wrote.flatMap((w) => (w.userId ? [w.userId] : []))]);
   if (issue.createdByType === "person") ids.add(issue.createdById);
   if (issue.assigneeType === "person" && issue.assigneeId) ids.add(issue.assigneeId);
+  // The people also with the card follow it as its principal does (ADR 0186).
+  for (const id of (await coAssigneesOf(deps.db, [issue.id])).get(issue.id) ?? []) ids.add(id);
   return taskReadersAmong(deps.db, issue.id, [...ids]);
 }
 
@@ -644,28 +647,32 @@ const issueActor = (a: IssueNotifyActor): NotificationActor =>
   (a.type === "person" ? person(a.id) : agent(a.id)) as NotificationActor;
 
 /**
- * After an issue changed: a new person assignee hears it (and the previous
- * one's "assigned to you" resolves); a status change reaches the followers.
+ * After an issue changed: each person newly on the card hears it once and each person taken off has their "assigned to
+ * you" resolved (a swap between people still on it sends nothing); a status change reaches the followers, who include
+ * the people also with it (ADR 0186). `people` are the card's person ids before and after, the principal first; without
+ * it only the principal person is read from the rows.
  */
 export async function notifyIssueChanged(
   deps: NotificationDeps,
   actor: IssueNotifyActor,
   before: Pick<IssueRow, "status" | "assigneeType" | "assigneeId"> | null,
   issue: IssueRow,
+  people?: { before: string[]; after: string[] },
 ) {
   const at = issue.updatedAt.getTime();
-  const prevPerson = before?.assigneeType === "person" ? before.assigneeId : null;
-  const nowPerson = issue.assigneeType === "person" ? issue.assigneeId : null;
-  if (prevPerson && prevPerson !== nowPerson) {
-    await resolveNotifications(deps, issue.orgId, {
-      groupKeyPrefix: `issue_assigned:${issue.id}:`,
-      userIds: [prevPerson],
-    });
+  const principal = (r: Pick<IssueRow, "assigneeType" | "assigneeId">) =>
+    r.assigneeType === "person" && r.assigneeId ? [r.assigneeId] : [];
+  const was = people?.before ?? (before ? principal(before) : []);
+  const now = people?.after ?? principal(issue);
+  const left = was.filter((id) => !now.includes(id));
+  const joined = now.filter((id) => !was.includes(id));
+  if (left.length > 0) {
+    await resolveNotifications(deps, issue.orgId, { groupKeyPrefix: `issue_assigned:${issue.id}:`, userIds: left });
   }
-  if (nowPerson && nowPerson !== prevPerson) {
+  if (joined.length > 0) {
     await notify(deps, {
       orgId: issue.orgId,
-      userIds: await taskReadersAmong(deps.db, issue.id, [nowPerson]),
+      userIds: await taskReadersAmong(deps.db, issue.id, joined),
       kind: "issue_assigned",
       groupKey: `issue_assigned:${issue.id}:${at}`,
       actor: issueActor(actor),

@@ -31,6 +31,15 @@ import {
 } from "./events";
 import { cutText } from "./format";
 import {
+  type AssigneeChange,
+  applyAssignees,
+  assignmentOf,
+  checkAssignees,
+  coAssigneesOf,
+  onCardSql,
+  planAssignees,
+} from "./issue-assignees";
+import {
   allColumns,
   boardColumnsOf,
   columnForMove,
@@ -104,6 +113,8 @@ export interface IssueView {
   /** Its one project (ADR 0171), or none. */
   project: IssueProjectRef | null;
   assignee: WorkActor | null;
+  /** The people also with the card beside its principal, in order, always people (ADR 0186). */
+  alsoWith: WorkActor[];
   labels: string[];
   dueDate: string | null;
   /** `doneBy`: who checked it (an agent shows its face next to it). */
@@ -197,6 +208,10 @@ export interface IssueInput {
   projectId?: string | null;
   /** The board column it starts in (ADR 0176): the task takes that column's stage. */
   columnId?: string | null;
+  /** The whole list of people (and the one agent): the first person, or the agent, is the principal (ADR 0186). */
+  assignees?: WorkActor[];
+  /** People to put on the card beside whoever `assignee` or `assignees` names, up to five. */
+  addAssignees?: WorkActor[];
 }
 
 export type IssuePatch = Partial<{
@@ -208,6 +223,13 @@ export type IssuePatch = Partial<{
   boardRank: number;
   priority: IssuePriority;
   assignee: WorkActor | null;
+  /** The whole list, in order: replaces the agent and the people (ADR 0186). */
+  assignees: WorkActor[];
+  /** People to put on the card beside the principal, up to five also with. */
+  addAssignees: WorkActor[];
+  removeAssignees: WorkActor[];
+  /** A person also with the card who becomes its principal; refused while an agent is on it. */
+  principal: WorkActor;
   dueDate: string | null;
   labels: string[];
   /** Null takes it out of its project. */
@@ -230,7 +252,7 @@ type AgentActor = { type: "agent"; agentId: string; channelId: string; runId?: s
 
 type IssueRow = typeof issues.$inferSelect;
 /** The columns that say who sees a task. */
-type TaskScope = Pick<IssueRow, "channelId" | "restricted" | "audienceUserIds">;
+export type TaskScope = Pick<IssueRow, "channelId" | "restricted" | "audienceUserIds">;
 /** What an agent's reach also reads of a task. */
 type TaskRef = TaskScope & Partial<Pick<IssueRow, "assigneeType" | "assigneeId" | "conversationChannelId">>;
 
@@ -263,7 +285,7 @@ function cleanLabels(labels: string[] | undefined) {
 }
 
 /** `scope`: who sees the task, which a person assigned to it must be among. */
-async function checkAssignee(
+export async function checkAssignee(
   db: Database,
   orgId: string,
   a: WorkActor | null | undefined,
@@ -317,22 +339,19 @@ async function conversationOf(db: Database, orgId: string, channelId: string) {
 
 /**
  * The columns for a chosen audience. "Only me" is a list of one. Who chooses stays in it unless they're an
- * administrator, who sees it anyway, and a person assigned to the task stays too: taking it from them is a surprise.
+ * administrator, who sees it anyway, and every person on the task stays too: taking it from them is a surprise.
  */
 async function chosenScope(
   db: Database,
   actor: IssueActor,
   orgId: string,
   audience: Audience,
-  assigneeId: string | null,
+  keep: string[],
 ): Promise<TaskScope> {
   if (audience.mode === "everyone") return WORKSPACE_SCOPE;
   const membership = actor.type === "person" ? await getMembership(db, actor.userId, orgId) : null;
   const self = actor.type === "person" && !(membership && can(membership, "administrator")) ? [actor.userId] : [];
-  const wanted = [...new Set([...self, ...(assigneeId ? [assigneeId] : []), ...audience.userIds])].slice(
-    0,
-    AUDIENCE_MAX,
-  );
+  const wanted = [...new Set([...self, ...keep, ...audience.userIds])].slice(0, AUDIENCE_MAX);
   const members = wanted.length
     ? await db
         .select({ id: organizationMembers.userId })
@@ -581,7 +600,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     : [];
   const byId = new Map(files.map((f) => [f.id, f]));
   const orgId = rows[0]?.orgId;
-  const [columns, tied, projects, specPages] = await Promise.all([
+  const [columns, tied, projects, specPages, alsoWith] = await Promise.all([
     orgId ? allColumns(db, orgId) : [],
     tiedPeople(db, rows),
     projectsById(
@@ -589,6 +608,10 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
       rows.map((r) => r.projectId),
     ),
     specPagesOf(db, rows),
+    coAssigneesOf(
+      db,
+      rows.map((r) => r.id),
+    ),
   ]);
   return rows.map((r) => ({
     id: r.id,
@@ -601,6 +624,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     priority: r.priority,
     project: (r.projectId && projects.get(r.projectId)) || null,
     assignee: r.assigneeType && r.assigneeId ? { type: r.assigneeType as WorkActor["type"], id: r.assigneeId } : null,
+    alsoWith: (alsoWith.get(r.id) ?? []).map((id) => ({ type: "person" as const, id })),
     labels: r.labels,
     dueDate: r.dueDate,
     criteria: r.criteria,
@@ -784,6 +808,17 @@ function eventDetail(event: string | null, data: Record<string, unknown>) {
       return s(data.to) ? out(event, { priority: s(data.to) as string }) : {};
     case "assigned":
       return "assignee" in data ? out(data.assignee ? "assigned" : "unassigned") : {};
+    // The card's people (ADR 0186): names are kept in the row, so the history reads right after a rename.
+    case "assignee_added":
+    case "assignee_removed":
+    case "principal_changed":
+      return s(data.name) ? out(event, { name: s(data.name) as string }) : {};
+    case "agent_replaced": {
+      const named = (v: unknown) => s((v as { name?: unknown } | null)?.name);
+      return named(data.from) && named(data.to)
+        ? out(event, { from: named(data.from) as string, to: named(data.to) as string })
+        : {};
+    }
     case "due_date":
       if (!("dueDate" in data)) return {};
       return s(data.dueDate) ? out("due_date_set", { date: s(data.dueDate) as string }) : out("due_date_removed");
@@ -849,6 +884,21 @@ export async function publishToTaskReaders(
 const announce = (deps: IssueDeps, orgId: string, issue: IssueView, type: "issue.created" | "issue.updated") =>
   publishToTaskReaders(deps, orgId, issue, { type, issue });
 
+/**
+ * Tells whoever sees each card that it changed, for cards changed outside `updateIssue` (a person who left was dropped
+ * from them, ADR 0186). The views are read in batches of 100 cards, one query for each batch, then one event a card.
+ */
+export async function announceIssuesChanged(deps: IssueDeps, orgId: string, ids: string[]) {
+  if (!deps.pubsub) return;
+  for (let at = 0; at < ids.length; at += 100) {
+    const rows = await deps.db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.orgId, orgId), inArray(issues.id, ids.slice(at, at + 100))));
+    for (const view of await views(deps.db, rows)) await announce(deps, orgId, view, "issue.updated");
+  }
+}
+
 /** Creates an issue with the next number of the org. */
 export async function createIssue(
   deps: IssueDeps,
@@ -896,15 +946,20 @@ export async function createIssue(
   // step, its parent's.
   const madeIn = input.channelId ?? (actor.type === "agent" ? actor.channelId : null);
   const made = madeIn ? await conversationOf(db, orgId, madeIn) : null;
-  const assigned = input.assignee?.type === "person" ? input.assignee.id : null;
+  // Who is on the card, by the same rule a change later follows (ADR 0186).
+  const change: AssigneeChange = {
+    ...(input.assignees ? { assignees: input.assignees } : input.assignee ? { assignee: input.assignee } : {}),
+    ...(input.addAssignees ? { add: input.addAssignees } : {}),
+  };
+  const planned = planAssignees({ agentId: null, people: [] }, change);
   const scope: TaskScope = parent?.restricted
     ? parent
     : parent?.channelId
       ? { ...WORKSPACE_SCOPE, channelId: parent.channelId }
       : input.audience
-        ? await chosenScope(db, actor, orgId, input.audience, assigned)
+        ? await chosenScope(db, actor, orgId, input.audience, planned.people)
         : (made?.scope ?? { ...WORKSPACE_SCOPE, channelId: made?.tiedTo ?? input.channelId ?? null });
-  await checkAssignee(db, orgId, input.assignee, scope);
+  await checkAssignees(db, orgId, { agentId: null, people: [] }, change, scope);
   const project = input.projectId ? await projectForTask(db, orgId, input.projectId) : null;
   // Born in a column (ADR 0176): it takes that column's stage, and no `issue.moved` fires for a card starting there.
   const bornIn = input.columnId ? await columnForMove(db, orgId, input.columnId, input.projectId ?? null) : null;
@@ -928,8 +983,6 @@ export async function createIssue(
         boardRank: topRank(),
         ...(bornIn ? { status: bornIn.stage, columnId: bornIn.id } : {}),
         projectId: project?.id ?? null,
-        assigneeType: input.assignee?.type ?? null,
-        assigneeId: input.assignee?.id ?? null,
         labels: cleanLabels(input.labels) ?? [],
         dueDate: checkDate(input.dueDate) ?? null,
         githubUrl: checkGithubUrl(input.githubUrl),
@@ -945,6 +998,8 @@ export async function createIssue(
       })
       .returning();
     if (!issue) throw new Error("issue insert returned nothing");
+    // The one writer of who is on a card; the creation's history is its own `created` event.
+    await applyAssignees(tx, issue, change, author);
     await addActivity(tx, issue, {
       kind: "event",
       author,
@@ -964,9 +1019,12 @@ export async function createIssue(
     row,
     uploaded.map((f) => f.id),
   );
-  const view = await one(db, (await reload(db, row)) ?? row);
+  const fresh = (await reload(db, row)) ?? row;
+  const view = await one(db, fresh);
   await announce(deps, orgId, view, "issue.created");
-  if (row.assigneeType === "person") await notifyIssueChanged(deps, author, null, row).catch(() => {});
+  if (planned.people.length > 0) {
+    await notifyIssueChanged(deps, author, null, fresh, { before: [], after: planned.people }).catch(() => {});
+  }
   // Routines on `issue.created` (ADR 0053 §6.5): never for an issue a routine or an unattended run created
   // (a routine would trigger itself), only for routines whose creator can see the issue, and with its id,
   // not its title (the run reads it with its own tools).
@@ -1094,8 +1152,11 @@ export async function listIssues(
         filters.spaceId
           ? sql`${issues.projectId} in (select id from issue_projects where space_id = ${filters.spaceId} and org_id = ${orgId})`
           : undefined,
+        // A person is on a card as its principal or beside it (ADR 0186); an agent is only ever the principal.
         filters.assignee
-          ? and(eq(issues.assigneeType, filters.assignee.type), eq(issues.assigneeId, filters.assignee.id))
+          ? filters.assignee.type === "person"
+            ? onCardSql("issues", sql`${filters.assignee.id}::text`)
+            : and(eq(issues.assigneeType, "agent"), eq(issues.assigneeId, filters.assignee.id))
           : undefined,
         // The factory's own rule (`factoryHome`): a live task, on a board and a company that are not archived.
         filters.waitingForPerson
@@ -1180,7 +1241,22 @@ export async function updateIssue(
   const current = await findVisible(db, actor, orgId, { id: issueId });
   if (patch.status && !STATUSES.includes(patch.status)) throw new ValidationError("invalid status");
   if (patch.priority && !PRIORITIES.includes(patch.priority)) throw new ValidationError("invalid priority");
-  if (patch.assignee !== undefined) await checkAssignee(db, orgId, patch.assignee, current);
+  // Who is on the card changes by one rule, whichever door asks (ADR 0186): the plan runs in the transaction below.
+  const change: AssigneeChange = {
+    ...(patch.assignees !== undefined ? { assignees: patch.assignees } : {}),
+    ...(patch.assignee !== undefined ? { assignee: patch.assignee } : {}),
+    ...(patch.removeAssignees !== undefined ? { remove: patch.removeAssignees } : {}),
+    ...(patch.addAssignees !== undefined ? { add: patch.addAssignees } : {}),
+    ...(patch.principal !== undefined ? { principal: patch.principal } : {}),
+  };
+  const changesPeople = Object.keys(change).length > 0;
+  if (changesPeople) {
+    const co = (await coAssigneesOf(db, [current.id])).get(current.id) ?? [];
+    const now = assignmentOf(current, co);
+    // The rules refuse first, with their own codes; the transaction plans again on the locked row.
+    planAssignees(now, change);
+    await checkAssignees(db, orgId, now, change, current);
+  }
   const author = actorOf(actor);
   const set: Partial<typeof issues.$inferInsert> = { updatedAt: new Date() };
   const events: { text: string; event: string; data?: Record<string, unknown> }[] = [];
@@ -1217,15 +1293,6 @@ export async function updateIssue(
   if (patch.priority && patch.priority !== current.priority) {
     set.priority = patch.priority;
     events.push({ text: "changed the priority", event: "priority_changed", data: { to: patch.priority } });
-  }
-  if (patch.assignee !== undefined) {
-    set.assigneeType = patch.assignee?.type ?? null;
-    set.assigneeId = patch.assignee?.id ?? null;
-    events.push({
-      text: patch.assignee ? "assigned the issue" : "removed the assignee",
-      event: "assigned",
-      data: { assignee: patch.assignee },
-    });
   }
   if (patch.dueDate !== undefined) {
     set.dueDate = checkDate(patch.dueDate) ?? null;
@@ -1337,20 +1404,28 @@ export async function updateIssue(
         data: { artifactIds: removed, files },
       });
   }
-  const row = await db.transaction(async (tx) => {
+  const { row, people } = await db.transaction(async (tx) => {
+    // First, so the row is locked and planned before anything else of this change is written.
+    const people = changesPeople
+      ? await applyAssignees(tx, current, change, author, (locked) =>
+          // Again on the locked row: whoever is on the card now counts, so a person removed meanwhile is checked.
+          checkAssignees(tx as unknown as Database, orgId, locked, change, current),
+        )
+      : null;
     const [updated] = await tx.update(issues).set(set).where(eq(issues.id, current.id)).returning();
     if (!updated) throw new NotFoundError("Issue not found");
-    for (const e of events) await addActivity(tx, updated, { kind: "event", author, ...e });
+    for (const e of [...events, ...(people?.events ?? [])])
+      await addActivity(tx, updated, { kind: "event", author, ...e });
     await enqueueIndex(tx, { orgId, kind: "issue", sourceId: updated.id });
     if (set.description !== undefined && (set.description.includes("[[") || current.description.includes("[["))) {
       await syncWikiLinks(tx, orgId, { type: "issue", id: updated.id, channelId: updated.channelId }, set.description);
     }
-    return updated;
+    return { row: updated, people };
   });
   await linkRun(deps, actor, row);
   // A new agent assignee joins the task's conversation (ADR 0145): a mention there reaches it.
-  if (patch.assignee?.type === "agent" && row.conversationChannelId) {
-    await admitTaskAgents(db, orgId, row.conversationChannelId, { ids: [patch.assignee.id] });
+  if (people?.after.agentId && people.after.agentId !== people.before.agentId && row.conversationChannelId) {
+    await admitTaskAgents(db, orgId, row.conversationChannelId, { ids: [people.after.agentId] });
   }
   const view = await one(db, (await reload(db, row)) ?? row);
   await announce(deps, orgId, view, "issue.updated");
@@ -1359,8 +1434,14 @@ export async function updateIssue(
     await fireIssueMoved(deps, orgId, { view, from: current, actor }).catch(() => 0);
   }
   // The inbox: a new assignee, a status change for whoever follows it.
-  if (patch.assignee !== undefined || row.status !== current.status) {
-    await notifyIssueChanged(deps, author, current, row).catch(() => {});
+  if (changesPeople || row.status !== current.status) {
+    await notifyIssueChanged(
+      deps,
+      author,
+      current,
+      row,
+      people ? { before: people.before.people, after: people.after.people } : undefined,
+    ).catch(() => {});
   }
   return view;
 }
@@ -2233,15 +2314,21 @@ export async function setIssueAudience(
 ) {
   const { db } = deps;
   const current = await findVisible(db, actor, orgId, { id: issueId });
-  const assignee = current.assigneeType === "person" ? current.assigneeId : null;
-  const scope = await chosenScope(db, actor, orgId, audience, assignee);
+  // Every person on the card stays on it, as the assignee always did; so does each person on a step (ADR 0186).
+  const onCards = new Map<string, string[]>();
+  const stepRows = await stepsOf(db, current);
+  const coRows = await coAssigneesOf(db, [current.id, ...stepRows.map((s) => s.id)]);
+  for (const row of [current, ...stepRows]) {
+    onCards.set(row.id, assignmentOf(row, coRows.get(row.id) ?? []).people);
+  }
+  const scope = await chosenScope(db, actor, orgId, audience, onCards.get(current.id) ?? []);
   const tied = (await tiedPeople(db, [current])).has(current.channelId ?? "");
   const unchanged = current.restricted
     ? scope.restricted && sameList(scope.audienceUserIds, current.audienceUserIds)
     : !scope.restricted && !tied;
   if (unchanged) return one(db, current, readerOf(actor));
   const steps = scope.restricted
-    ? (await stepsOf(db, current)).filter(
+    ? stepRows.filter(
         (s) => !s.restricted || (current.restricted && sameList(s.audienceUserIds, current.audienceUserIds)),
       )
     : [];
@@ -2255,7 +2342,7 @@ export async function setIssueAudience(
       .returning();
     if (!updated) throw new NotFoundError("Issue not found");
     for (const s of steps) {
-      const assigned = s.assigneeType === "person" && s.assigneeId ? [s.assigneeId] : [];
+      const assigned = onCards.get(s.id) ?? [];
       await tx
         .update(issues)
         .set({ ...scope, audienceUserIds: [...new Set([...scope.audienceUserIds, ...assigned])].sort() })

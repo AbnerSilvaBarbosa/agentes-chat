@@ -3515,6 +3515,7 @@ export const ptBR = {
       githubUrl: "o link do GitHub",
       criteria: "os critérios",
       files: "os anexos",
+      alsoWith: "as pessoas também no card",
     },
     routineFields: {
       name: "o nome",
@@ -7555,6 +7556,7 @@ export const ptBR = {
       assigned: "#{{number}} agora está com {{name}}.",
       unassigned: "#{{number}} ficou sem responsável.",
       prioritized: "#{{number}} agora tem prioridade {{priority}}.",
+      alsoWith: "{{name}} entrou no card",
     },
     canceledColumn: "Canceladas",
     /** A task's one project: the toolbar's chip and its menu, the task's field, a project board's ⋯ menu. */
@@ -7943,6 +7945,24 @@ export const ptBR = {
       criterion_checked: 'marcou o critério "{{text}}"',
       criterion_unchecked: 'desmarcou o critério "{{text}}"',
       agent_asked: "pediu a {{name}} para fazer",
+      assignee_added: "pôs {{name}} também no card",
+      assignee_removed: "tirou {{name}} do card",
+      principal_changed: "tornou {{name}} o principal",
+      agent_replaced: "passou o card de {{from}} para {{to}} e as pessoas ficam",
+    },
+    /** O seletor de quem é responsável por uma tarefa, e como o card mostra suas pessoas (ADR 0186). */
+    assignees: {
+      label: "Responsável",
+      principal: "Principal",
+      alsoWith: "Também com",
+      makePrincipal: "Tornar principal",
+      add: "Adicionar pessoa",
+      max: "No máximo 5 pessoas também com",
+      swapsAgent: "Troca o agente e as pessoas ficam",
+      remove: "Tirar {{name}}",
+      more: "+{{count}}",
+      described: "Responsável: {{principal}}",
+      describedWith: "Responsável: {{principal}}. Também com: {{people}}.",
     },
   },
   routines: {
@@ -13390,6 +13410,10 @@ export const ptBR = {
       stageFull: "Uma etapa tem no máximo {{max}} colunas. Exclua uma das colunas dela antes.",
       deleteForbidden: "Só quem criou esta tarefa ou um administrador pode excluir.",
       audienceEmpty: "Escolha quem vê.",
+      assigneesMax: "Um card tem no máximo 5 pessoas além do principal. Tire alguém do card antes.",
+      twoAgents: "Um card tem no máximo um agente. Passe o card para o agente que você quer.",
+      principalIsAgent: "O agente é o principal deste card. Passe o card para uma pessoa para mudar isso.",
+      principalNotOnCard: "Essa pessoa não está no card.",
     },
     connector: {
       labelTaken: "Já existe um conector com esse nome.",

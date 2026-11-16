@@ -517,6 +517,15 @@ html:not([data-pointer]) .issue-card:focus-visible {
   font-weight: 600;
   color: var(--ink2);
 }
+/* The people also with the card: the kit's avatar stack (its ring and its initials rule), the count after it. */
+.issue-card__also {
+  --stack-ring: var(--raised);
+  margin-inline-start: var(--space-2);
+}
+.issue-card__more {
+  margin-inline-start: var(--space-1);
+  color: var(--ink-muted);
+}
 /* In the name's line of words, so they share one baseline; the space before it lets it move whole to the next line.
    That space is 0.2em in the app's font: with it, 8 after the name. A state longer than the card (a stopped run's
    reason) wraps inside itself on the line it then has to itself. */
@@ -1040,6 +1049,21 @@ html:not([data-pointer]) .issues-dest:focus-visible {
   display: inline-flex;
   min-width: 0;
   max-width: 100%;
+}
+/*
+ * The responsible picker's trigger (ADR 0186): up to three faces, the principal's name, how many are also with them.
+ * A long name wraps inside the control instead of widening it, and the faces stay on the first line.
+ */
+.issue-assignees {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--control-h-sm);
+  white-space: normal;
+  text-align: start;
+}
+.issue-assignees__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .issue-props .issue-github__chip,
 .issue-props .issue-link {
