@@ -205,6 +205,14 @@ export function effectiveColumnSql(alias: string): SQL {
 export const waitingSql = (alias: string): SQL =>
   sql`(${sql.raw(alias)}.status in ('todo', 'in_progress', 'in_review') and coalesce(col.waits_for_person, false))`;
 
+/**
+ * The key a column answers to when tasks are asked for by column (the PO chat's progress panel, "Ver todos"): its name
+ * trimmed and in lower case, so boards that spell a column differently still share it; a column with no name (the
+ * stage's own) is `stage:<stage>`. The one definition: the read that groups and the filter that lists both use it.
+ */
+export const columnKey = (c: { name: string | null; stage: IssueStatus }) =>
+  c.name?.trim().toLowerCase() || `stage:${c.stage}`;
+
 /** On top of a column: lower ranks come first, and later moves get lower ranks. */
 export const topRank = () => -Date.now();
 
