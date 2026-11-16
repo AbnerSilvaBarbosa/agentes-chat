@@ -6,6 +6,7 @@ setupDom();
 import type { Actor, Member } from "@agenteschat/client";
 import { assignmentWith } from "@agenteschat/client/lib/issue-assignees";
 import { ISSUES_VIEW_DEFAULT } from "@agenteschat/client/lib/issues-view";
+import { box, place } from "@agenteschat/ui/testing";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { type AssigneesChange, AssigneesField } from "@/components/issues/AssigneesField";
@@ -366,5 +367,66 @@ describe("the assignee filter", () => {
     await click(within(menu).getByRole("menuitemcheckbox", { name: /^Sem responsável/ }));
     await settle(3);
     expect(shownTitles()).toEqual(["De ninguém"]);
+  });
+});
+
+const at = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, pointerId: 1, pointerType: "mouse" });
+/** happy-dom lays nothing out: each column a box side by side, its cards stacked inside, 90px apart. */
+function layBoard() {
+  const cols = [...document.querySelectorAll<HTMLElement>("[data-col]")];
+  cols.forEach((col, k) => {
+    const left = 40 + k * 260;
+    place(col, box(left, 200, 250, 600));
+    for (const [j, slot] of [...col.querySelectorAll<HTMLElement>("[data-slot]")].entries())
+      place(slot, box(left + 8, 240 + j * 90, 234, 80));
+  });
+  return cols.map((c) => c.getAttribute("aria-label"));
+}
+async function dragTo(card: HTMLElement, x: number, y: number) {
+  await act(async () => {
+    fireEvent.pointerDown(card, at(60, 250));
+    fireEvent.pointerMove(document, at(70, 262));
+    fireEvent.pointerMove(document, at(x, y));
+  });
+  await settle(2);
+  await act(async () => fireEvent.pointerUp(document, at(x, y)));
+  await settle(6);
+}
+const column = (name: string) => screen().getByRole("region", { name });
+const toast = () => document.querySelector(".ac-toast")?.textContent ?? "";
+const cardIn = (col: HTMLElement) => [...col.querySelectorAll(".issue-card__title")].map((x) => x.textContent);
+
+describe("grouped by assignee", () => {
+  test("dropping a card on a person's column while an agent has it says the person joined", async () => {
+    const { api } = await allTasks(
+      [
+        { title: "Com o agente", assignees: [ada] },
+        { title: "Da Walter", assignees: [walter] },
+        { title: "Do João", assignees: [joao] },
+      ],
+      { group: "assignee" },
+    );
+    // One card, one column: everyone with a card as its principal, by name, then nobody.
+    expect(layBoard()).toEqual(["Ada", "João", "Walter", "Sem responsável"]);
+    await dragTo(document.querySelector('[data-card="1"]') as HTMLElement, 400, 760);
+    // The agent keeps the card, and the person is also with it: the card stays where it was.
+    const held = await api.issues.get(ORG_ID, 1);
+    expect(held.assignee).toEqual(ada);
+    expect(held.alsoWith).toEqual([joao]);
+    expect(cardIn(column("Ada"))).toEqual(["Com o agente"]);
+    expect(toast()).toContain("João entrou no card");
+    await click(screen().getByRole("button", { name: "Desfazer" }));
+    await settle(8);
+    const back = await api.issues.get(ORG_ID, 1);
+    expect(back.assignee).toEqual(ada);
+    expect(back.alsoWith).toEqual([]);
+    // With no agent on it, a drop replaces who has it as before, and the card moves.
+    layBoard();
+    await dragTo(document.querySelector('[data-card="2"]') as HTMLElement, 400, 760);
+    const moved = await api.issues.get(ORG_ID, 2);
+    expect(moved.assignee).toEqual(joao);
+    expect(moved.alsoWith).toEqual([]);
+    expect(cardIn(column("João"))).toContain("Da Walter");
+    expect(toast()).toContain("#2 agora está com João.");
   });
 });

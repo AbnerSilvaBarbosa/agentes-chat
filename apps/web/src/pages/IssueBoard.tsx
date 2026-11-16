@@ -46,7 +46,7 @@ export function usePatchIssue() {
   const { org } = useOrg();
   const qc = useQueryClient();
   const action = useIssueAction(org.id);
-  return (issue: Issue, patch: IssuePatch, shown: Partial<Issue>, onDone?: () => void) => {
+  return (issue: Issue, patch: IssuePatch, shown: Partial<Issue>, onDone?: (answer: Issue) => void) => {
     const filters = { queryKey: keys.issues(org.id), predicate: isList };
     void qc.cancelQueries(filters);
     const before = qc.getQueriesData<Issue[]>(filters);
@@ -57,7 +57,7 @@ export function usePatchIssue() {
         onError: () => {
           for (const [key, data] of before) qc.setQueryData(key, data);
         },
-        onSuccess: onDone,
+        onSuccess: (answer) => onDone?.(answer as Issue),
       },
     );
   };

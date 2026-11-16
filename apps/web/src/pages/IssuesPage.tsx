@@ -21,7 +21,7 @@ import {
 } from "@agenteschat/client";
 import { dueLabel, dueTone, relativeTime } from "@agenteschat/client/lib/format";
 import { githubLinkLabel } from "@agenteschat/client/lib/github-link";
-import { matchesAssignees } from "@agenteschat/client/lib/issue-assignees";
+import { assignmentWith, matchesAssignees, peopleOn } from "@agenteschat/client/lib/issue-assignees";
 import { NO_PROJECT, projectOfFilter, spaceOfFilter } from "@agenteschat/client/lib/issue-projects";
 import { ISSUES_VIEW_DEFAULT, PRIORITY_ORDER, sortIssues } from "@agenteschat/client/lib/issues-view";
 import { can } from "@agenteschat/client/lib/permissions";
@@ -988,9 +988,21 @@ function IssuesBody({
     return to.type === "agent" ? { text, who: { name, appearance: lookOf(actors.dir.agentById.get(to.id)) } } : text;
   };
   const reassign = (issue: Issue, to: Actor | null) => {
-    const was = issue.assignee;
-    const back = () => patch({ ...issue, assignee: to }, { assignee: was }, { assignee: was });
-    patch(issue, { assignee: to }, { assignee: to }, () => toast.show(assignedText(issue, to), "info", undo(back)));
+    // Undo puts the whole list back as it was, in order (ADR 0186).
+    const was = peopleOn(issue);
+    const shownBefore = { assignee: issue.assignee, alsoWith: issue.alsoWith ?? [] };
+    const back = () => patch({ ...issue, ...shownBefore }, { assignees: was }, shownBefore);
+    // As the server will have it: a card an agent holds stays with the agent when a person is dropped on it, so the
+    // card does not move; the server's answer says who joined.
+    const after = assignmentWith(issue, { assignee: to });
+    patch(issue, { assignee: to }, after ?? {}, (answer) => {
+      const joined = to?.type === "person" && (answer.alsoWith ?? []).some((a) => a.type === to.type && a.id === to.id);
+      toast.show(
+        joined ? t("issues.drag.alsoWith", { name: actors.name(to) }) : assignedText(issue, to),
+        "info",
+        undo(back),
+      );
+    });
   };
   const prioritize = (issue: Issue, priority: IssuePriority) => {
     const was = issue.priority;
