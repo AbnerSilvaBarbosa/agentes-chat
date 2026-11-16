@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { orgTopic, type RealtimeEvent } from "@agenteschat/adapters";
 import { and, asc, eq, schema, sql } from "@agenteschat/db";
 import {
+  askAgentToImplement,
   createAgent,
   createIssue,
   getIssue,
@@ -647,5 +648,25 @@ describe("who sees a card that has several people", () => {
       userIds: [dani.id],
     });
     expect([...only.audience.userIds].sort()).toEqual([bia.id, caio.id, dani.id].sort());
+  });
+});
+
+describe("asking an agent to implement a card", () => {
+  test("asking an agent to implement a card keeps the person beside it", async () => {
+    f = await setup();
+    const deps = { db: f.db, pubsub: f.pubsub };
+    const bia = await addMember(f.db, f.org.id, "member", "Bia");
+    const card = await createIssue(deps, person(f.owner.id), f.org.id, {
+      title: "pede ao agente",
+      assignees: [actor("person", f.owner.id), actor("person", bia.id)],
+    });
+    const asked = await askAgentToImplement(deps, f.owner.id, f.org.id, card.id, f.agent.id);
+    expect(asked.assignee).toEqual(actor("agent", f.agent.id));
+    // The person who was the principal stays on the card, ahead of the one already also with.
+    expect(asked.alsoWith).toEqual([actor("person", f.owner.id), actor("person", bia.id)]);
+    // The start message and the run are what they were: one line in the task's conversation and one run.
+    const start = (await f.db.select().from(schema.messages)).filter((m) => m.meta?.issueWorkStart === true);
+    expect(start).toHaveLength(1);
+    expect(await f.db.select().from(schema.agentRuns)).toHaveLength(1);
   });
 });
