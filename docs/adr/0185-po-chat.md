@@ -164,3 +164,7 @@ through Início and its button, while the PO agent's own row opened a plain DM w
 - `listDms` still leaves out the company chats (section 1): the agent's row is the one entry, not one row per company.
 
 The phone and desktop shells are left for a later decision.
+
+## Addendum: releasing a finished spec to development
+
+The release to development stays a person's decision, now made from the chat. Each card in the panel's Especificado group (Priorizado on older boards) carries `releaseTo`, its board's "Ready for dev" column, when that column exists and the reader may post (as the board's own actions); the panel's "Liberar para dev" button moves the card there through the board's own issue update, as that person, and shows the reason under the row when it is refused. The PO may do the same with `update_issue` only when the person's current message asks for that card, one at a time: the chat rule says so, and the code refuses that column in a routine's run and in a spec run (`releaseRefusal` in `issue-tools.ts`), while a finished spec still never targets "Ready for dev" (`specColumns`). Nothing else moves a card there on its own.
