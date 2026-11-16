@@ -391,6 +391,10 @@ export function issueRoutes(deps: AppDeps) {
             .literal("person")
             .optional()
             .openapi({ description: "Only the tasks in a column that waits for a person (ADR 0184)." }),
+          columns: z.string().max(2000).optional().openapi({
+            description:
+              "Only the tasks sitting in these columns, as keys joined by `|`: a column's name in lower case, or `stage:<stage>` for one with no name (ADR 0185 addendum).",
+          }),
         }),
       },
       responses: { 200: json(z.object({ issues: z.array(Issue) })), ...errors },
@@ -406,6 +410,7 @@ export function issueRoutes(deps: AppDeps) {
         spaceId: query.spaceId,
         assignee: query.assignee === "me" ? { type: "person", id: c.get("user").id } : undefined,
         waitingForPerson: query.waiting === "person" ? true : undefined,
+        columnKeys: query.columns ? query.columns.split("|").filter(Boolean) : undefined,
         // The member's own page leaves canceled tasks out, before the cap (ADR 0181).
         notStatus: query.assignee === "me" ? "canceled" : undefined,
       });

@@ -1,4 +1,4 @@
-import { confirmCardProposal, dismissCardProposal, listPoCompanies, openPoChat } from "@agenteschat/engine";
+import { confirmCardProposal, dismissCardProposal, listPoCompanies, openPoChat, poProgress } from "@agenteschat/engine";
 import { createRoute, z } from "@hono/zod-openapi";
 import { type AppDeps, body, createAppRouter, errors, json, OrgParams, requireSession, security } from "./context";
 
@@ -64,6 +64,46 @@ const CardProposal = z
 
 const ProposalParams = OrgParams.extend({ proposalId: z.uuid() });
 
+const ProgressCard = z.object({
+  id: z.uuid(),
+  number: z.number().int(),
+  title: z.string(),
+  boardId: z.uuid(),
+  boardName: z.string(),
+  since: z.string().openapi({ description: "ISO time the card entered its column." }),
+  spec: z
+    .object({
+      state: z.enum(["queued", "running", "done", "failed", "stopped"]),
+      page: z.object({ slug: z.string(), title: z.string() }).nullable(),
+      error: z.string().nullable(),
+    })
+    .nullable(),
+});
+
+const PoProgress = z
+  .object({
+    space: z.object({ id: z.uuid(), name: z.string() }),
+    groups: z
+      .array(
+        z.object({
+          key: z.string(),
+          kind: z.enum(["column", "tail"]),
+          stage: z.enum(["todo", "in_progress", "in_review", "done", "canceled"]),
+          name: z.string().nullable().openapi({ description: "Null: the stage's own name, or the tail's label." }),
+          columns: z
+            .array(z.string())
+            .openapi({ description: "The keys the task list is asked for to see the group." }),
+          count: z.number().int(),
+          items: z.array(ProgressCard).openapi({ description: "At most 8, longest in the column first." }),
+        }),
+      )
+      .openapi({ description: "The company's boards' columns in board order, then the tail." }),
+    done: z.number().int().openapi({ description: "Done cards the reader sees: one number, never rows." }),
+  })
+  .openapi("PoProgress");
+
+const CompanyParams = OrgParams.extend({ spaceId: z.uuid() });
+
 /** The PO chat per company (ADR 0185): the PO and its companies, and opening the person's chat for one. */
 export function poRoutes(deps: AppDeps) {
   const { db, adapters } = deps;
@@ -83,6 +123,24 @@ export function poRoutes(deps: AppDeps) {
     async (c) => {
       const { orgId } = c.req.valid("param");
       return c.json(await listPoCompanies(db, c.get("user").id, orgId), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/organizations/{orgId}/po/companies/{spaceId}/progress",
+      tags,
+      security,
+      summary: "A company's open cards by stage, for the progress panel of its PO chat",
+      description:
+        "Grouped by the columns of the company's boards, only the cards the reader sees (ADR 0151); canceled cards and the cards of archived boards are in no number.",
+      request: { params: CompanyParams },
+      responses: { 200: json(PoProgress), ...errors },
+    }),
+    async (c) => {
+      const { orgId, spaceId } = c.req.valid("param");
+      return c.json(await poProgress(db, c.get("user").id, orgId, spaceId), 200);
     },
   );
 
