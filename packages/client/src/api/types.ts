@@ -4277,6 +4277,48 @@ export interface PoOverview {
   companies: PoCompany[];
 }
 
+/** A card's spec as the progress panel shows it (ADR 0185 addendum). */
+export interface PoProgressSpec {
+  state: "queued" | "running" | "done" | "failed" | "stopped";
+  /** The spec's wiki page, when it exists and the reader may open it. */
+  page: { slug: string; title: string } | null;
+  /** A fixed code (`stopped`, `no_spec_page`…) or the run's short reason; null while nothing failed. */
+  error: string | null;
+}
+
+export interface PoProgressCard {
+  id: string;
+  number: number;
+  title: string;
+  boardId: string;
+  boardName: string;
+  /** ISO time the card entered its column. */
+  since: string;
+  spec: PoProgressSpec | null;
+}
+
+/** One stage of the panel: a column (the boards' same-named ones merged), or the tail after Ready for dev. */
+export interface PoProgressGroup {
+  key: string;
+  kind: "column" | "tail";
+  stage: IssueStatus;
+  /** Null: the stage's own name, or the tail's label. */
+  name: string | null;
+  /** The keys the task list is asked for to see the whole group (`columnsParam`). */
+  columns: string[];
+  count: number;
+  /** At most 8, longest in the column first. */
+  items: PoProgressCard[];
+}
+
+/** A company's open cards by stage for its PO chat's panel (ADR 0185 addendum). */
+export interface PoProgress {
+  space: { id: string; name: string };
+  groups: PoProgressGroup[];
+  /** Done cards the reader sees: one number, never rows. */
+  done: number;
+}
+
 /** The person's PO chat for one company. */
 export interface PoChat {
   channelId: string;

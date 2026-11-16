@@ -198,6 +198,7 @@ import type {
   PoChat,
   Poll,
   PoOverview,
+  PoProgress,
   Proposal,
   ReactionCount,
   Reminder,
@@ -1482,6 +1483,7 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
               spaceId: filters.spaceId,
               assignee: filters.assignee,
               waiting: filters.waiting,
+              columns: filters.columns?.length ? filters.columns.join("|") : undefined,
             },
           })
         ).issues,
@@ -1823,6 +1825,7 @@ export function createHttpApi(options: TransportOptions = {}): HttpApi {
     po: {
       overview: (orgId) => request<PoOverview>(`${org(orgId)}/po`),
       openChat: (orgId, spaceId) => request<PoChat>(`${org(orgId)}/po/chats`, { json: { spaceId } }),
+      progress: (orgId, spaceId) => request<PoProgress>(`${org(orgId)}/po/companies/${enc(spaceId)}/progress`),
       confirmProposal: (orgId, id, edits) =>
         request<CardProposalView>(`${org(orgId)}/card-proposals/${enc(id)}/confirm`, { json: edits ?? {} }),
       dismissProposal: (orgId, id) =>

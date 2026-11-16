@@ -170,7 +170,7 @@ export const keys = {
   agentAccess: (orgId: string, agentId: string) => ["org", orgId, "access", "agent", agentId] as const,
   issues: (orgId: string) => ["org", orgId, "issues"] as const,
   /** `project`: a project's id, `none`, or "" for every task. */
-  issueList: (orgId: string, q: string, project = "", space = "", assignee = "", waiting = "") =>
+  issueList: (orgId: string, q: string, project = "", space = "", assignee = "", waiting = "", columns = "") =>
     [
       "org",
       orgId,
@@ -180,8 +180,9 @@ export const keys = {
       project,
       space,
       // Only when set, so the keys of the lists that never ask for them stay what they were.
-      ...(assignee || waiting ? [assignee] : []),
-      ...(waiting ? [waiting] : []),
+      ...(assignee || waiting || columns ? [assignee] : []),
+      ...(waiting || columns ? [waiting] : []),
+      ...(columns ? [columns] : []),
     ] as const,
   issue: (orgId: string, number: number) => ["org", orgId, "issues", "one", number] as const,
   issueActivity: (orgId: string, id: string) => ["org", orgId, "issues", "activity", id] as const,
@@ -192,6 +193,12 @@ export const keys = {
   issueColumnTemplates: (orgId: string) => ["org", orgId, "issues", "column-templates"] as const,
   /** The factory on Início (ADR 0184); under the issues prefix, so a task change refreshes it. */
   factoryHome: (orgId: string) => ["org", orgId, "issues", "factory"] as const,
+  /**
+   * A company's progress panel in its PO chat (ADR 0185 addendum); under the issues prefix, so a task change reads it
+   * again. Without `spaceId`: every company's (what a proposal event invalidates).
+   */
+  poProgress: (orgId: string, spaceId = "") =>
+    ["org", orgId, "issues", "po-progress", ...(spaceId ? [spaceId] : [])] as const,
   /** A company's Painel; under the issues prefix, so a task change refreshes it. */
   companyDashboard: (orgId: string, spaceId: string, days: number) =>
     ["org", orgId, "issues", "dashboard", spaceId, days] as const,

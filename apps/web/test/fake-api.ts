@@ -77,6 +77,7 @@ import type {
   PersonUsage,
   PlanAccountUsage,
   PoCompany,
+  PoProgress,
   Proposal,
   ReactionCount,
   RightHandApprovals,
@@ -342,6 +343,11 @@ export interface FakeState {
   poAgentId?: string | null;
   /** The companies a PO chat opens for (`po.overview`), the overview lists the live ones, and none without a PO. */
   poCompanies?: PoCompany[];
+  /**
+   * What `po.progress` answers per company (ADR 0185 addendum): the test sets it and changes it to stand for the
+   * server moving a card; a company with none is not found.
+   */
+  poProgress?: Record<string, PoProgress>;
   /** The PO's card proposals by id: what `po.confirmProposal` and `po.dismissProposal` decide. */
   cardProposals?: Record<string, CardProposalView>;
   /** What `gifs.search` finds (trending and any search alike, by title); unset: `FAKE_GIFS`. */
@@ -3549,6 +3555,12 @@ export function createFakeHttpApi(state: FakeState): Omit<HttpApi, FakedParts> {
         ];
         const { id: sid, name, color, image, archived } = space;
         return { channelId, agentId, space: { id: sid, name, color, image, archived } };
+      },
+      progress: async (orgId, spaceId) => {
+        log("po.progress", orgId, spaceId);
+        const progress = state.poProgress?.[spaceId];
+        if (!progress) throw new ApiError(404, "not_found", "Company not found");
+        return structuredClone(progress);
       },
       confirmProposal: async (orgId, id, edits) => {
         log("po.confirmProposal", orgId, id, edits);

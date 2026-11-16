@@ -248,6 +248,17 @@ function waitingOf(s: { columns: IssueColumn[] }, i: Issue): IssueColumn | null 
   return column?.waitsForPerson ? column : null;
 }
 
+/**
+ * The column a task sits in, as the engine reads it (`effectiveColumnSql`), whatever its stage: the key the list's
+ * `columns` filter matches is its name in lower case, or `stage:<stage>` for a column with no name.
+ */
+function columnKeyOf(s: { columns: IssueColumn[] }, i: Issue): string {
+  const own = s.columns.filter((c) => c.projectId !== null && c.projectId === i.project?.id);
+  const set = boardOrder(own.length > 0 ? own : s.columns.filter((c) => c.projectId === null));
+  const column = set.find((c) => c.id === i.columnId && c.stage === i.status) ?? set.find((c) => c.stage === i.status);
+  return column?.name?.trim().toLowerCase() || `stage:${i.status}`;
+}
+
 /** The board and the company of a live task: not canceled, on a board and in a company that are not archived. */
 function livePlace(s: Pick<Store, "projects" | "spaces">, i: Issue) {
   if (i.status === "canceled") return null;
@@ -599,6 +610,8 @@ export function createMockPlanning(
         // The server's filter (`waitingForPerson`): the factory's own rule, here as it is below.
         const waits = (i: Issue) =>
           filters.waiting !== "person" || (livePlace(s, i) !== null && waitingOf(s, i) !== null);
+        const keys = filters.columns?.length ? new Set(filters.columns.map((k) => k.trim().toLowerCase())) : null;
+        const inColumns = (i: Issue) => !keys || keys.has(columnKeyOf(s, i));
         return clone(
           s.issues
             .filter(
@@ -606,6 +619,7 @@ export function createMockPlanning(
                 inProject(i) &&
                 assignedToMe(i) &&
                 waits(i) &&
+                inColumns(i) &&
                 (!q || `${i.title} #${i.number}`.toLowerCase().includes(q)),
             )
             .sort((a, b) => b.number - a.number)

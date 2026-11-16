@@ -255,6 +255,7 @@ import type {
   PoChat,
   Poll,
   PoOverview,
+  PoProgress,
   PostMedia,
   Proposal,
   PushDeviceInput,
@@ -1305,7 +1306,15 @@ export interface ApiClient {
      */
     list(
       orgId: string,
-      filters?: { q?: string; projectId?: string; spaceId?: string; assignee?: "me"; waiting?: "person" },
+      filters?: {
+        q?: string;
+        projectId?: string;
+        spaceId?: string;
+        assignee?: "me";
+        waiting?: "person";
+        /** Only the tasks sitting in columns with these keys (`columnsParam`, ADR 0185 addendum). */
+        columns?: string[];
+      },
     ): Promise<Issue[]>;
     get(orgId: string, number: number): Promise<Issue>;
     create(orgId: string, input: IssueInput): Promise<Issue>;
@@ -1702,6 +1711,8 @@ export interface ApiClient {
     overview(orgId: string): Promise<PoOverview>;
     /** Opens (the first time, makes) my PO chat for a company. 422 `po.none` without a PO. */
     openChat(orgId: string, spaceId: string): Promise<PoChat>;
+    /** A company's open cards by stage, for the progress panel of its PO chat; 404 for a company of another workspace. */
+    progress(orgId: string, spaceId: string): Promise<PoProgress>;
     /** Creates the proposed card as me; the fields may be edited first. 400 `card_proposal.decided` once decided. */
     confirmProposal(orgId: string, id: string, edits?: CardProposalEdits): Promise<CardProposalView>;
     dismissProposal(orgId: string, id: string): Promise<CardProposalView>;

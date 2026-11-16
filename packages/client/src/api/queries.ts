@@ -4105,10 +4105,11 @@ export const useIssues = (
   space = "",
   assignee: "me" | "" = "",
   waiting: "person" | "" = "",
+  columns: string[] = [],
 ) => {
   const api = useApi();
   return useQuery({
-    queryKey: keys.issueList(orgId, q, project, space, assignee, waiting),
+    queryKey: keys.issueList(orgId, q, project, space, assignee, waiting, columns.join("|")),
     queryFn: () =>
       api.issues.list(orgId, {
         ...(q ? { q } : {}),
@@ -4116,6 +4117,7 @@ export const useIssues = (
         ...(space ? { spaceId: space } : {}),
         ...(assignee ? { assignee } : {}),
         ...(waiting ? { waiting } : {}),
+        ...(columns.length ? { columns } : {}),
       }),
     placeholderData: (prev) => prev,
     // While an agent works on an issue its steps change without an event: look again every 10 s.
@@ -4761,6 +4763,21 @@ export function usePoOverview(orgId: string) {
   const api = useApi();
   return useQuery({ queryKey: keys.po(orgId), queryFn: () => api.po.overview(orgId) });
 }
+
+/**
+ * A company's progress panel in its PO chat (ADR 0185 addendum): its open cards by stage. Read when the panel opens and
+ * again on events (a task changed: the issues keys; a proposal's spec moved on: `applyPoProposalEvent`), never on a timer.
+ */
+export function usePoProgress(orgId: string, spaceId: string) {
+  const api = useApi();
+  return useQuery(poProgressQuery(api, orgId, spaceId));
+}
+
+/** The panel's query: a key and a read, no interval of its own (events say when it is old). */
+export const poProgressQuery = (api: ApiClient, orgId: string, spaceId: string) => ({
+  queryKey: keys.poProgress(orgId, spaceId),
+  queryFn: () => api.po.progress(orgId, spaceId),
+});
 
 /** Opens (the first time, makes) the person's PO chat for a company; the overview learns its channel. */
 export function useOpenPoChat(orgId: string) {
