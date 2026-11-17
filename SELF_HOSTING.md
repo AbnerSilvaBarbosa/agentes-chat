@@ -756,7 +756,7 @@ ones a self-hosted instance usually touches:
 | `POSTGRES_PASSWORD` | required | Database password. Read by the compose file only. |
 | `AGENTES_IMAGE` | `ghcr.io/agentes-chat/agentes:latest` | The image to run. A version tag or a digest holds a version. |
 | `BIND_ADDRESS`, `HOST_PORT` | `127.0.0.1`, `3000` | Where the compose file publishes the app. |
-| `AGENTES_MEMORY` | `8g` | The most memory the app's container may take, swap included. Over it, the kernel stops the app alone and Docker restarts it, instead of the machine swapping until something else is killed. The speech server's is `SPEECH_MEMORY` (Voice messages). |
+| `AGENTES_MEMORY` | `8g` | The most memory the app's container may take, swap included. Over it, the kernel stops the app alone and Docker restarts it, instead of the machine swapping until something else is killed. On a machine with less than 10 GiB of memory, the setup writes three quarters of it here instead: a limit above the machine's memory never fires. The speech server's is `SPEECH_MEMORY` (Voice messages). |
 | `COMPOSE_PROFILES` | | How people reach it: `tailscale` (the setup's default), `https` (Caddy for `DOMAIN`), or neither (this machine only). Comma-separated, with other optional services: `backup` (Backups and restore), `speech` (Voice messages), `embeddings` (Search across languages). |
 | `DOMAIN` | | The public domain Caddy gets a certificate for. |
 | `TS_AUTHKEY` | | The auth key or OAuth client secret the server joins your tailnet with, read only until it has joined. The setup empties it then. |
@@ -1292,7 +1292,13 @@ computer), plus swap for a third of that, which keeps the rest for the system, t
 the server. At that limit the kernel stops one process, usually the biggest (Chrome's pages first), and
 only that process: the command it belonged to fails, and the agent is told it was most likely memory
 (with systemd 253 or newer; a desktop or a task already running when you update gets this when it next
-starts).
+starts). What agents leave in `/tmp` holds RAM until they delete it or the computer restarts. To keep
+it on disk instead, add `"agentTmpOnDisk": true` to `/var/lib/agentes-runner/config.json` as root (on
+this server's own computer too, for all its organizations): each agent takes it at its first launch
+after the next boot (until then it keeps the `/tmp` it has). The agents' `/tmp` is then a filesystem of
+their own, made anew at every boot in `/var/cache/agentes-runner-tmp` with half of what the system disk
+has free, so they can't fill that disk or take its inodes. It needs loop devices and `mkfs.ext4`
+(e2fsprogs), which an unprivileged container doesn't have.
 `agentes-runner computer`, which any agent (or you) can run, prints what the computer has, what is free
 for new work and which agents use the most; agents are told to run it before something heavy, to tell
 the person when another agent's work leaves no room, and to stop what a finished build left running.
@@ -1695,6 +1701,22 @@ S3_SECRET_ACCESS_KEY=...
 S3_BACKUP_BUCKET=agentes-backups
 ```
 
+**Encrypted dumps (optional).** A dump leaves the server as `pg_dump` wrote it unless
+`BACKUP_AGE_RECIPIENT` holds an [age](https://age-encryption.org) public key (`age1…`): then each dump
+is encrypted to that key before it is uploaded, as `agentes-<stamp>.dump.age`, and the bucket's key
+alone can't read it. Only the public key sits on the server, so create the pair somewhere else
+(`age-keygen -o key.txt`, which prints the public key and keeps the private one in `key.txt`) and keep
+the private key apart from the server and from the bucket: a dump whose key is lost can't be restored.
+Add the public key to `.env` and run `docker compose up -d`:
+
+```sh
+BACKUP_AGE_RECIPIENT=age1...
+```
+
+Restoring needs `age` on the machine that restores (`apk add age`, `apt install age` or
+`brew install age`) and that private key. Switching either way is safe: `list` and the retention cover
+both names, and the dumps already in the bucket stay as they are.
+
 Add `backup` to `COMPOSE_PROFILES` too, comma-separated: `COMPOSE_PROFILES=tailscale,backup` on
 Tailscale (the setup's default), `https,backup` with Caddy, or `backup` alone. Running the setup
 again keeps it. Run `docker compose up -d`: the first dump runs right away, unless the bucket has one
@@ -1728,7 +1750,15 @@ start the line with `cd /path/to/compose/dir && umask 077;` and write `\%F`).
 
 **Restore** with the app stopped, so nothing writes in between, into an emptied database: tables that
 a newer version added aren't in an older dump and would keep it from replacing the rest. A dump in
-the bucket comes down to the server first, under a name from `list`:
+the bucket comes down to the server first, under a name from `list`. An encrypted one (`.dump.age`)
+is decrypted with the private key, which the server doesn't have:
+
+```sh
+(umask 077 && docker compose run --rm -T backup fetch agentes-20261020-030000.dump.age > agentes-2026-10-20.dump.age)
+age -d -i key.txt agentes-2026-10-20.dump.age > agentes-2026-10-20.dump
+```
+
+A dump without `.age` is ready as it comes down:
 
 ```sh
 (umask 077 && docker compose run --rm -T backup fetch agentes-20261020-030000.dump > agentes-2026-10-20.dump)
