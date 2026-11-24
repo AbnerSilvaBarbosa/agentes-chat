@@ -14,7 +14,9 @@ import { requireActiveMembership } from "./organizations";
 import { enqueue } from "./outbox";
 import { personCanPost } from "./routine-state";
 import { ACTIVE_RUN_STATUSES, takeInbox } from "./run-inbox";
-import { continuableEnd } from "./runs";
+import { placeAfter } from "./run-scope";
+import { runState } from "./run-state";
+import { continuableEnd, replyThreadOf } from "./runs";
 import { announceWork, reopenWork, updatesThreadOf } from "./works";
 
 const { agentRuns, agents, messages, channels, users } = schema;
@@ -43,6 +45,7 @@ export async function continueRun(
     .select({
       run: agentRuns,
       ownerUserId: agents.ownerUserId,
+      ownerRoleId: agents.ownerRoleId,
       requester: runRequester,
       request: messages.body,
       channelKind: channels.kind,
@@ -88,8 +91,10 @@ export async function continueRun(
   if (skipped && !(Date.now() - Date.parse(ended.closed?.at ?? "") < ANSWER_ANYWAY_MS)) throw notContinuable();
 
   // The new run answers where the stopped reply is: its thread, or (flat: a DM) the reply itself. Long work (ADR 0121)
-  // goes on in its own thread, as the same work.
-  const threadRootId = (work ? updatesThreadOf(work) : null) ?? reply.threadId ?? reply.id;
+  // goes on in its own thread, as the same work; a handed one where it was handed the work, not where it reports.
+  const place = placeAfter(stopped, reply);
+  const threadRootId =
+    work?.how === "handed" ? stopped.threadRootId : ((work ? updatesThreadOf(work) : null) ?? place.threadRootId);
   const roots = [...new Set([stopped.threadRootId, threadRootId])];
   // A DM is one conversation; a channel's are its threads.
   const inConversation = row.channelKind === "dm" ? undefined : inArray(agentRuns.threadRootId, roots);
@@ -146,6 +151,7 @@ export async function continueRun(
         channelId: stopped.channelId,
         threadRootId,
         triggerMessageId: reply.id,
+        replyInThread: place.replyInThread,
         // Nobody brings it in this time: a person asked for it, so it starts a stretch of its own (ADR 0089).
         trigger: stopped.trigger === "router" ? "mention" : stopped.trigger,
         hop: 1,
@@ -178,7 +184,7 @@ export async function continueRun(
       await tx
         .update(agentRuns)
         .set({
-          transcript: sql`jsonb_set(${agentRuns.transcript}, '{catchUpTriage}', (${agentRuns.transcript}->'catchUpTriage')
+          transcript: sql`jsonb_set(${agentRuns.transcript}, '{catchUpTriage}', (${runState}->'catchUpTriage')
             || jsonb_build_object('overruledBy', ${userId}::text, 'overruledAt', ${new Date().toISOString()}::text))`,
         })
         .where(eq(agentRuns.id, stopped.id));
@@ -278,22 +284,26 @@ class AlreadyHandedOn extends Error {}
  * task was stopped (`postPersonMessage`). Once its stop is posted (`stopped`, the reply), a new run
  * of the same agent starts from that message: same conversation, the stopped run's context and its
  * computer session, plus "[Ana stopped you to say this:] …". Only for a message of the person who
- * stopped it, still unread (`meta.steerNow`). The stopped reply is marked continued (no "Continuar"),
- * and the app hears it read the message. The stopped run's other unread messages go along (the new
- * run reads them at its first step). Returns the new run's id, or null when there is nothing to do.
+ * stopped it, still unread (`meta.steerNow`) or read as the stop landed (`reply.read`). A stopped reply (`reply.id`:
+ * one that says it was stopped) is marked continued (no "Continuar"), and the app hears it read the message. The
+ * stopped run's other unread messages go along (the new run reads them at its first step). Returns the new run's id,
+ * or null when there is nothing to do.
  */
 export async function restartAfterStopAndSend(
   deps: { db: Database; pubsub?: PubSub },
   stoppedRunId: string,
-  reply: { id: string; threadId: string | null },
+  reply: { id: string | null; threadId: string | null; read?: string },
   transcript: Transcript,
 ): Promise<string | null> {
   const { db } = deps;
+  const replyId = reply.id;
   const [stopped] = await db.select().from(agentRuns).where(eq(agentRuns.id, stoppedRunId));
   const by = canceledBy(stopped?.error);
-  if (!stopped || !by || stopped.pendingMessageIds.length === 0) return null;
+  // `reply.read`: the stopped run read the message as the stop landed. It left the inbox and is still unanswered.
+  const candidates = [...(stopped?.pendingMessageIds ?? []), ...(reply.read ? [reply.read] : [])];
+  if (!stopped || !by || candidates.length === 0) return null;
   // A model brain reads a "Parar e mandar" mid-task (its call is cut); only a computer brain is restarted.
-  // The brain the stopped run thought with (a fallback ran on the model brain), the agent's before its first turn.
+  // The brain the stopped run thought with (a mission's may differ), the agent's before its first turn.
   const [agent] = await db.select({ brain: agents.brain }).from(agents).where(eq(agents.id, stopped.agentId));
   if (!agent || runBrainOf(stopped, agent) === "model") return null;
   const [said] = await db
@@ -302,7 +312,7 @@ export async function restartAfterStopAndSend(
     .where(
       and(
         eq(messages.orgId, stopped.orgId),
-        inArray(messages.id, stopped.pendingMessageIds),
+        inArray(messages.id, candidates),
         eq(messages.authorUserId, by),
         sql`${messages.meta}->>'steerNow' = 'true'`,
       ),
@@ -312,6 +322,8 @@ export async function restartAfterStopAndSend(
   if (!said) return null;
   const [person] = await db.select({ name: users.name }).from(users).where(eq(users.id, by));
   const line = `[${person?.name ?? "A person"} stopped you to say this:]\n\n${said.body}`;
+  // It goes on where the stopped run answers, wherever the message that stopped it is (ADR 0214).
+  const place = placeAfter(stopped, said);
   const newRunId = Bun.randomUUIDv7();
   const created = await db
     .transaction(async (tx) => {
@@ -323,7 +335,7 @@ export async function restartAfterStopAndSend(
           orgId: stopped.orgId,
           agentId: stopped.agentId,
           channelId: stopped.channelId,
-          threadRootId: said.threadId ?? said.id,
+          ...place,
           triggerMessageId: said.id,
           trigger: stopped.trigger === "router" ? "mention" : stopped.trigger,
           // The person's message is its stretch (ADR 0089).
@@ -339,15 +351,19 @@ export async function restartAfterStopAndSend(
       // The stopped run's unread messages move to the new run (taken: nothing is handed on twice).
       // Already handed on (the message is no longer there): nothing to restart; undo the insert.
       const unread = await takeInbox(tx, stopped.id);
-      if (!unread.includes(said.id)) throw new AlreadyHandedOn();
+      if (said.id !== reply.read && !unread.includes(said.id)) throw new AlreadyHandedOn();
       const rest = unread.filter((id) => id !== said.id);
       if (rest.length > 0)
         await tx.update(agentRuns).set({ pendingMessageIds: rest }).where(eq(agentRuns.id, newRunId));
-      const mark = JSON.stringify({ continuedRunId: newRunId, continuedByUserId: by });
-      await tx
-        .update(messages)
-        .set({ meta: sql`jsonb_set(${messages.meta}, '{canceled}', (${messages.meta}->'canceled') || ${mark}::jsonb)` })
-        .where(and(eq(messages.orgId, stopped.orgId), eq(messages.id, reply.id)));
+      if (replyId) {
+        const mark = JSON.stringify({ continuedRunId: newRunId, continuedByUserId: by });
+        await tx
+          .update(messages)
+          .set({
+            meta: sql`jsonb_set(${messages.meta}, '{canceled}', (${messages.meta}->'canceled') || ${mark}::jsonb)`,
+          })
+          .where(and(eq(messages.orgId, stopped.orgId), eq(messages.id, replyId)));
+      }
       await enqueue(tx, {
         orgId: stopped.orgId,
         kind: "agent_run.execute",
@@ -363,19 +379,22 @@ export async function restartAfterStopAndSend(
     });
   if (!created) return null;
   const where = { channelId: stopped.channelId, threadId: reply.threadId, agentId: stopped.agentId };
-  await publishChannelEvent(deps.pubsub, {
-    type: "run.continued",
-    ...where,
-    runId: stopped.id,
-    newRunId,
-    messageId: reply.id,
-  });
+  if (replyId) {
+    await publishChannelEvent(deps.pubsub, {
+      type: "run.continued",
+      ...where,
+      runId: stopped.id,
+      newRunId,
+      messageId: replyId,
+    });
+  }
   await publishChannelEvent(deps.pubsub, {
     type: "agent.run.read",
     ...where,
     runId: stopped.id,
     messageIds: [said.id],
   });
-  await publishChannelEvent(deps.pubsub, { type: "agent.thinking", ...where, runId: newRunId });
+  const threadId = replyThreadOf({ ...place, triggerMessageId: said.id });
+  await publishChannelEvent(deps.pubsub, { type: "agent.thinking", ...where, threadId, runId: newRunId });
   return newRunId;
 }

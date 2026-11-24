@@ -1,6 +1,7 @@
 import { AGENT_COLORS } from "@agenteschat/tokens/look";
 import { ApiError } from "../api/http";
 import type { IssueProject, IssueProjectRef, IssueSpace, IssueSpaceRef } from "../api/types";
+import { isUuid } from "./format";
 
 /** A project's name holds at most this (mirror of `PROJECT_NAME_MAX`, packages/engine/src/issue-projects.ts). */
 export const PROJECT_NAME_MAX = 80;
@@ -34,11 +35,9 @@ export const PROJECT_COLORS = AGENT_COLORS.filter((c) => c !== "sky");
 /** In a project filter and its URL: the tasks with no project. */
 export const NO_PROJECT = "none";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** A project filter from a URL or a stored value: a project's id, `none`, or nothing. */
 export const projectFilterOf = (value: unknown): string | undefined =>
-  typeof value === "string" && (value === NO_PROJECT || UUID.test(value)) ? value : undefined;
+  typeof value === "string" && (value === NO_PROJECT || isUuid(value)) ? value : undefined;
 
 /**
  * The projects a task can take: the ones in use, plus the one it already has when that one is archived (so the
@@ -67,7 +66,7 @@ export const projectOfFilter = (projects: IssueProject[] | undefined, filter: st
 
 /** A space filter from a URL or a stored value: a space's id, or nothing. */
 export const spaceFilterOf = (value: unknown): string | undefined =>
-  typeof value === "string" && UUID.test(value) ? value : undefined;
+  typeof value === "string" && isUuid(value) ? value : undefined;
 
 /** The space a filter names, when it is one that still exists. */
 export const spaceOfFilter = (spaces: IssueSpace[] | undefined, filter: string | undefined) =>
@@ -108,7 +107,7 @@ export function boardFilterRows<P extends IssueProjectRef>(
 
 /**
  * How a board is written where the company isn't already the heading: its own name, and its company's before it when
- * two boards of the workspace share that name (ADR 0178: two companies may each have an "Entregas").
+ * two boards of the workspace share that name (ADR 0222: two companies may each have an "Entregas").
  */
 export function boardLabels(
   projects: IssueProjectRef[],

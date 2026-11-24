@@ -1,5 +1,5 @@
 import type { Issue, IssueColumn, IssueStatus } from "@agenteschat/client";
-import { BOARD, STATUSES } from "@agenteschat/client/lib/issues";
+import { BOARD, STATUSES, taskAgentId } from "@agenteschat/client/lib/issues";
 import { stepPhrase } from "@agenteschat/client/lib/work";
 import { useTranslation } from "react-i18next";
 import { useActors } from "@/components/actors";
@@ -7,17 +7,19 @@ import { lookOf } from "@/lib/look";
 
 export * from "@agenteschat/client/lib/issues";
 
-/** The agent's color for the pixel pieces (people and nobody: neutral). */
+/** The color for the pixel pieces: the working agent's, else the first agent's (people and nobody: neutral). */
 export function useAssigneeColor() {
   const { dir } = useActors();
-  return (i: Pick<Issue, "assignee">) =>
-    i.assignee?.type === "agent" ? (lookOf(dir.agentById.get(i.assignee.id))?.color ?? "sky") : null;
+  return (i: Pick<Issue, "assignees" | "work">) => {
+    const agentId = taskAgentId(i);
+    return agentId ? (lookOf(dir.agentById.get(agentId))?.color ?? "sky") : null;
+  };
 }
 
 /** The step an agent is on, in the person's words ("Atualizou uma tarefa · #131", "Rodou: Rerun the tests"). */
 export function useStepText() {
-  const { t } = useTranslation();
-  return (step: Parameters<typeof stepPhrase>[1] | undefined) => (step ? stepPhrase(t, step) : "");
+  const { t, i18n } = useTranslation();
+  return (step: Parameters<typeof stepPhrase>[1] | undefined) => (step ? stepPhrase(t, step, i18n.language) : "");
 }
 
 // ── The board: one per org, custom columns, each in a fixed stage ───────────
@@ -85,7 +87,7 @@ export function useStageName() {
 }
 
 /**
- * A column filter's key (`?columns=`, ADR 0185 addendum) as the person reads it: a column with no name is its stage's
+ * A column filter's key (`?columns=`, ADR 0229 addendum) as the person reads it: a column with no name is its stage's
  * word, any other key is the name, which the key keeps in lower case, with its first letter raised.
  */
 export function useColumnKeyLabel() {

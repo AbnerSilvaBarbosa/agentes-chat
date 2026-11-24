@@ -9,6 +9,7 @@ import {
 import { questionWaitsOn } from "@agenteschat/client/lib/agent-questions";
 import { formatTime, whenAt } from "@agenteschat/client/lib/format";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
+import { MAX_MESSAGE_LENGTH } from "@agenteschat/client/lib/message-length";
 import { messagePath } from "@agenteschat/client/lib/message-links";
 import { can } from "@agenteschat/client/lib/permissions";
 import {
@@ -38,7 +39,7 @@ import {
   secretWhere,
 } from "@agenteschat/client/lib/secret-requests";
 import { secretEndedAt, secretOutcome } from "@agenteschat/client/lib/secret-words";
-import { Button, Chip, CodeInput, diffLines, Field, Icon, Input, Switch, Textarea } from "@agenteschat/ui";
+import { Button, Chip, CodeInput, diffLines, Field, Icon, Input, overLimit, Switch, Textarea } from "@agenteschat/ui";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
@@ -46,6 +47,7 @@ import { useEffect, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useApi } from "@/api/context";
 import { useDirectory } from "@/hooks/useDirectory";
+import { useTextLimit } from "@/hooks/useTextLimit";
 import { TYPED_VALUES } from "@/i18n";
 import { inPlaceClick } from "@/lib/navigate";
 import { useToast } from "@/lib/toast";
@@ -106,11 +108,13 @@ export function MemoryChangeCard({ update, agentId }: { update: MemoryUpdate; ag
       role="group"
       aria-label={t("memoryCard.group", { name })}
     >
-      <div className="ac-approval__head">
+      <div className="ac-approval__head ac-tailrow">
         <span className="ac-approval__who">
           <b>{t(`memoryCard.${update.action}`, { name })}</b>
         </span>
-        <Chip icon="check">{t("memoryCard.chip")}</Chip>
+        <Chip icon="check" className="ac-tail">
+          {t("memoryCard.chip")}
+        </Chip>
       </div>
       <p className={update.action === "forgot" ? "ac-approval__title struck" : "ac-approval__title"}>{update.text}</p>
       {update.action === "updated" && update.previousText && (
@@ -135,7 +139,7 @@ export function MemoryChangeCard({ update, agentId }: { update: MemoryUpdate; ag
   );
 }
 
-/** What a role or access proposal changes: "Papel: Dev → Revisora", or a chip per app turned on or off. */
+/** What a role or access proposal changes: "Função: Dev → Revisora", or a chip per app turned on or off. */
 export function SettingChange({ p }: { p: Proposal }) {
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
@@ -485,7 +489,7 @@ export function ProposalGroup({ proposalIds }: { proposalIds: string[] }) {
  * in the panel, a consultation, a channel whose composer posts elsewhere), so
  * it never depends on which composer is on screen.
  */
-export function QuestionCard({ question }: { question: AgentQuestion }) {
+export function QuestionCard({ question, asker }: { question: AgentQuestion; asker?: string }) {
   const { t, i18n } = useTranslation();
   const { org, me } = useOrg();
   const api = useApi();
@@ -496,30 +500,56 @@ export function QuestionCard({ question }: { question: AgentQuestion }) {
   const [error, setError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
   const [text, setText] = useState("");
+  const limit = useTextLimit(MAX_MESSAGE_LENGTH, "choices.tooLongFix");
+  const tooLong = overLimit(text, limit);
   const reopen = useRef<HTMLButtonElement>(null);
   // Refused because it ended (someone answered, its run stopped): the card closes here, even if no event came.
   const [ended, setEnded] = useState(false);
-  const refused = (err: unknown, fallback: "question.failed" | "question.skipFailed") => {
+  // `base`: the question as it was before this answer showed.
+  const refused = (
+    err: unknown,
+    fallback: "question.failed" | "question.skipFailed",
+    base: AgentQuestion = current,
+  ) => {
     if ((err as { status?: number }).status !== 409) return setError(t(fallback));
     setText("");
     setEnded(true);
-    live.answered({ ...current, status: "answered", answer: null, answeredByUserId: null });
+    live.answered({ ...base, status: "answered", answer: null, answeredByUserId: null });
+  };
+  // The card shows the answer (or the skip) at once; a refusal opens the question again, said on the card.
+  const settle = (patch: Pick<AgentQuestion, "answer"> & Partial<AgentQuestion>) => {
+    setError(null);
+    const before = current;
+    live.answered({
+      ...current,
+      ...patch,
+      status: "answered",
+      answeredByUserId: me.user.id,
+      answeredAt: new Date().toISOString(),
+    });
+    return { before };
   };
   const answer = useMutation({
     mutationFn: (input: { choice: string } | { text: string }) => api.questions.answer(org.id, question.id, input),
     // Errors are explained on the card.
     meta: { silent: true },
-    onMutate: () => setError(null),
+    onMutate: (input) => settle({ answer: "choice" in input ? input.choice : input.text }),
     onSuccess: (res, input) =>
       live.answered({ ...res, answer: res.answer ?? ("choice" in input ? input.choice : input.text) }),
-    onError: (err) => refused(err, "question.failed"),
+    onError: (err, _input, context) => {
+      if (context) live.answered(context.before);
+      refused(err, "question.failed", context?.before);
+    },
   });
   const skip = useMutation({
     mutationFn: () => api.questions.dismiss(org.id, question.id),
     meta: { silent: true },
-    onMutate: () => setError(null),
+    onMutate: () => settle({ answer: null, dismissed: true }),
     onSuccess: (res) => live.answered(res),
-    onError: (err) => refused(err, "question.skipFailed"),
+    onError: (err, _input, context) => {
+      if (context) live.answered(context.before);
+      refused(err, "question.skipFailed", context?.before);
+    },
   });
   const busy = answer.isPending || skip.isPending;
   const agent = dir.anyAgent(question.agentId);
@@ -565,7 +595,7 @@ export function QuestionCard({ question }: { question: AgentQuestion }) {
   const mine = !done && questionWaitsOn(current, me.user.id);
   const choices = current.choices ?? [];
   const send = () => {
-    if (text.trim() && !busy) answer.mutate({ text: text.trim() });
+    if (text.trim() && !tooLong && !busy) answer.mutate({ text: text.trim() });
   };
   const pick = (choice: string | undefined) => {
     if (choice !== undefined && !busy) answer.mutate({ choice });
@@ -584,6 +614,7 @@ export function QuestionCard({ question }: { question: AgentQuestion }) {
         autoGrow
         autoFocus
         value={text}
+        limit={limit}
         placeholder={t("question.placeholder")}
         aria-label={t("question.placeholder")}
         onChange={(e) => setText(e.target.value)}
@@ -601,6 +632,8 @@ export function QuestionCard({ question }: { question: AgentQuestion }) {
       id={question.id}
       kind="question"
       agent={agent}
+      asker={asker}
+      runId={question.runId ?? null}
       label={t("question.group", { agent: name })}
       mine={mine}
       waitingFor={t("ask.waitingFor", {
@@ -634,7 +667,9 @@ export function QuestionCard({ question }: { question: AgentQuestion }) {
               type="submit"
               variant="primary"
               size="sm"
-              disabled={!text.trim() || skip.isPending || (answer.isPending && !("text" in answer.variables))}
+              disabled={
+                !text.trim() || tooLong || skip.isPending || (answer.isPending && !("text" in answer.variables))
+              }
               loading={answer.isPending && "text" in answer.variables}
             >
               {t("channel.send")}
@@ -682,7 +717,14 @@ export function QuestionCard({ question }: { question: AgentQuestion }) {
  * browser, to the key the computer made, so it never reaches our server, the
  * chat or the agent. Everyone else sees who was asked.
  */
-export function SecretCard({ request }: { request: SecretRequest }) {
+export function SecretCard({
+  request,
+  runId = null,
+}: {
+  request: SecretRequest;
+  /** The run that asked (its message's). */
+  runId?: string | null;
+}) {
   const { t, i18n } = useTranslation();
   const { org, me } = useOrg();
   const api = useApi();
@@ -845,6 +887,7 @@ export function SecretCard({ request }: { request: SecretRequest }) {
         id={current.id}
         kind="secret"
         agent={agent}
+        runId={runId}
         label={t("secret.group", { agent: agentName })}
         mine={mine}
         waitingFor={t("ask.waitingFor", { name: person })}

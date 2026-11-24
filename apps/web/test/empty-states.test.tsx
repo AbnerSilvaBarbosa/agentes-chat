@@ -37,7 +37,7 @@ const buttons = () => within(empty()).queryAllByRole("button");
 
 describe("first use: what the place gives, and the one next step", () => {
   test("Tarefas: the agent, one Nova tarefa, and Lodi with the ask already written", async () => {
-    const { router } = await go(fresh(), "issues");
+    const { router } = await go(fresh(), "issues?all=1");
     expect(empty().querySelector(".ac-empty__agent canvas")).not.toBeNull();
     expect(title()).toBe("Dê dono e prazo ao trabalho");
     expect(screen().getAllByRole("button", { name: "Nova tarefa" })).toHaveLength(1);
@@ -49,14 +49,14 @@ describe("first use: what the place gives, and the one next step", () => {
 
 describe("who can't act gets an honest line and no button that fails", () => {
   test("Tarefas without post", async () => {
-    await go(fresh(["read", "talk_to_agents"]), "issues");
+    await go(fresh(["read", "talk_to_agents"]), "issues?all=1");
     expect(title()).toBe("Veja quem faz o quê");
     expect(buttons()).toEqual([]);
     expect(screen().queryByRole("button", { name: "Nova tarefa" })).toBeNull();
   });
 
   test("Peça ao Lodi goes with talk_to_agents, the task stays", async () => {
-    await go(fresh(["read", "post"]), "issues");
+    await go(fresh(["read", "post"]), "issues?all=1");
     expect(buttons().map((b) => b.textContent)).toEqual(["Nova tarefa"]);
   });
 
@@ -79,8 +79,12 @@ describe("who can't act gets an honest line and no button that fails", () => {
     expect(screen().queryByRole("button", { name: "Enviar arquivo" })).toBeNull();
   });
 
-  test("Conectores without manage_connectors", async () => {
+  test("Conectores without manage_connectors: their own to add on Pessoal, the team's to look at", async () => {
     await go(fresh(["read"]), "settings/connectors");
+    expect(title()).toBe("Conecte suas próprias contas");
+    expect(buttons().map((b) => b.textContent)).toEqual(["Ver conectores"]);
+    await act(async () => fireEvent.click(screen().getByRole("radio", { name: /Equipe/ })));
+    await settle(2);
     expect(title()).toBe("Veja o que os agentes podem usar");
     expect(buttons()).toEqual([]);
   });
@@ -101,7 +105,7 @@ describe("no results: no agent, a line and the way out", () => {
   test("Tarefas with a filter that hides every task", async () => {
     const api = createFakeApi(fresh(), { seed: false });
     await api.issues.create(ORG_ID, { title: "Fechar o mês" });
-    await renderApp(`/org/${ORG_ID}/issues`, { api });
+    await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     const search = screen().getByRole("searchbox", { name: /Buscar/ });
     await act(async () => fireEvent.change(search, { target: { value: "xyzzy" } }));
@@ -113,11 +117,15 @@ describe("no results: no agent, a line and the way out", () => {
 });
 
 describe("all clear: a calm win, nothing to do", () => {
-  test("Aprovações with nothing waiting", async () => {
+  test("the inbox with nothing waiting, where the requests' old address lands (ADR 0218)", async () => {
     const state = fresh();
+    // No request and no proposal to decide: both are rows of what waits on me.
     state.approvals = [];
-    await go(state, "approvals");
-    expect(title()).toBe("Tudo decidido");
+    state.proposals = [];
+    const { router } = await go(state, "approvals");
+    expect(router.state.location.pathname).toBe(`/org/${ORG_ID}/notifications`);
+    expect(document.querySelector(".ib-filter")?.textContent).toBe("Esperando você");
+    expect(empty().textContent).toBe("Ninguém está esperando você.");
     expect(empty().querySelector(".ac-empty__agent canvas")).not.toBeNull();
     expect(buttons()).toEqual([]);
   });
@@ -194,7 +202,7 @@ describe("a head button and a shortcut follow the empty state's gate", () => {
   });
 
   test("Tarefas without post: N opens nothing", async () => {
-    await go(fresh(["read"]), "issues");
+    await go(fresh(["read"]), "issues?all=1");
     await act(async () => fireEvent.keyDown(window, { key: "n" }));
     await settle(2);
     expect(screen().queryByRole("dialog")).toBeNull();

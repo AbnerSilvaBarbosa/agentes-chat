@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { PubSub } from "@agenteschat/adapters";
 import { and, type Database, type Executor, eq, inArray, isNull, schema, sql } from "@agenteschat/db";
 import type { SteerMessage, SteerReply } from "./brains/types";
+import { confidentialThread, isConfidential, stubOf, thinksAsThread, unsealed } from "./confidential";
 import { attachedLine, taskNotice } from "./context";
 import { publishChannelEvent } from "./events";
-import { ACTIVE_RUN_STATUSES, releaseInbox } from "./run-inbox";
+import { ACTIVE_RUN_STATUSES, releaseInbox, stoppedToSend } from "./run-inbox";
+import type { RunRow } from "./run-state";
 import type { AgentRun } from "./runs";
 
 const { agentRuns, messages, users, agents } = schema;
@@ -54,7 +56,7 @@ const LIVE_STEER_RETRIES = 30;
  */
 export async function deliverLive(
   deps: { db: Database; pubsub: PubSub; waitMs?: number },
-  run: AgentRun,
+  run: Pick<RunRow, "id" | "status">,
   input: { messageId: string; urgent: boolean },
 ): Promise<boolean> {
   if (run.status !== "running") return false;
@@ -120,12 +122,18 @@ export async function renderSteered(
   db: Executor,
   orgId: string,
   ids: string[],
-  options: { beforeStart?: boolean; workId?: string | null } = {},
+  options: {
+    beforeStart?: boolean;
+    workId?: string | null;
+    /** The reading run thinks through the Model Gateway: its thread, and what it thinks with (`thinksAsThread`). */
+    unseal?: { threadRootId: string; thinksWith: string | undefined };
+  } = {},
 ): Promise<SteeredText[]> {
   if (ids.length === 0) return [];
-  const rows = await db
+  const stored = await db
     .select({
       id: messages.id,
+      threadId: messages.threadId,
       body: messages.body,
       meta: messages.meta,
       name: sql<string | null>`coalesce(${users.name}, ${agents.name})`,
@@ -135,6 +143,18 @@ export async function renderSteered(
     .leftJoin(users, eq(users.id, messages.authorUserId))
     .leftJoin(agents, eq(agents.id, messages.authorAgentId))
     .where(and(eq(messages.orgId, orgId), inArray(messages.id, ids), isNull(messages.deletedAt)));
+  // A confidential message (ADR 0190): its words only for a run of its own thread that the lock holds and that
+  // thinks with what first read the thread. For any other reader the stub, with nothing of its meta (a notice's
+  // text is there).
+  const own = options.unseal;
+  const mine = (m: { id: string; threadId: string | null }) =>
+    own !== undefined && (m.threadId === own.threadRootId || m.id === own.threadRootId);
+  const thread =
+    own && stored.some((m) => isConfidential(m.meta) && mine(m))
+      ? await confidentialThread(db, orgId, own.threadRootId)
+      : null;
+  const reads = thread !== null && thinksAsThread(thread, own?.thinksWith);
+  const rows = stored.map((m) => (!isConfidential(m.meta) ? m : reads && mine(m) ? unsealed(m) : stubOf(m)));
   // Messages written in one transaction share its time (a report's notices): their ids keep the order.
   rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1));
   return rows.map((m) => {
@@ -159,12 +179,13 @@ export async function renderSteered(
 /** The run fields `releaseInbox` needs. */
 type InboxRun = Pick<
   AgentRun,
-  "id" | "orgId" | "agentId" | "channelId" | "threadRootId" | "triggerMessageId" | "trigger"
+  "id" | "orgId" | "agentId" | "channelId" | "threadRootId" | "triggerMessageId" | "replyInThread" | "trigger"
 >;
 
 /**
  * Puts taken messages back at the front of the run's inbox (read with its next step). A run that
- * ended meanwhile (stopped while its turn ran) hands them on at once, as every ending does.
+ * ended meanwhile (stopped while its turn ran) hands them on at once, as every ending does, unless it was stopped
+ * to read a message: that one restarts from it.
  */
 export async function returnToInbox(db: Database, pubsub: PubSub | undefined, run: InboxRun, ids: string[]) {
   if (ids.length === 0) return;
@@ -176,9 +197,25 @@ export async function returnToInbox(db: Database, pubsub: PubSub | undefined, ru
     .update(agentRuns)
     .set({ pendingMessageIds: sql`${list} || ${agentRuns.pendingMessageIds}` })
     .where(eq(agentRuns.id, run.id))
-    .returning({ status: agentRuns.status });
+    .returning({ status: agentRuns.status, background: agentRuns.background, createdAt: agentRuns.createdAt });
   if (row && !(ACTIVE_RUN_STATUSES as readonly string[]).includes(row.status)) {
-    await releaseInbox(db, pubsub, run, { reason: "interrupted" });
+    // Stopped to read a message ("Parar e mandar"): its worker starts it again from that message with what it knows,
+    // then hands on the rest (the executor's `stopCanceled`). Handing them on here would answer in a run that
+    // knows nothing of this one.
+    if (!row.background && (await stoppedToSend(db, { ...run, createdAt: row.createdAt }))) return;
+    // The "stop" that ended it needs no answer (`stopRun` marks it).
+    const stops = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.orgId, run.orgId),
+          inArray(messages.id, ids),
+          sql`${messages.meta}->'stopOfRunIds' @> to_jsonb(${run.id}::text)`,
+        ),
+      );
+    const exclude = stops.map((m) => m.id);
+    await releaseInbox(db, pubsub, run, { reason: "interrupted", ...(exclude.length ? { exclude } : {}) });
   }
 }
 

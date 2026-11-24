@@ -9,7 +9,7 @@ import { rememberedPoCompany, rememberPoCompany } from "@/lib/po-landing";
 import { ADA_ID, ATLAS_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
-/** The PO view without a company: `/po` opens the company the person used last (ADR 0185, the sidebar's PO row). */
+/** The PO view without a company: `/po` opens the company the person used last (ADR 0229, the sidebar's PO row). */
 
 afterEach(() => {
   cleanup();

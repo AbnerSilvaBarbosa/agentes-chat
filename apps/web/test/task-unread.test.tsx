@@ -45,7 +45,7 @@ describe("mentions of me in a task's conversation (ADR 0145)", () => {
   test("Tarefas in the sidebar, the task's card and its row in the list carry the red count", async () => {
     const state = seedState();
     const { api } = await mentioned(state);
-    await renderApp(`/org/${ORG_ID}/issues`, { api });
+    await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     expect(mentionsIn(tasksRow())).toBe("1");
     // Beside the conversation's count, among the card's facts.
@@ -54,7 +54,7 @@ describe("mentions of me in a task's conversation (ADR 0145)", () => {
     cleanup();
 
     state.issuesView = { ...structuredClone(ISSUES_VIEW_DEFAULT), layout: "list" };
-    await renderApp(`/org/${ORG_ID}/issues`, { api });
+    await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     expect(mentionsIn(document.querySelector('.issue-list__row[data-card="131"] .issue-card__facts'))).toBe("1");
   });
@@ -64,14 +64,14 @@ describe("mentions of me in a task's conversation (ADR 0145)", () => {
     const { api } = await mentioned(state);
     const [first] = state.unreadTasks ?? [];
     state.unreadTasks = first ? [{ ...first, mentions: 0 }] : [];
-    await renderApp(`/org/${ORG_ID}/issues`, { api });
+    await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     expect(tasksRow().dataset.unread).toBe("true");
     expect(mentionsIn(tasksRow())).toBeNull();
     cleanup();
 
     state.unreadTasks = [];
-    await renderApp(`/org/${ORG_ID}/issues`, { api });
+    await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     expect(tasksRow().dataset.unread).toBe("false");
   });

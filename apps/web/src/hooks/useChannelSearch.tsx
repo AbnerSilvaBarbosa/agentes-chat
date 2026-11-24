@@ -7,7 +7,7 @@ import { useOrg } from "@/components/org-context";
 
 /**
  * "#" suggestions (`pickOptions`): the channels I can see, each with its topic (the ones I'm not in say so), then the
- * cards (ADR 0183) from the issues list already loaded, which the server filters to the ones I may see.
+ * cards (ADR 0227) from the issues list already loaded, which the server filters to the ones I may see.
  */
 export function useChannelSearch(): {
   search: (query: string) => ComposerSuggestion[];

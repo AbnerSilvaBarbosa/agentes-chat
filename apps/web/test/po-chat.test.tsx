@@ -17,7 +17,7 @@ import {
   seedState,
   withRightHand,
 } from "./fake-api";
-import { renderApp, renderPage, screen, settle } from "./render";
+import { headerSearchBox, renderApp, renderPage, screen, settle } from "./render";
 
 const header = () => document.querySelector(".channel__header") as HTMLElement;
 
@@ -29,7 +29,7 @@ async function pick(combobox: HTMLElement, option: RegExp | string) {
   await settle(8);
 }
 
-/** The PO chat (ADR 0185): the route that opens a person's chat with the PO about one company. */
+/** The PO chat (ADR 0229): the route that opens a person's chat with the PO about one company. */
 
 afterEach(() => {
   cleanup();
@@ -248,14 +248,17 @@ describe("Conversar com o PO on a company's page", () => {
 });
 
 describe("a search hit in a PO chat", () => {
-  const box = () => within(header()).getByRole("combobox", { name: "Buscar" }) as HTMLInputElement;
+  // The field opens from the header's icon the first time it is asked for.
+  const box = () => headerSearchBox(header());
   const typeIn = async (value: string) => {
-    await act(async () => fireEvent.change(box(), { target: { value } }));
+    const el = box();
+    await act(async () => fireEvent.change(el, { target: { value } }));
     await act(() => new Promise((r) => setTimeout(r, 300)));
     await settle(4);
   };
   const enter = async () => {
-    await act(async () => fireEvent.keyDown(box(), { key: "Enter" }));
+    const el = box();
+    await act(async () => fireEvent.keyDown(el, { key: "Enter" }));
     await act(() => new Promise((r) => setTimeout(r, 300)));
     await settle(4);
   };
@@ -277,6 +280,7 @@ describe("a search hit in a PO chat", () => {
 
   test("is named by the PO and the company, and its link opens that company's PO chat at the message", async () => {
     const { router } = await go(scene(), `c/${ENG_ID}`);
+    box();
     await act(async () => fireEvent.click(screen().getByRole("button", { name: "Remover em: #eng" })));
     await typeIn("zebra");
     await enter();
@@ -292,6 +296,7 @@ describe("a search hit in a PO chat", () => {
     const state = scene();
     seedDm(state, { type: "agent", id: ATLAS_ID }, { body: "uma zebra na DM do Atlas" });
     const { router } = await go(state, `c/${ENG_ID}`);
+    box();
     await act(async () => fireEvent.click(screen().getByRole("button", { name: "Remover em: #eng" })));
     await typeIn("zebra");
     await enter();
@@ -339,7 +344,8 @@ describe("the PO in Configurações › Tarefas", () => {
     await settingsAt(eligible());
     expect(box().textContent).toContain("Nenhum");
     box().focus();
-    await act(async () => fireEvent.keyDown(box(), { key: "Enter" }));
+    const el = box();
+    await act(async () => fireEvent.keyDown(el, { key: "Enter" }));
     const options = screen().getAllByRole("option");
     const names = options.map((o) => o.textContent);
     expect(names[0]).toBe("Nenhum");

@@ -1,6 +1,6 @@
 /**
- * Which level of Tarefas a page shows, and the chrome that belongs to it (ADR 0180): the companies' root, one
- * company's boards, one board's kanban, or every task of the workspace, or the tasks assigned to the member (ADR 0181). Pure, so the rule is read in one place and
+ * Which level of Tarefas a page shows, and the chrome that belongs to it (ADR 0224): the companies' root, one
+ * company's boards, one board's kanban, or every task of the workspace, or the tasks assigned to the member (ADR 0225). Pure, so the rule is read in one place and
  * tested without drawing the page.
  */
 export type IssuesLevel = "root" | "company" | "board" | "all" | "mine";
@@ -10,7 +10,7 @@ export interface IssuesAddress {
   project?: string;
   space?: string;
   all?: boolean;
-  /** `?columns=` beside a company (ADR 0185 addendum): its tasks in those columns, read as the whole list of tasks. */
+  /** `?columns=` beside a company (ADR 0229 addendum): its tasks in those columns, read as the whole list of tasks. */
   columns?: boolean;
   /** The page of the member's own tasks (`/my-tasks`), which no address parameter reaches. */
   mine?: boolean;

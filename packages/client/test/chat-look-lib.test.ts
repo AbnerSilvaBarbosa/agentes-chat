@@ -8,6 +8,7 @@ import {
   openAtOf,
   opensAtLastRead,
   textSizeOf,
+  unreadThreadRootId,
 } from "../src/lib/chat-look";
 
 test("Tamanho do texto: five steps, smallest first, the middle one until the person picks", () => {
@@ -26,6 +27,12 @@ const said = (id: string, author: { type: "person" | "agent"; id: string }, crea
 test("whoever hasn't chosen: channels on the left, DMs in light bubbles", () => {
   expect(chatLookOf(undefined, false)).toEqual({ style: "left", tone: "light" });
   expect(chatLookOf({}, true)).toEqual({ style: "bubbles", tone: "light" });
+});
+
+test("on the phone a channel opens in bubbles too; the person's choice still wins on every device", () => {
+  expect(chatLookOf(undefined, false, false, "phone")).toEqual({ style: "bubbles", tone: "light" });
+  expect(chatLookOf({ channelStyle: "left" }, false, false, "phone")).toEqual({ style: "left", tone: "light" });
+  expect(chatLookOf({}, true, false, "phone")).toEqual({ style: "bubbles", tone: "light" });
 });
 
 test("in a personal workspace every conversation opens in bubbles; a team's channels stay on the left (ADR 0159)", () => {
@@ -85,4 +92,31 @@ test("the first unread message is past the read mark and not mine", () => {
   expect(firstUnreadId(list, "2026-11-05T10:30:00.000Z", "me")).toBe("c");
   expect(firstUnreadId(list, "2026-11-05T12:30:00.000Z", "me")).toBeNull();
   expect(firstUnreadId(list, null, "me")).toBe("a");
+});
+
+test("opened with an unread reply in a thread and nothing new at the end: the thread's root to bring into view", () => {
+  const ada = { type: "agent" as const, id: "ada" };
+  const me = { type: "person" as const, id: "me" };
+  const list = [said("root", ada, "2026-11-01T10:00:00.000Z"), said("mine", me, "2026-11-05T10:00:00.000Z")];
+  const thread = (id: string, author: typeof ada | typeof me, createdAt: string) => ({
+    id,
+    lastMessage: { author, excerpt: "", createdAt },
+  });
+  const read = "2026-11-05T11:00:00.000Z";
+  // The latest reply since I read, when several threads have one.
+  expect(
+    unreadThreadRootId(
+      list,
+      [thread("root", ada, "2026-11-05T12:00:00.000Z"), thread("other", ada, "2026-11-05T13:00:00.000Z")],
+      read,
+      "me",
+    ),
+  ).toBe("other");
+  // A reply before my read, my own reply, and a thread with no reply: nothing to bring.
+  expect(unreadThreadRootId(list, [thread("root", ada, "2026-11-05T10:30:00.000Z")], read, "me")).toBeNull();
+  expect(unreadThreadRootId(list, [thread("root", me, "2026-11-05T12:00:00.000Z")], read, "me")).toBeNull();
+  expect(unreadThreadRootId(list, [{ id: "root", lastMessage: null }], read, "me")).toBeNull();
+  // Something new in the conversation itself: the end has it.
+  const withNew = [...list, said("new", ada, "2026-11-05T12:30:00.000Z")];
+  expect(unreadThreadRootId(withNew, [thread("root", ada, "2026-11-05T12:00:00.000Z")], read, "me")).toBeNull();
 });

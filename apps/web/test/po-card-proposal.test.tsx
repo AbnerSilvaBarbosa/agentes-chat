@@ -13,7 +13,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-/** The PO's card proposal in its chat (ADR 0185): the card the person confirms, edits or drops. */
+/** The PO's card proposal in its chat (ADR 0229): the card the person confirms, edits or drops. */
 
 const CHANNEL = "po-chat-s-acme";
 const company: PoCompany = {

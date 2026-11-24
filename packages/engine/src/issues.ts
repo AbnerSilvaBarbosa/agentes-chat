@@ -31,13 +31,15 @@ import {
 } from "./events";
 import { cutText } from "./format";
 import {
-  type AssigneeChange,
-  applyAssignees,
-  assignmentOf,
-  checkAssignees,
-  coAssigneesOf,
-  onCardSql,
-  planAssignees,
+  assignedSql,
+  assigneesNotIn,
+  assigneesOf,
+  assigneesOfIssue,
+  cleanAssignees,
+  dropAssignee,
+  isAssigned,
+  sameAssignees,
+  setAssignees,
 } from "./issue-assignees";
 import {
   allColumns,
@@ -55,11 +57,13 @@ import { fileIdsOf, getMessage, insertMessage, type MessageView, messageView, po
 import { enqueueRunJob } from "./mission-runs";
 import { notifyIssueChanged } from "./notification-producers";
 import { can, getMembership, requireActiveMembership } from "./organizations";
+import { runReadOutsideById } from "./outside";
 import { membersWhoMaySql } from "./permissions";
 import { poScopeOf } from "./po-chat";
+import { queueTaskCheck, queueTaskEnd, tellTaskEnd } from "./right-hand-follow";
 import { fireRoutineEvent, MAX_MOVE_HOPS } from "./routines";
 import { agentSearchChannels, enqueueIndex, registerDocumentBuilder } from "./search";
-import { AUDIENCE_MAX, type Audience, admitTaskAgents, taskSeenSql } from "./task-access";
+import { AUDIENCE_MAX, type Audience, admitTaskAgents, fileConversationReaderSql, taskSeenSql } from "./task-access";
 import {
   ensureTaskConversation,
   type TaskConversationRef,
@@ -68,11 +72,12 @@ import {
 } from "./task-conversation";
 import { promptAnswer, promptPoll, toolDetail } from "./tool-detail";
 import { syncWikiLinks, withWikiLinks } from "./wiki-links";
-import { type WorkRow, type WorkView, workViews } from "./works";
+import { handOverWork, type WorkRow, type WorkView, workViews } from "./works";
 
 const {
   issues,
   issueActivity,
+  issueAssignees,
   issueCounters,
   issueProjects,
   channels,
@@ -92,7 +97,7 @@ export interface WorkActor {
   id: string;
 }
 export type IssueSource =
-  /** `proposalId`: a card a person confirmed from the PO's proposal (ADR 0185), so a second confirm finds it. */
+  /** `proposalId`: a card a person confirmed from the PO's proposal (ADR 0229), so a second confirm finds it. */
   | { type: "manual"; proposalId?: string }
   | { type: "message"; channelId: string; messageId: string }
   | { type: "agent"; agentId: string; workId?: string; channelId?: string; messageId?: string }
@@ -112,9 +117,8 @@ export interface IssueView {
   priority: IssuePriority;
   /** Its one project (ADR 0171), or none. */
   project: IssueProjectRef | null;
-  assignee: WorkActor | null;
-  /** The people also with the card beside its principal, in order, always people (ADR 0186). */
-  alsoWith: WorkActor[];
+  /** Who has it (ADR 0188), in order: people and agents. The first agent answers what names nobody in its conversation. */
+  assignees: WorkActor[];
   labels: string[];
   dueDate: string | null;
   /** `doneBy`: who checked it (an agent shows its face next to it). */
@@ -130,7 +134,7 @@ export interface IssueView {
   /** The GitHub issue or pull request it is about: only a link, nothing syncs. */
   githubUrl: string | null;
   artifacts: { id: string; title: string; createdBy: WorkActor }[];
-  /** The assigned agent's work on it, from its runs (null: a person has it, nobody, or it is closed). */
+  /** An assigned agent's work on it, from its runs (null: only people have it, nobody, or it is closed). */
   work: IssueWork | null;
   /** Long work stopped on something (ADR 0121 §4): a badge, the card stays in its stage. */
   blocked: { reason: string; since: string; text?: string } | null;
@@ -138,7 +142,7 @@ export interface IssueView {
   backgroundWork: WorkView | null;
   /** Its conversation (ADR 0145), once someone wrote or opened it: replies, who took part, an agent at work. */
   conversation: TaskConversationSummary | null;
-  /** The wiki page that holds its spec (ADR 0185); `title` is null for a restricted page, the whole field when unset or trashed. */
+  /** The wiki page that holds its spec (ADR 0229); `title` is null for a restricted page, the whole field when unset or trashed. */
   specPage: { id: string; slug: string; title: string | null } | null;
   createdAt: string;
   updatedAt: string;
@@ -155,10 +159,11 @@ export interface IssueAudience {
 }
 
 /**
- * What the assigned agent is doing on an issue, derived from its runs (never
+ * What an assigned agent is doing on an issue, derived from its runs (never
  * a status the agent sets): `running` / `waiting_approval` / `waiting_input`
  * while a linked run is alive; `stalled` when the issue is in progress with
- * the agent and no run is alive (it ended, failed or was stopped).
+ * an agent and no run is alive (it ended, failed or was stopped). With several
+ * agents on it, the one whose run is alive, else the one whose run is the latest.
  */
 export interface IssueWork {
   agentId: string;
@@ -177,7 +182,7 @@ export interface IssueWork {
 
 /** One issue with its sub-issues. */
 export interface IssueDetailView extends IssueView {
-  subIssues: { id: string; number: number; title: string; status: IssueStatus; assignee: WorkActor | null }[];
+  subIssues: { id: string; number: number; title: string; status: IssueStatus; assignees: WorkActor[] }[];
 }
 
 export interface IssueActivityView {
@@ -189,6 +194,8 @@ export interface IssueActivityView {
   /** An event in the app's words (`issues.event.{textCode}`), with its params; `text` is the English fallback. */
   textCode?: string;
   textParams?: Record<string, string>;
+  /** An `assigned` event: who was put on the task, or taken off it (`textCode` `unassigned`). */
+  assignee?: WorkActor;
   /** The system moved it on its own (status follows the agent's runs and PRs). */
   auto?: boolean;
   /** Files attached to a comment (Drive files; they are linked to the issue too). */
@@ -200,7 +207,7 @@ export interface IssueInput {
   title: string;
   description?: string;
   criteria?: string[];
-  assignee?: WorkActor | null;
+  assignees?: WorkActor[];
   priority?: IssuePriority;
   dueDate?: string | null;
   labels?: string[];
@@ -208,10 +215,6 @@ export interface IssueInput {
   projectId?: string | null;
   /** The board column it starts in (ADR 0176): the task takes that column's stage. */
   columnId?: string | null;
-  /** The whole list of people (and the one agent): the first person, or the agent, is the principal (ADR 0186). */
-  assignees?: WorkActor[];
-  /** People to put on the card beside whoever `assignee` or `assignees` names, up to five. */
-  addAssignees?: WorkActor[];
 }
 
 export type IssuePatch = Partial<{
@@ -222,21 +225,15 @@ export type IssuePatch = Partial<{
   columnId: string;
   boardRank: number;
   priority: IssuePriority;
-  assignee: WorkActor | null;
-  /** The whole list, in order: replaces the agent and the people (ADR 0186). */
+  /** The whole list, in order: whoever is left out leaves the task. */
   assignees: WorkActor[];
-  /** People to put on the card beside the principal, up to five also with. */
-  addAssignees: WorkActor[];
-  removeAssignees: WorkActor[];
-  /** A person also with the card who becomes its principal; refused while an agent is on it. */
-  principal: WorkActor;
   dueDate: string | null;
   labels: string[];
   /** Null takes it out of its project. */
   projectId: string | null;
   /** Null removes it. */
   githubUrl: string | null;
-  /** The wiki page holding its spec (ADR 0185); null unlinks. */
+  /** The wiki page holding its spec (ADR 0229); null unlinks. */
   specPageId: string | null;
   /**
    * The whole list of acceptance criteria, in order: an `id` keeps that criterion (and whether it is checked), one
@@ -253,8 +250,8 @@ type AgentActor = { type: "agent"; agentId: string; channelId: string; runId?: s
 type IssueRow = typeof issues.$inferSelect;
 /** The columns that say who sees a task. */
 export type TaskScope = Pick<IssueRow, "channelId" | "restricted" | "audienceUserIds">;
-/** What an agent's reach also reads of a task. */
-type TaskRef = TaskScope & Partial<Pick<IssueRow, "assigneeType" | "assigneeId" | "conversationChannelId">>;
+/** What an agent's reach also reads of a task: with its `id`, whether the agent is assigned to it. */
+type TaskRef = TaskScope & Partial<Pick<IssueRow, "id" | "conversationChannelId">>;
 
 const WORKSPACE_SCOPE: TaskScope = { channelId: null, restricted: false, audienceUserIds: [] };
 
@@ -284,14 +281,20 @@ function cleanLabels(labels: string[] | undefined) {
   return [...new Set(labels.map((l) => l.trim().toLowerCase().slice(0, 40)).filter(Boolean))].slice(0, 20);
 }
 
+const peopleOf = (list: readonly WorkActor[]) => list.filter((a) => a.type === "person").map((a) => a.id);
+const agentsOf = (list: readonly WorkActor[]) => list.filter((a) => a.type === "agent").map((a) => a.id);
+
 /** `scope`: who sees the task, which a person assigned to it must be among. */
-export async function checkAssignee(
+async function checkAssignees(
   db: Database,
   orgId: string,
-  a: WorkActor | null | undefined,
+  list: readonly WorkActor[],
   scope: TaskScope = WORKSPACE_SCOPE,
 ) {
-  if (!a) return;
+  for (const a of list) await checkAssignee(db, orgId, a, scope);
+}
+
+async function checkAssignee(db: Database, orgId: string, a: WorkActor, scope: TaskScope) {
   if (a.type === "agent") {
     const agent = await getAgent(db, orgId, a.id);
     if (!agent || agent.archivedAt) throw new ValidationError("That agent does not exist in this organization");
@@ -307,10 +310,35 @@ export async function checkAssignee(
 
 /**
  * What a task made from `channelId` is limited to: the people of a DM or a private channel (`tiedTo`); from a task's
- * own conversation (`scope`), whoever sees that task. Nothing where the whole workspace may see it: a public channel,
- * and a room no person reads (a routine's), whose task would otherwise be nobody's.
+ * own conversation (`scope`), whoever sees that task; from a live file's conversation (ADR 0199), where the file lives
+ * (a file of the Drive itself, its maker: ADR 0157 amendment 2026-11-17). Nothing where the whole workspace may see
+ * it: a public channel, a file shared with everyone, and a room no person reads (a routine's), whose task would
+ * otherwise be nobody's.
  */
-async function conversationOf(db: Database, orgId: string, channelId: string) {
+async function conversationOf(
+  db: Database,
+  orgId: string,
+  channelId: string,
+  depth = 0,
+): Promise<{ tiedTo: string | null; scope: TaskScope | null }> {
+  const [file] = await db
+    .select({
+      channelId: schema.artifacts.channelId,
+      share: schema.artifacts.share,
+      createdByType: schema.artifacts.createdByType,
+      createdById: schema.artifacts.createdById,
+    })
+    .from(schema.artifacts)
+    .where(and(eq(schema.artifacts.orgId, orgId), eq(schema.artifacts.conversationChannelId, channelId)));
+  if (file) {
+    if (file.share === "everyone") return { tiedTo: null, scope: null };
+    if (!file.channelId) {
+      const maker = file.createdByType === "person" ? [file.createdById] : [];
+      return { tiedTo: null, scope: { channelId: null, restricted: true, audienceUserIds: maker } };
+    }
+    // Files made in each other's conversations go a few levels at most; past them, tied to the conversation itself.
+    return depth < 4 ? conversationOf(db, orgId, file.channelId, depth + 1) : { tiedTo: channelId, scope: null };
+  }
   const [row] = await db
     .select({
       kind: channels.kind,
@@ -339,19 +367,19 @@ async function conversationOf(db: Database, orgId: string, channelId: string) {
 
 /**
  * The columns for a chosen audience. "Only me" is a list of one. Who chooses stays in it unless they're an
- * administrator, who sees it anyway, and every person on the task stays too: taking it from them is a surprise.
+ * administrator, who sees it anyway, and the people assigned to the task stay too: taking it from them is a surprise.
  */
 async function chosenScope(
   db: Database,
   actor: IssueActor,
   orgId: string,
   audience: Audience,
-  keep: string[],
+  assigned: string[],
 ): Promise<TaskScope> {
   if (audience.mode === "everyone") return WORKSPACE_SCOPE;
   const membership = actor.type === "person" ? await getMembership(db, actor.userId, orgId) : null;
   const self = actor.type === "person" && !(membership && can(membership, "administrator")) ? [actor.userId] : [];
-  const wanted = [...new Set([...self, ...keep, ...audience.userIds])].slice(0, AUDIENCE_MAX);
+  const wanted = [...new Set([...self, ...assigned, ...audience.userIds])].slice(0, AUDIENCE_MAX);
   const members = wanted.length
     ? await db
         .select({ id: organizationMembers.userId })
@@ -393,9 +421,9 @@ async function personSees(db: Database, userId: string, orgId: string, t: TaskSc
 async function agentReaches(db: Database, actor: AgentActor, orgId: string, t: TaskRef) {
   if (!t.restricted && !t.channelId) return true;
   if (t.conversationChannelId && actor.channelId === t.conversationChannelId) return true;
-  const assigned = t.assigneeType === "agent" && t.assigneeId === actor.agentId;
+  const assigned = async () => !!t.id && (await isAssigned(db, t.id, { type: "agent", id: actor.agentId }));
   if (t.restricted) {
-    if (!assigned) return false;
+    if (!(await assigned())) return false;
     const [row] = rowsOf<{ yes: boolean | string }>(
       await db.execute(sql`select exists (select 1
         from ${channelMembers} dm_m join ${channels} dm on dm.id = dm_m.channel_id and dm.kind = 'dm'
@@ -414,7 +442,7 @@ async function agentReaches(db: Database, actor: AgentActor, orgId: string, t: T
     .innerJoin(channelMembers, and(eq(channelMembers.channelId, channelId), eq(channelMembers.agentId, actor.agentId)))
     .where(and(eq(issues.conversationChannelId, actor.channelId), eq(issues.channelId, channelId)));
   if (sibling) return true;
-  if (!assigned) return false;
+  if (!(await assigned())) return false;
   const [row] = rowsOf<{ yes: boolean | string }>(
     await db.execute(sql`select ${seenFromDmSql(orgId, actor.channelId, sql`${channelId}::uuid`)} as yes`),
   );
@@ -441,7 +469,10 @@ async function seenByConversation(db: Database, person: string | null, channelId
         and not (c.kind = 'channel' and c.visibility = 'public')
         ${person ? sql`and ${taskSeenSql("t", sql`${person}::text`)}` : sql``}
         and not exists (select 1 from ${channelMembers} h where h.channel_id = c.id and h.user_id is not null
-          and not ${taskSeenSql("t", sql`h.user_id`)})`),
+          and not ${taskSeenSql("t", sql`h.user_id`)})
+        -- A live file's conversation has no people in it: whoever reads the file reads it (ADR 0199).
+        and not (c.kind = 'file' and exists (select 1 from organization_members fh where fh.org_id = c.org_id
+          and ${fileConversationReaderSql(sql`c.id`, sql`fh.user_id`)} and not ${taskSeenSql("t", sql`fh.user_id`)}))`),
   );
   return new Set(rows.map((r) => r.id));
 }
@@ -465,10 +496,18 @@ const LIVE_RUN = new Set(["queued", "running", "waiting_approval", "waiting_inpu
 const OPEN_FOR_WORK = new Set<IssueStatus>(["todo", "in_progress", "in_review"]);
 const STEPS_SHOWN = 8;
 
-/** The assigned agents' work on these issues: their latest linked run and its last tool calls. */
-async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, IssueWork>> {
+/**
+ * The assigned agents' work on these issues: the linked run among them that is alive, else their latest, and its last
+ * tool calls. One agent's finished run never hides another's that is still going.
+ */
+async function workOf(
+  db: Database,
+  rows: IssueRow[],
+  assignees: Map<string, WorkActor[]>,
+): Promise<Map<string, IssueWork>> {
   const out = new Map<string, IssueWork>();
-  const withAgent = rows.filter((r) => r.assigneeType === "agent" && r.assigneeId && OPEN_FOR_WORK.has(r.status));
+  const firstAgent = (r: IssueRow) => agentsOf(assignees.get(r.id) ?? [])[0];
+  const withAgent = rows.filter((r) => firstAgent(r) && OPEN_FOR_WORK.has(r.status));
   if (withAgent.length === 0) return out;
   const latest = await db
     .selectDistinctOn([agentRuns.issueId], {
@@ -483,13 +522,26 @@ async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, Issue
       updatedAt: agentRuns.updatedAt,
     })
     .from(agentRuns)
+    // A run of an agent that no longer has the issue (it changed hands) is nobody's work on it.
+    .innerJoin(
+      issueAssignees,
+      and(
+        eq(issueAssignees.issueId, agentRuns.issueId),
+        eq(issueAssignees.assigneeType, "agent"),
+        sql`${issueAssignees.assigneeId} = ${agentRuns.agentId}::text`,
+      ),
+    )
     .where(
       inArray(
         agentRuns.issueId,
         withAgent.map((r) => r.id),
       ),
     )
-    .orderBy(agentRuns.issueId, desc(agentRuns.createdAt));
+    .orderBy(
+      agentRuns.issueId,
+      desc(inArray(agentRuns.status, ["queued", "running", "waiting_approval", "waiting_input"])),
+      desc(agentRuns.createdAt),
+    );
   const runOf = new Map(latest.map((r) => [r.issueId ?? "", r]));
   const runIds = latest.map((r) => r.id);
   const steps = runIds.length
@@ -524,7 +576,8 @@ async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, Issue
   for (const st of steps) {
     const name = st.kind === "tool_call" && typeof st.data.name === "string" ? st.data.name : "";
     const input = st.data.input as Record<string, unknown> | undefined;
-    if (!name) continue;
+    // A call in a person's own connection is theirs alone, and one task view goes to every reader of the task.
+    if (!name || st.data.personal === true) continue;
     const answer = name === PERMISSION_TOOL ? answers.get(st.data.toolUseId) : undefined;
     if (promptPoll(name, input)) {
       for (const asked of answer?.behavior ? (waiting.get(String(input?.request_id)) ?? []) : []) {
@@ -548,13 +601,12 @@ async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, Issue
     stepsOf.set(st.runId, list);
   }
   for (const r of withAgent) {
-    const run = runOf.get(r.id);
-    // A run of another agent (the issue changed hands) is not this agent's work.
-    const mine = run && run.agentId === r.assigneeId ? run : undefined;
+    const mine = runOf.get(r.id);
+    const agentId = mine?.agentId ?? (firstAgent(r) as string);
     const runSteps = mine ? (stepsOf.get(mine.id) ?? []).slice(-STEPS_SHOWN) : [];
     if (mine && LIVE_RUN.has(mine.status)) {
       out.set(r.id, {
-        agentId: r.assigneeId as string,
+        agentId,
         runId: mine.id,
         state: mine.status === "waiting_approval" || mine.status === "waiting_input" ? mine.status : "running",
         since: (mine.startedAt ?? mine.createdAt).toISOString(),
@@ -562,7 +614,7 @@ async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, Issue
       });
       continue;
     }
-    // Committed but not running: in progress with the agent, nothing alive.
+    // Committed but not running: in progress with an agent, nothing alive.
     if (r.status !== "in_progress") continue;
     const reason =
       mine?.status === "canceled"
@@ -573,7 +625,7 @@ async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, Issue
             : ("failed" as const)
           : undefined;
     out.set(r.id, {
-      agentId: r.assigneeId as string,
+      agentId,
       runId: mine?.id ?? null,
       state: "stalled",
       since: (mine ? (mine.finishedAt ?? mine.updatedAt) : r.updatedAt).toISOString(),
@@ -586,8 +638,12 @@ async function workOf(db: Database, rows: IssueRow[]): Promise<Map<string, Issue
 
 /** `reader`: who reads them, for what only they may get (`backgroundWorksOf`). */
 async function views(db: Database, rows: IssueRow[], reader?: string): Promise<IssueView[]> {
+  const assignees = await assigneesOf(
+    db,
+    rows.map((r) => r.id),
+  );
   const [work, works, conversations] = await Promise.all([
-    workOf(db, rows),
+    workOf(db, rows, assignees),
     backgroundWorksOf(db, rows, reader),
     taskConversationSummaries(db, rows),
   ]);
@@ -600,7 +656,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     : [];
   const byId = new Map(files.map((f) => [f.id, f]));
   const orgId = rows[0]?.orgId;
-  const [columns, tied, projects, specPages, alsoWith] = await Promise.all([
+  const [columns, tied, projects, specPages] = await Promise.all([
     orgId ? allColumns(db, orgId) : [],
     tiedPeople(db, rows),
     projectsById(
@@ -608,10 +664,6 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
       rows.map((r) => r.projectId),
     ),
     specPagesOf(db, rows),
-    coAssigneesOf(
-      db,
-      rows.map((r) => r.id),
-    ),
   ]);
   return rows.map((r) => ({
     id: r.id,
@@ -623,8 +675,7 @@ async function views(db: Database, rows: IssueRow[], reader?: string): Promise<I
     boardRank: r.boardRank,
     priority: r.priority,
     project: (r.projectId && projects.get(r.projectId)) || null,
-    assignee: r.assigneeType && r.assigneeId ? { type: r.assigneeType as WorkActor["type"], id: r.assigneeId } : null,
-    alsoWith: (alsoWith.get(r.id) ?? []).map((id) => ({ type: "person" as const, id })),
+    assignees: assignees.get(r.id) ?? [],
     labels: r.labels,
     dueDate: r.dueDate,
     criteria: r.criteria,
@@ -776,12 +827,21 @@ const activityView = (a: typeof issueActivity.$inferSelect): IssueActivityView =
   text: a.text,
   ...(a.event ? { event: a.event } : {}),
   ...(a.kind === "event" ? eventDetail(a.event, a.data as Record<string, unknown>) : {}),
+  ...(a.event === "assigned" && assignedIn(a.data) ? { assignee: assignedIn(a.data) as WorkActor } : {}),
   ...((a.data as Record<string, unknown>).auto === true ? { auto: true } : {}),
   ...(Array.isArray((a.data as Record<string, unknown>).attachments)
     ? { attachments: (a.data as { attachments: { id: string; title: string }[] }).attachments }
     : {}),
   createdAt: a.createdAt.toISOString(),
 });
+
+/** Who an `assigned` event is about. */
+function assignedIn(data: unknown): WorkActor | null {
+  const a = (data as { assignee?: { type?: unknown; id?: unknown } | null }).assignee;
+  return a && (a.type === "person" || a.type === "agent") && typeof a.id === "string"
+    ? { type: a.type, id: a.id }
+    : null;
+}
 
 /** The code and params of an activity event, from its `event` and `data` (older rows lacking a param keep `text`). */
 function eventDetail(event: string | null, data: Record<string, unknown>) {
@@ -807,18 +867,7 @@ function eventDetail(event: string | null, data: Record<string, unknown>) {
     case "priority_changed":
       return s(data.to) ? out(event, { priority: s(data.to) as string }) : {};
     case "assigned":
-      return "assignee" in data ? out(data.assignee ? "assigned" : "unassigned") : {};
-    // The card's people (ADR 0186): names are kept in the row, so the history reads right after a rename.
-    case "assignee_added":
-    case "assignee_removed":
-    case "principal_changed":
-      return s(data.name) ? out(event, { name: s(data.name) as string }) : {};
-    case "agent_replaced": {
-      const named = (v: unknown) => s((v as { name?: unknown } | null)?.name);
-      return named(data.from) && named(data.to)
-        ? out(event, { from: named(data.from) as string, to: named(data.to) as string })
-        : {};
-    }
+      return "assignee" in data ? out(data.assignee && data.removed !== true ? "assigned" : "unassigned") : {};
     case "due_date":
       if (!("dueDate" in data)) return {};
       return s(data.dueDate) ? out("due_date_set", { date: s(data.dueDate) as string }) : out("due_date_removed");
@@ -884,21 +933,6 @@ export async function publishToTaskReaders(
 const announce = (deps: IssueDeps, orgId: string, issue: IssueView, type: "issue.created" | "issue.updated") =>
   publishToTaskReaders(deps, orgId, issue, { type, issue });
 
-/**
- * Tells whoever sees each card that it changed, for cards changed outside `updateIssue` (a person who left was dropped
- * from them, ADR 0186). The views are read in batches of 100 cards, one query for each batch, then one event a card.
- */
-export async function announceIssuesChanged(deps: IssueDeps, orgId: string, ids: string[]) {
-  if (!deps.pubsub) return;
-  for (let at = 0; at < ids.length; at += 100) {
-    const rows = await deps.db
-      .select()
-      .from(issues)
-      .where(and(eq(issues.orgId, orgId), inArray(issues.id, ids.slice(at, at + 100))));
-    for (const view of await views(deps.db, rows)) await announce(deps, orgId, view, "issue.updated");
-  }
-}
-
 /** Creates an issue with the next number of the org. */
 export async function createIssue(
   deps: IssueDeps,
@@ -946,20 +980,15 @@ export async function createIssue(
   // step, its parent's.
   const madeIn = input.channelId ?? (actor.type === "agent" ? actor.channelId : null);
   const made = madeIn ? await conversationOf(db, orgId, madeIn) : null;
-  // Who is on the card, by the same rule a change later follows (ADR 0186).
-  const change: AssigneeChange = {
-    ...(input.assignees ? { assignees: input.assignees } : input.assignee ? { assignee: input.assignee } : {}),
-    ...(input.addAssignees ? { add: input.addAssignees } : {}),
-  };
-  const planned = planAssignees({ agentId: null, people: [] }, change);
+  const assignees = cleanAssignees(input.assignees ?? []);
   const scope: TaskScope = parent?.restricted
     ? parent
     : parent?.channelId
       ? { ...WORKSPACE_SCOPE, channelId: parent.channelId }
       : input.audience
-        ? await chosenScope(db, actor, orgId, input.audience, planned.people)
+        ? await chosenScope(db, actor, orgId, input.audience, peopleOf(assignees))
         : (made?.scope ?? { ...WORKSPACE_SCOPE, channelId: made?.tiedTo ?? input.channelId ?? null });
-  await checkAssignees(db, orgId, { agentId: null, people: [] }, change, scope);
+  await checkAssignees(db, orgId, assignees, scope);
   const project = input.projectId ? await projectForTask(db, orgId, input.projectId) : null;
   // Born in a column (ADR 0176): it takes that column's stage, and no `issue.moved` fires for a card starting there.
   const bornIn = input.columnId ? await columnForMove(db, orgId, input.columnId, input.projectId ?? null) : null;
@@ -998,8 +1027,7 @@ export async function createIssue(
       })
       .returning();
     if (!issue) throw new Error("issue insert returned nothing");
-    // The one writer of who is on a card; the creation's history is its own `created` event.
-    await applyAssignees(tx, issue, change, author);
+    await setAssignees(tx, issue, assignees);
     await addActivity(tx, issue, {
       kind: "event",
       author,
@@ -1022,8 +1050,8 @@ export async function createIssue(
   const fresh = (await reload(db, row)) ?? row;
   const view = await one(db, fresh);
   await announce(deps, orgId, view, "issue.created");
-  if (planned.people.length > 0) {
-    await notifyIssueChanged(deps, author, null, fresh, { before: [], after: planned.people }).catch(() => {});
+  if (peopleOf(assignees).length > 0) {
+    await notifyIssueChanged(deps, author, null, row, { added: assignees, removed: [] }).catch(() => {});
   }
   // Routines on `issue.created` (ADR 0053 §6.5): never for an issue a routine or an unattended run created
   // (a routine would trigger itself), only for routines whose creator can see the issue, and with its id,
@@ -1093,6 +1121,10 @@ export async function getIssueDetail(
       .orderBy(asc(issues.number)),
   ]);
   const subIssues: IssueDetailView["subIssues"] = [];
+  const assignees = await assigneesOf(
+    db,
+    children.map((c) => c.id),
+  );
   for (const c of children) {
     if (!(await canSee(db, actor, orgId, c))) continue;
     subIssues.push({
@@ -1100,7 +1132,7 @@ export async function getIssueDetail(
       number: c.number,
       title: c.title,
       status: c.status,
-      assignee: c.assigneeType && c.assigneeId ? { type: c.assigneeType as WorkActor["type"], id: c.assigneeId } : null,
+      assignees: assignees.get(c.id) ?? [],
     });
   }
   return { ...view, subIssues };
@@ -1114,15 +1146,16 @@ export async function listIssues(
   filters: {
     q?: string;
     status?: IssueStatus;
-    /** Leave out the tasks in that status: before the cap, so they cannot spend it (ADR 0181). */
+    /** Leave out the tasks in that status: before the cap, so they cannot spend it (ADR 0225). */
     notStatus?: IssueStatus;
+    /** Only the tasks this person or agent is on, alone or with others. */
     assignee?: WorkActor;
     parentIssueId?: string;
     /** Only that project's tasks; `none`: the ones with no project. */
     projectId?: string;
-    /** Only the tasks of that space's boards (ADR 0174): every board of a company at once. */
+    /** Only the tasks of that space's boards (ADR 0219): every board of a company at once. */
     spaceId?: string;
-    /** Only the live open tasks that sit in a column that waits for a person (ADR 0184), whoever they are assigned to. */
+    /** Only the live open tasks that sit in a column that waits for a person (ADR 0228), whoever they are assigned to. */
     waitingForPerson?: boolean;
     /** Only the tasks sitting in a column with one of these keys (`columnKey`), on any board of the workspace. */
     columnKeys?: string[];
@@ -1152,12 +1185,7 @@ export async function listIssues(
         filters.spaceId
           ? sql`${issues.projectId} in (select id from issue_projects where space_id = ${filters.spaceId} and org_id = ${orgId})`
           : undefined,
-        // A person is on a card as its principal or beside it (ADR 0186); an agent is only ever the principal.
-        filters.assignee
-          ? filters.assignee.type === "person"
-            ? onCardSql("issues", sql`${filters.assignee.id}::text`)
-            : and(eq(issues.assigneeType, "agent"), eq(issues.assigneeId, filters.assignee.id))
-          : undefined,
+        filters.assignee ? assignedSql("issues", filters.assignee.type, sql`${filters.assignee.id}`) : undefined,
         // The factory's own rule (`factoryHome`): a live task, on a board and a company that are not archived.
         filters.waitingForPerson
           ? sql`exists (select 1 from ${issues} w
@@ -1241,22 +1269,12 @@ export async function updateIssue(
   const current = await findVisible(db, actor, orgId, { id: issueId });
   if (patch.status && !STATUSES.includes(patch.status)) throw new ValidationError("invalid status");
   if (patch.priority && !PRIORITIES.includes(patch.priority)) throw new ValidationError("invalid priority");
-  // Who is on the card changes by one rule, whichever door asks (ADR 0186): the plan runs in the transaction below.
-  const change: AssigneeChange = {
-    ...(patch.assignees !== undefined ? { assignees: patch.assignees } : {}),
-    ...(patch.assignee !== undefined ? { assignee: patch.assignee } : {}),
-    ...(patch.removeAssignees !== undefined ? { remove: patch.removeAssignees } : {}),
-    ...(patch.addAssignees !== undefined ? { add: patch.addAssignees } : {}),
-    ...(patch.principal !== undefined ? { principal: patch.principal } : {}),
-  };
-  const changesPeople = Object.keys(change).length > 0;
-  if (changesPeople) {
-    const co = (await coAssigneesOf(db, [current.id])).get(current.id) ?? [];
-    const now = assignmentOf(current, co);
-    // The rules refuse first, with their own codes; the transaction plans again on the locked row.
-    planAssignees(now, change);
-    await checkAssignees(db, orgId, now, change, current);
-  }
+  const had = patch.assignees !== undefined ? await assigneesOfIssue(db, current.id) : [];
+  const assignees = patch.assignees !== undefined ? cleanAssignees(patch.assignees) : null;
+  const joined = assignees ? assigneesNotIn(assignees, had) : [];
+  const left = assignees ? assigneesNotIn(had, assignees) : [];
+  // Whoever is on it already stays as they are: only someone new is checked.
+  await checkAssignees(db, orgId, joined, current);
   const author = actorOf(actor);
   const set: Partial<typeof issues.$inferInsert> = { updatedAt: new Date() };
   const events: { text: string; event: string; data?: Record<string, unknown> }[] = [];
@@ -1293,6 +1311,11 @@ export async function updateIssue(
   if (patch.priority && patch.priority !== current.priority) {
     set.priority = patch.priority;
     events.push({ text: "changed the priority", event: "priority_changed", data: { to: patch.priority } });
+  }
+  // One event for each person or agent put on the task or taken off it; a new order alone is no event.
+  for (const assignee of joined) events.push({ text: "assigned the issue", event: "assigned", data: { assignee } });
+  for (const assignee of left) {
+    events.push({ text: "removed an assignee", event: "assigned", data: { assignee, removed: true } });
   }
   if (patch.dueDate !== undefined) {
     set.dueDate = checkDate(patch.dueDate) ?? null;
@@ -1404,52 +1427,46 @@ export async function updateIssue(
         data: { artifactIds: removed, files },
       });
   }
-  const { row, people } = await db.transaction(async (tx) => {
-    // First, so the row is locked and planned before anything else of this change is written.
-    const people = changesPeople
-      ? await applyAssignees(tx, current, change, author, (locked) =>
-          // Again on the locked row: whoever is on the card now counts, so a person removed meanwhile is checked.
-          checkAssignees(tx as unknown as Database, orgId, locked, change, current),
-        )
-      : null;
+  const { row, ended } = await db.transaction(async (tx) => {
     const [updated] = await tx.update(issues).set(set).where(eq(issues.id, current.id)).returning();
     if (!updated) throw new NotFoundError("Issue not found");
-    for (const e of [...events, ...(people?.events ?? [])])
-      await addActivity(tx, updated, { kind: "event", author, ...e });
+    if (assignees && !sameAssignees(assignees, had)) await setAssignees(tx, updated, assignees);
+    for (const e of events) await addActivity(tx, updated, { kind: "event", author, ...e });
     await enqueueIndex(tx, { orgId, kind: "issue", sourceId: updated.id });
     if (set.description !== undefined && (set.description.includes("[[") || current.description.includes("[["))) {
       await syncWikiLinks(tx, orgId, { type: "issue", id: updated.id, channelId: updated.channelId }, set.description);
     }
-    return { row: updated, people };
+    // A task the right hand handed over that ends here: it tells the person it was for (`right-hand-follow.ts`).
+    const ended =
+      updated.status !== current.status
+        ? await queueTaskEnd(tx, updated, { ...author, ...(actor.type === "agent" ? { runId: actor.runId } : {}) })
+        : null;
+    return { row: updated, ended };
   });
   await linkRun(deps, actor, row);
   // A new agent assignee joins the task's conversation (ADR 0145): a mention there reaches it.
-  if (people?.after.agentId && people.after.agentId !== people.before.agentId && row.conversationChannelId) {
-    await admitTaskAgents(db, orgId, row.conversationChannelId, { ids: [people.after.agentId] });
+  if (agentsOf(joined).length > 0 && row.conversationChannelId) {
+    await admitTaskAgents(db, orgId, row.conversationChannelId, { ids: agentsOf(joined) });
   }
   const view = await one(db, (await reload(db, row)) ?? row);
   await announce(deps, orgId, view, "issue.updated");
-  // A card that changed column or stage: the routines on `issue.moved` hear it (ADR 0175).
+  // A card that changed column or stage: the routines on `issue.moved` hear it (ADR 0220).
   if (view.status !== current.status || (view.columnId ?? null) !== (current.columnId ?? null)) {
     await fireIssueMoved(deps, orgId, { view, from: current, actor }).catch(() => 0);
   }
   // The inbox: a new assignee, a status change for whoever follows it.
-  if (changesPeople || row.status !== current.status) {
-    await notifyIssueChanged(
-      deps,
-      author,
-      current,
-      row,
-      people ? { before: people.before.people, after: people.after.people } : undefined,
-    ).catch(() => {});
+  if (joined.length > 0 || left.length > 0 || row.status !== current.status) {
+    await notifyIssueChanged(deps, author, current, row, { added: joined, removed: left }).catch(() => {});
   }
+  // After the inbox, so the row of this change is there to be done for them. Its job tells it if this fails.
+  if (ended) await tellTaskEnd(deps, orgId, ended).catch(() => {});
   return view;
 }
 
 const reload = async (db: Database, row: IssueRow) => (await db.select().from(issues).where(eq(issues.id, row.id)))[0];
 
 /**
- * Routines on `issue.moved` (ADR 0175): the card, the column it landed in and the one it left, the board and company it
+ * Routines on `issue.moved` (ADR 0220): the card, the column it landed in and the one it left, the board and company it
  * belongs to, who moved it and how deep in a chain of automations the move already is. A move a routine's own run made
  * never fires that routine, and a chain stops at `MAX_MOVE_HOPS`.
  */
@@ -1477,7 +1494,7 @@ async function fireIssueMoved(
         .from(schema.issueProjects)
         .where(eq(schema.issueProjects.id, view.project.id))
     : [];
-  // An archived board's rules stay listed and never fire (ADR 0175 addendum).
+  // An archived board's rules stay listed and never fire (ADR 0220 addendum).
   const archivedBoard = board?.archivedAt && view.project ? view.project.id : null;
   const archivedColumns = new Set(
     archivedBoard ? (await boardColumnsOf(db, orgId, archivedBoard)).map((c) => c.id) : [],
@@ -1571,7 +1588,7 @@ async function linkRun(deps: IssueDeps, actor: IssueActor, issue: IssueRow) {
 }
 
 /**
- * The workspace's PO writes specs and never develops (ADR 0185): its work on a card leaves the card's status and
+ * The workspace's PO writes specs and never develops (ADR 0229): its work on a card leaves the card's status and
  * column alone, or a card a person put in "Especificar" would jump to the developers' column and end as "Feito".
  */
 async function isPoAgent(db: Executor, orgId: string, agentId: string) {
@@ -1591,7 +1608,7 @@ async function startedWork(deps: IssueDeps, issue: IssueRow, agentId: string, ru
   if (await isPoAgent(deps.db, issue.orgId, agentId)) return;
   const [current] = await deps.db.select().from(issues).where(eq(issues.id, issue.id));
   const isMineToStart =
-    current?.status === "todo" && current.assigneeType === "agent" && current.assigneeId === agentId;
+    current?.status === "todo" && (await isAssigned(deps.db, current.id, { type: "agent", id: agentId }));
   if (!current || !isMineToStart) return;
   await deps.db.transaction(async (tx) => {
     const [updated] = await tx
@@ -1693,7 +1710,9 @@ async function liveFiles(db: Executor, orgId: string, ids: string[], by: WorkAct
 
 /**
  * A limited task's files stay with it: a file its author brings that isn't in any conversation would be the whole
- * workspace's in the Drive, so it moves to the task's conversation, read by who sees the task (ADR 0151).
+ * workspace's in the Drive, so it moves to the task's conversation, read by who sees the task (ADR 0151). One shared
+ * with everyone there is then its conversation's alone; a list it was shared with stays (ADR 0157, amendment
+ * 2026-11-17).
  */
 async function keepFilesWithTask(
   deps: IssueDeps,
@@ -1707,7 +1726,10 @@ async function keepFilesWithTask(
   const by = actorOf(actor);
   const moved = await db
     .update(artifacts)
-    .set({ channelId })
+    .set({
+      channelId,
+      share: sql`(case when ${artifacts.share} = 'everyone' then 'conversation' else ${artifacts.share} end)`,
+    })
     .where(
       and(
         eq(artifacts.orgId, task.orgId),
@@ -1886,7 +1908,7 @@ export async function issueFromMessage(
 }
 
 /**
- * "Ask Ada to implement": assigns the agent and starts its work in the task's own conversation (ADR 0145), where
+ * "Ask Ada to implement": puts the agent first among the task's assignees and starts its work in the task's own conversation (ADR 0145), where
  * everyone who sees the task follows it and talks to it, on a short line from the person ("Please implement issue
  * #N", `meta.issueWorkStart`). The instructions never show in the chat: the run's context builds them from the
  * issue (`issueWorkBrief`). Criteria, PR and status stay on the issue. An issue made from a channel message gets one
@@ -1912,15 +1934,19 @@ export async function askAgentToImplement(
   const agent = await getAgent(db, orgId, agentId);
   if (!agent || agent.archivedAt) throw new NotFoundError("Agent not found");
   if (!canTalkTo(agent, userId, await speakerFor(db, orgId, userId))) throw await audienceError(db, agent);
-  const updated =
-    issue.assigneeType === "agent" && issue.assigneeId === agentId
-      ? await one(db, issue, userId)
-      : await updateIssue(deps, actor, orgId, issue.id, { assignee: { type: "agent", id: agentId } });
+  // It goes first among whoever has the task, everyone else staying: the first agent is the one the task's
+  // conversation answers with (ADR 0188).
+  const had = await assigneesOfIssue(db, issue.id);
+  const asked: WorkActor = { type: "agent", id: agentId };
+  const first = [asked, ...assigneesNotIn(had, [asked])];
+  const updated = sameAssignees(had, first)
+    ? await one(db, issue, userId)
+    : await updateIssue(deps, actor, orgId, issue.id, { assignees: first });
   const conversation = await ensureTaskConversation(db, issue.id);
   await admitTaskAgents(db, orgId, conversation.channelId, { ids: [agentId] });
   const card: IssueWorkMeta = { issueId: issue.id, number: issue.number, title: issue.title, agentId };
   const author: WorkActor = by ? { type: "agent", id: by.agentId } : { type: "person", id: userId };
-  const { start, runId } = await db.transaction(async (tx) => {
+  const { start, runId, consultationId } = await db.transaction(async (tx) => {
     const consultationId = Bun.randomUUIDv7();
     // What starts the run, in the conversation: short and human (shown in the person's language).
     const start = await insertMessage(tx, {
@@ -1939,7 +1965,7 @@ export async function askAgentToImplement(
     });
     const { run, steered } = await enqueueRunJob(tx, start, agentId);
     const targetRunId = run?.id ?? steered;
-    if (by)
+    if (by) {
       await tx.insert(agentConsultations).values({
         id: consultationId,
         orgId,
@@ -1954,8 +1980,13 @@ export async function askAgentToImplement(
         question: `Work on task #${issue.number}: ${issue.title}`.slice(0, 2_000),
         chain: [by.agentId],
         expiresAt: new Date(Date.now() + TASK_HAND_OFF_TTL_MS),
+        forUserId: (await runAuthorityById(tx, orgId, by.runId)).personId,
+        askerReadOutside: await runReadOutsideById(tx, orgId, by.runId),
       });
-    return { start, runId: run?.id ?? null };
+      // The right hand looks at it again a day later, for the person it handed it over for.
+      await queueTaskCheck(tx, orgId, consultationId);
+    }
+    return { start, runId: run?.id ?? null, consultationId: by ? consultationId : null };
   });
   await publishMessageCreated(pubsub, messageView(start));
   if (runId) {
@@ -1993,6 +2024,8 @@ export async function askAgentToImplement(
   });
   await announceTaken(deps, issue, card);
   await startedWork(deps, issue, agentId, runId ? [runId] : []);
+  // Handed by the right hand: the work reports in the person's DM, and this card follows it by itself.
+  if (consultationId) await handOverWork(deps, consultationId).catch(() => null);
   const fresh = await reload(db, issue);
   if (!fresh) return updated;
   const view = await one(db, fresh);
@@ -2059,8 +2092,9 @@ export async function linkRunToIssue(
     .from(issues)
     .where(and(eq(issues.id, issueId), eq(issues.orgId, run.orgId)));
   // The issue's work is its latest linked run: a run in the thread of an agent it was taken from would hide
-  // the assignee's.
-  if (issue?.assigneeType !== "agent" || issue.assigneeId !== run.agentId || !OPEN_FOR_WORK.has(issue.status)) return;
+  // its assignees'.
+  if (!issue || !OPEN_FOR_WORK.has(issue.status)) return;
+  if (!(await isAssigned(deps.db, issue.id, { type: "agent", id: run.agentId }))) return;
   await startedWork(deps, issue, run.agentId, [run.id]);
 }
 
@@ -2094,8 +2128,7 @@ export async function openTasksBrief(
     .where(
       and(
         eq(issues.orgId, orgId),
-        eq(issues.assigneeType, "agent"),
-        eq(issues.assigneeId, agentId),
+        assignedSql("issues", "agent", sql`${agentId}`),
         inArray(issues.status, [...OPEN_FOR_WORK]),
         // What `canSee` lets it read from here: an issue of a private channel or DM would leak its title.
         or(
@@ -2164,7 +2197,32 @@ export async function linkIssueToWork(
   run: { id: string; orgId: string; agentId: string; channelId: string; issueId: string | null },
   input: { number?: number; description: string },
 ): Promise<string | null> {
-  const actor: IssueActor = { type: "agent", agentId: run.agentId, channelId: run.channelId, runId: run.id };
+  let actor: IssueActor = { type: "agent", agentId: run.agentId, channelId: run.channelId, runId: run.id };
+  let source: IssueSource = {
+    type: "agent",
+    agentId: run.agentId,
+    workId: work.id,
+    channelId: work.channelId,
+    messageId: work.anchorMessageId,
+  };
+  // Handed work: the card is the hand-off's, made by the agent that handed it, from where the person asked it.
+  const [handOff] = work.consultationId
+    ? await deps.db
+        .select({ agentId: agentConsultations.askerAgentId, runId: agentRuns.id, ask: agentRuns.triggerMessageId })
+        .from(agentConsultations)
+        .innerJoin(agentRuns, eq(agentRuns.id, agentConsultations.askerRunId))
+        .where(eq(agentConsultations.id, work.consultationId))
+    : [];
+  if (handOff) {
+    actor = { type: "agent", agentId: handOff.agentId, channelId: work.channelId, runId: handOff.runId };
+    source = {
+      type: "agent",
+      agentId: handOff.agentId,
+      workId: work.id,
+      channelId: work.channelId,
+      messageId: handOff.ask,
+    };
+  }
   let issueId: string | null = null;
   if (input.number !== undefined) {
     // Only a card the person behind the work can read, in this conversation or workspace-wide: its updates must not
@@ -2178,20 +2236,14 @@ export async function linkIssueToWork(
       found && !found.restricted && (found.channelId === null || found.channelId === work.channelId) ? found.id : null;
   }
   issueId ??= run.issueId;
-  // A PO chat makes no card nobody confirmed (ADR 0185): the work goes without one, the PO may propose it.
+  // A PO chat makes no card nobody confirmed (ADR 0229): the work goes without one, the PO may propose it.
   if (!issueId && (await poScopeOf(deps.db, run.orgId, run.channelId))) return null;
   if (!issueId) {
     const created = await createIssue(deps, actor, run.orgId, {
       title: work.title,
       description: input.description,
-      assignee: { type: "agent", id: run.agentId },
-      source: {
-        type: "agent",
-        agentId: run.agentId,
-        workId: work.id,
-        channelId: work.channelId,
-        messageId: work.anchorMessageId,
-      },
+      assignees: [{ type: "agent", id: run.agentId }],
+      source,
       channelId: work.channelId,
     });
     issueId = created.id;
@@ -2232,7 +2284,7 @@ export async function setWorkIssueState(
     if (view.state && view.state !== "working")
       blocked = { reason: view.state, since: current.blocked?.since ?? now.toISOString() };
   }
-  // The PO's work on a card never moves it (ADR 0185): the status and the column stay where a person put them.
+  // The PO's work on a card never moves it (ADR 0229): the status and the column stay where a person put them.
   if (await isPoAgent(deps.db, work.orgId, work.agentId)) status = current.status;
   const author: WorkActor = { type: "agent", id: work.agentId };
   const row = await deps.db.transaction(async (tx) => {
@@ -2254,6 +2306,7 @@ export async function setWorkIssueState(
         event: "status_changed",
         data: { from: current.status, to: status, auto: true },
       });
+      await queueTaskEnd(tx, updated, author);
     }
     if (input.update) {
       await addActivity(tx, updated, {
@@ -2329,25 +2382,22 @@ export async function setIssueAudience(
 ) {
   const { db } = deps;
   const current = await findVisible(db, actor, orgId, { id: issueId });
-  // Every person on the card stays on it, as the assignee always did; so does each person on a step (ADR 0186).
-  const onCards = new Map<string, string[]>();
-  const stepRows = await stepsOf(db, current);
-  const coRows = await coAssigneesOf(db, [current.id, ...stepRows.map((s) => s.id)]);
-  for (const row of [current, ...stepRows]) {
-    onCards.set(row.id, assignmentOf(row, coRows.get(row.id) ?? []).people);
-  }
-  const scope = await chosenScope(db, actor, orgId, audience, onCards.get(current.id) ?? []);
+  const scope = await chosenScope(db, actor, orgId, audience, peopleOf(await assigneesOfIssue(db, current.id)));
   const tied = (await tiedPeople(db, [current])).has(current.channelId ?? "");
   const unchanged = current.restricted
     ? scope.restricted && sameList(scope.audienceUserIds, current.audienceUserIds)
     : !scope.restricted && !tied;
   if (unchanged) return one(db, current, readerOf(actor));
   const steps = scope.restricted
-    ? stepRows.filter(
+    ? (await stepsOf(db, current)).filter(
         (s) => !s.restricted || (current.restricted && sameList(s.audienceUserIds, current.audienceUserIds)),
       )
     : [];
   const changed = [current.id, ...steps.map((s) => s.id)];
+  const stepAssignees = await assigneesOf(
+    db,
+    steps.map((s) => s.id),
+  );
   const readers = await conversationReaders(db, orgId, changed);
   const row = await db.transaction(async (tx) => {
     const [updated] = await tx
@@ -2357,7 +2407,7 @@ export async function setIssueAudience(
       .returning();
     if (!updated) throw new NotFoundError("Issue not found");
     for (const s of steps) {
-      const assigned = onCards.get(s.id) ?? [];
+      const assigned = peopleOf(stepAssignees.get(s.id) ?? []);
       await tx
         .update(issues)
         .set({ ...scope, audienceUserIds: [...new Set([...scope.audienceUserIds, ...assigned])].sort() })
@@ -2396,4 +2446,16 @@ export async function setIssueAudience(
     event: { type: "issue.audience", issueId: current.id },
   });
   return one(db, (await reload(db, row)) ?? row, readerOf(actor));
+}
+
+/**
+ * Someone is gone from the workspace, a person who left it or an agent archived or deleted: they leave every task they
+ * were on (ADR 0188), and whoever sees those tasks hears it. `taken`: the tasks, when the caller took them off already
+ * (`dropAssignee`, inside its own transaction).
+ */
+export async function unassignGone(deps: IssueDeps, orgId: string, who: WorkActor, taken?: string[]) {
+  const ids = taken ?? (await dropAssignee(deps.db, orgId, who));
+  if (ids.length === 0) return;
+  const rows = await deps.db.select().from(issues).where(inArray(issues.id, ids));
+  for (const view of await views(deps.db, rows)) await announce(deps, orgId, view, "issue.updated").catch(() => {});
 }

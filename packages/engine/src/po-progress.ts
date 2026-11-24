@@ -7,7 +7,7 @@ import { specCodeOf } from "./po-specs";
 import { taskSeenSql } from "./task-access";
 
 /**
- * The progress panel of a company's PO chat (ADR 0185 addendum): the company's open cards for one viewer, grouped by the
+ * The progress panel of a company's PO chat (ADR 0229 addendum): the company's open cards for one viewer, grouped by the
  * columns of its boards, read when the panel opens and again on the events the app already hears (a task changed, a
  * proposal's spec moved on). Nothing is stored. The visible cards are `taskSeenSql`'s (ADR 0151), as every list of
  * tasks; canceled cards and the cards of an archived board are in no number.
@@ -18,7 +18,7 @@ export const PO_PROGRESS_GROUP_ROWS = 8;
 
 /** The column that ends the head groups: everything open after it is the tail. */
 const READY_FOR_DEV = "ready for dev";
-/** The columns a finished spec waits in for the person (ADR 0185): "Especificado", on older boards "Priorizado". */
+/** The columns a finished spec waits in for the person (ADR 0229): "Especificado", on older boards "Priorizado". */
 const SPECIFIED = "especificado";
 const PRIORITIZED = "priorizado";
 const OPEN_STAGES: readonly IssueStatus[] = ["todo", "in_progress", "in_review"];

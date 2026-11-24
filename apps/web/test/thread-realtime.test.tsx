@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { setupDom } from "@agenteschat/ui/testing/dom";
 
 setupDom();
@@ -563,7 +563,7 @@ describe("other conversations shown as a thread", () => {
     const list = api.issues.list;
     api.issues.list = async (orgId, filters) =>
       (await list(orgId, filters)).map((i) => (i.number === 131 ? { ...i, conversation: { ...conversation } } : i));
-    const r = await renderApp(`/org/${ORG_ID}/issues`, { api });
+    const r = await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     const socket = r.sockets.last();
     await act(async () => socket.open());
@@ -572,8 +572,14 @@ describe("other conversations shown as a thread", () => {
       document.querySelector('[data-card="131"] .ac-factline__fact[title$="mensagens"]')?.textContent;
     expect(talking()).toBe("3");
     conversation.count = 4;
-    await act(async () => socket.push({ type: "event", scope: "org", event: { type: "issue.updated" } }));
-    await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+    // No random spread on the board's read, so the wait stays inside Bun's default timeout.
+    const random = spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await act(async () => socket.push({ type: "event", scope: "org", event: { type: "issue.updated" } }));
+      await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+    } finally {
+      random.mockRestore();
+    }
     await settle(5);
     expect(talking()).toBe("4");
   });

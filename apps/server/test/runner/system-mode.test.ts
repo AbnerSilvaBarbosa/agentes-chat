@@ -491,6 +491,7 @@ test("a system-mode runner (root) without workers does no agent work; machine-le
     "account",
     "access.request",
     "access.reduce",
+    "access.allow",
     // Root refuses it, and every op with a browser profile, until profiles have OS users of their own (ADR 0110).
     "browser.profile.delete",
     "desktop.session.start",
@@ -515,10 +516,29 @@ test("a system-mode runner (root) without workers does no agent work; machine-le
     "phone.pair.cancel",
     // Pausing is the whole computer's, set by whoever runs it, not by one agent.
     "pause.set",
+    "limits.set",
     "phone.look",
     // The Mac's pick of iPhones on its Wi-Fi, kept beside the phones' locks.
     "phone.wifi",
+    // Root takes an agent's holds as that agent's own user, and checks its program is its own (ADR 0176).
+    "keep.start",
+    "keep.end",
+    // Fixing the Mac's own Xcode is the computer's; root answers it can't (no person's screen to ask on).
+    "xcode.fix",
+    // Looking again for the coding CLIs only reads the computer's PATH: root answers it.
+    "clis.check",
+    // Root installs nothing for the agents' users (the computer's setup does): it answers unsupported.
+    "cli.install",
+    // Opening Xcode on the Mac, beside its fix (listed in `MACHINE_OPS` order).
+    "xcode.open",
+    // Repairing an iPhone's test helper is the phones' process's, beside their locks.
+    "phone.repair",
+    // A problem report reads the runner's own log and state: root's.
+    "report.collect",
   ]);
+  const install = { op: "cli.install", action: "start", tool: "claude" } as unknown as MachineRequest;
+  const installer = { ...ctx, cliInstall: () => ({ install: { tool: "claude" as const, state: "running" as const } }) };
+  expect(await handleRequest(installer, install, scope)).toEqual({ install: { tool: "claude", state: "unsupported" } });
 
   if (posix) {
     system = false;
@@ -734,9 +754,9 @@ test.if(posix)(
     expect(r.out).toBe(
       `${head}◒  Installing the packages for the agents' isolation\n◇  The packages for the agents' isolation\n`,
     );
-    // nft for the loopback guard (system mode won't start without it), ss for the bind check. Chrome's libraries
-    // come with Google Chrome's own package.
-    expect(ISOLATION_APT_PACKAGES).toEqual(["nftables", "iproute2"]);
+    // nft for the loopback guard (system mode won't start without it), ss for the bind check, setfacl for the shared
+    // folder and the cached repositories. Chrome's libraries come with Google Chrome's own package.
+    expect(ISOLATION_APT_PACKAGES).toEqual(["nftables", "iproute2", "acl"]);
     expect(r.calls).toBe(update + install(ISOLATION_APT_PACKAGES));
 
     // With --desktop: one install with the screens' packages too.

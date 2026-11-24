@@ -6,7 +6,7 @@ import { useOrg } from "@/components/org-context";
 import { useDirectory } from "@/hooks/useDirectory";
 
 /**
- * "Conversar com o PO": opens the PO's chat about one company (ADR 0185), the PO's face before the words. A company's
+ * "Conversar com o PO": opens the PO's chat about one company (ADR 0229), the PO's face before the words. A company's
  * page in Tarefas and its panel on Início both draw it, so the entry is one component.
  */
 export function TalkToPo({ agentId, spaceId }: { agentId: string; spaceId: string }) {

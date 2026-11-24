@@ -12,10 +12,12 @@ import type { IconName } from "@agenteschat/ui";
 export type SettingsSection =
   | "account"
   | "notifications"
+  | "download"
   | "approvals"
   | "apps"
   | "general"
   | "members"
+  | "invites"
   | "roles"
   | "vault"
   | "audit"
@@ -45,6 +47,8 @@ export const SETTINGS_SECTIONS: {
   { id: "account", icon: "person", allowed: () => true },
   // What reaches my devices as a notification here (ADR 0071 §8).
   { id: "notifications", icon: "bell", allowed: () => true },
+  // The desktop app for this computer and the phone apps, for everyone: a tab of Your account.
+  { id: "download", icon: "download", allowed: () => true },
   // Who approves for me, and whom I approve for (ADR 0139).
   { id: "approvals", icon: "approve", allowed: () => true },
   // AI apps (ADR 0119): each person connects their own, in this workspace.
@@ -58,7 +62,10 @@ export const SETTINGS_SECTIONS: {
   // own speech engine, so the section has nothing to offer there (product decision).
   { id: "voice", icon: "mic", allowed: (o, server) => selfHosted(server) && can(o, "configure") },
   { id: "members", icon: "members", allowed: () => true },
-  { id: "roles", icon: "audiencePeople", allowed: (o) => can(o, "manage_roles") },
+  // Convites (ADR 0184): People's second tab, for who may invite: the requests waiting, the links and the e-mails.
+  { id: "invites", icon: "mail", allowed: (o) => can(o, "invite_people") },
+  // Cargos (ADR 0085): an entry of its own, for who manages them.
+  { id: "roles", icon: "shield", allowed: (o) => can(o, "manage_roles") },
   // "IA e uso", for everyone (ADR 0063): the workspace's AI accounts with their meters, what each person does with
   // their own, and the agents whose details they see, in tokens and percentages. The workspace's API keys only for who
   // manages them, money and the workspace's report only for who has `view_usage`.
@@ -66,13 +73,14 @@ export const SETTINGS_SECTIONS: {
   // Only where a billing service runs (ADR 0079), for who may open it.
   { id: "billing", icon: "coin", allowed: (o, server) => !!server?.billingUrl && can(o, "manage_billing") },
   { id: "connectors", icon: "plug", allowed: () => true },
-  { id: "skills", icon: "bulb", allowed: (o) => can(o, "manage_agents") },
+  // Every member keeps skills of their own there; the team's library is changed by who manages agents.
+  { id: "skills", icon: "bulb", allowed: () => true },
   // Every member keeps their own logins, keys and contacts there; team items show to who they're shared with (ADR 0144).
   { id: "vault", icon: "lock", allowed: () => true },
   { id: "access", icon: "agent", allowed: (o) => can(o, "manage_agents") },
   // Every member sees the devices and can connect one (ADR 0025): computers and the phones they reach.
   { id: "devices", icon: "computer", allowed: (o) => can(o, "read") },
-  // The status sets a board starts from (ADR 0177): every member reads them, who may create tasks changes them.
+  // The status sets a board starts from (ADR 0221): every member reads them, who may create tasks changes them.
   { id: "tasks", icon: "layers", allowed: (o) => can(o, "read") },
   { id: "storage", icon: "drive", allowed: (o) => can(o, "configure") },
   { id: "import", icon: "archiveBox", allowed: (o) => can(o, "create_agents") },
@@ -121,7 +129,7 @@ export function settingsNavEntry(
  * `?connected=github` (back from OAuth), `?review=1` (a custom MCP server to
  * classify), `?mail=connected|failed&account={id}` (back from Gmail/Outlook),
  * `?request={id}&do=approve|deny` (a request to join, from the admins' email),
- * `?delete=1` (Geral's dialog that deletes the workspace), `?install={link}` (Skills, back from connecting GitHub
+ * `?delete=1` (the dialog that deletes the workspace, from Geral or Sua conta), `?create=1` (Cargos' Criar cargo, from ⌘K), `?install={link}` (Skills, back from connecting GitHub
  * in Instalar skill: the link to read again, with `agent` when an agent's card opened it) and `?agent={id}`
  * (Auditoria filtered to that agent).
  */
@@ -141,6 +149,12 @@ export const settingsSearch = (
   agent?: string;
   /** Uso › Pessoas: the person whose month opens (ADR 0141). */
   person?: string;
+  /** Cargos, with Criar cargo open (⌘K). */
+  create?: 1;
+  /** Notificações, with the outside chat app's link dialog open (ADR 0187). */
+  link?: 1;
+  /** Conectores: the service whose page is open (a store entry's key, or a connection's). */
+  service?: string;
 } => ({
   connected: typeof search.connected === "string" ? search.connected : undefined,
   outcome: typeof search.outcome === "string" ? search.outcome : undefined,
@@ -154,4 +168,7 @@ export const settingsSearch = (
   skill: typeof search.skill === "string" ? search.skill : undefined,
   agent: typeof search.agent === "string" ? search.agent : undefined,
   person: typeof search.person === "string" ? search.person : undefined,
+  create: search.create === undefined ? undefined : 1,
+  link: search.link === undefined ? undefined : 1,
+  service: typeof search.service === "string" ? search.service : undefined,
 });

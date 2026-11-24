@@ -17,7 +17,7 @@ async function company(owner: ReturnType<typeof browser>, orgId: string, agentId
   const board = (await (await api("/issue-projects", { json: { name: "Entregas", spaceId: space.id } })).json()) as {
     id: string;
   };
-  await api("/issues", { json: { title: "A", projectId: board.id, assignee: { type: "agent", id: agentId } } });
+  await api("/issues", { json: { title: "A", projectId: board.id, assignees: [{ type: "agent", id: agentId }] } });
   await api("/issues", { json: { title: "B", projectId: board.id } });
   return { api, spaceId: space.id };
 }

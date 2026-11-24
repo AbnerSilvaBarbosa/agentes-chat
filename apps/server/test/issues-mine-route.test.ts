@@ -15,7 +15,7 @@ test("assignee=me lists only the caller's own tasks, canceled ones left out (the
   const api = (path: string, init?: Parameters<typeof owner>[1]) =>
     owner(`/api/app/organizations/${orgId}${path}`, init);
   const make = async (title: string, assignee: { type: "person" | "agent"; id: string } | null) =>
-    (await (await api("/issues", { json: { title, assignee } })).json()) as { id: string };
+    (await (await api("/issues", { json: { title, assignees: assignee ? [assignee] : [] } })).json()) as { id: string };
   await make("Minha aberta", { type: "person", id: meId });
   const dropped = await make("Minha cancelada", { type: "person", id: meId });
   await api(`/issues/${dropped.id}`, { method: "PATCH", json: { status: "canceled" } });

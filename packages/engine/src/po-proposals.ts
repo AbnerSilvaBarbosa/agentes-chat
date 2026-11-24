@@ -26,7 +26,7 @@ export interface PoDeps {
 export const PROPOSAL_LIMITS = { title: 300, summary: 20_000, criteria: 30, criterion: 500 };
 
 /**
- * A PO's proposed card as the chat shows it (ADR 0185), kept in the card message's `meta.cardProposal` and rewritten by
+ * A PO's proposed card as the chat shows it (ADR 0229), kept in the card message's `meta.cardProposal` and rewritten by
  * `syncProposalCard`. `creating` (a confirm in flight) shows as `pending`.
  */
 export interface CardProposalView {
@@ -138,7 +138,7 @@ export async function syncProposalCard(deps: PoDeps, row: ProposalRow): Promise<
 }
 
 /**
- * The PO proposes a card in a PO chat (ADR 0185). Nothing is created: a row waits and a card in the conversation lets
+ * The PO proposes a card in a PO chat (ADR 0229). Nothing is created: a row waits and a card in the conversation lets
  * the person who asked confirm, edit or discard it. Several proposals can wait in one chat. A title equal to an open
  * card of the company that the requester sees is named on the card, never one they cannot see.
  */
@@ -151,6 +151,8 @@ export async function proposeCard(
     channelId: string;
     threadRootId: string;
     triggerMessageId: string;
+    /** The run's `reply_in_thread` (ADR 0214): the card goes under the message that asked. */
+    replyInThread?: boolean;
   },
   input: { title: string; summary?: string; criteria?: string[]; board: string },
 ): Promise<CardProposalView> {
@@ -203,7 +205,7 @@ export async function proposeCard(
     const card = await insertMessage(tx, {
       orgId: run.orgId,
       channelId: run.channelId,
-      threadId: replyThreadOf(run),
+      threadId: replyThreadOf({ ...run, replyInThread: run.replyInThread === true }),
       author: { type: "agent", agentId: run.agentId, runId: run.runId, hop: 1 },
       body: `Card proposal: ${row.title}`,
       meta: { cardProposalId: row.id, cardProposal: view, ...bodyCode("card_proposal", { title: row.title }) },
@@ -245,7 +247,7 @@ async function ownProposal(db: Database, userId: string, orgId: string, id: stri
 }
 
 /**
- * The person who asked confirms: the card is created as them, in the board's "Especificar" column (ADR 0185), with the
+ * The person who asked confirms: the card is created as them, in the board's "Especificar" column (ADR 0229), with the
  * edits they made. One conditional update claims the proposal, so a second Criar, a Descartar or two Criar at once find
  * no row and are refused (`card_proposal.decided`): one card at most. The card's own refusal (no right to post, an
  * archived board) puts the claim back and the proposal stays pending, so another board can be picked.

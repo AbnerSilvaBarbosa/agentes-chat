@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { MachineRequest } from "@agenteschat/adapters/machine-protocol";
+import { ASK_IN_CHAT, approvalMessage, PLAN_MESSAGE } from "@agenteschat/adapters/command-policy";
+import { type MachineRequest, parseBrainEvent } from "@agenteschat/adapters/machine-protocol";
 import { sealSecret, secretAad } from "@agenteschat/adapters/secret-box";
 import {
   type CodexBrainEvent,
@@ -19,6 +20,7 @@ import {
   codexAppServerArgs,
   codexAtLeast,
   codexThreadPolicy,
+  DECLINED_PREFIX,
   decideApproval,
 } from "../../runner/brain-codex-app";
 import { CODEX_WINDOWS_CONFIG } from "../../runner/codex-windows";
@@ -148,6 +150,7 @@ test("version gate and the app-server command line: our overrides, our bridge pe
   expect(args[args.indexOf("sandbox_workspace_write.network_access=false") - 1]).toBe("-c");
   expect(args.join(" ")).not.toContain("network_access=true");
   expect(args).toContain('sandbox_workspace_write.writable_roots=["/w/shared"]');
+  expect(args).toContain(`features.code_mode.direct_only_tool_namespaces=["mcp__${CODEX_MCP_SERVER}"]`);
   expect(args).toContain(`mcp_servers.${CODEX_MCP_SERVER}.args=["/r/runner.js","mcp","--run","proc-0001"]`);
   expect(args).toContain(`mcp_servers.${CODEX_MCP_SERVER}.default_tools_approval_mode="approve"`);
   expect(args.some((a) => a.startsWith("model_auto_compact_token_limit"))).toBe(false);
@@ -167,7 +170,17 @@ test.skipIf(!posix)(
     expect(deltas(first.events)).toBe("pong");
     // The same usage and answer exec gives for this turn (TURN1 of brain-codex.test.ts).
     expect(notDeltas(first.events)).toEqual([
-      { type: "usage", input: 17806, output: 5, source: "plan", cacheRead: 6912 },
+      // One model request: said twice by Codex, counted once.
+      {
+        type: "usage",
+        input: 17806,
+        output: 5,
+        source: "plan",
+        cacheRead: 6912,
+        calls: 1,
+        maxContext: 17806,
+        lastContext: 17806,
+      },
       { type: "done", text: "pong", session: { id: SESSION } },
     ]);
     const [threadStart] = t.rpcs("thread/start");
@@ -204,7 +217,10 @@ test.skipIf(!posix)(
       '{"type":"turn.completed","usage":{"input_tokens":200,"cached_input_tokens":50,"output_tokens":30}}',
     ].flatMap((l) => exec.line(l));
     const execAll = [...execEvents, ...exec.finish({ exitCode: 0, sessionId: SESSION })];
-    expect(notDeltas(second.events)).toEqual(notDeltas(execAll));
+    // Only the app-server says the turn's model requests and the biggest one.
+    const steps = (e: (typeof execAll)[number]) =>
+      e.type === "usage" ? { ...e, calls: 1, maxContext: 200, lastContext: 200 } : e;
+    expect(notDeltas(second.events)).toEqual(notDeltas(execAll.map(steps)));
     // Live text: the message that came whole, then the streamed one.
     expect(deltas(second.events)).toBe("I’ll check the folder now.\n\nDone: tests pass.");
     // One process, one thread; model and effort per turn (xhigh and max are high).
@@ -215,6 +231,26 @@ test.skipIf(!posix)(
     // The computer's own sign-in has a process open: a plan's route there waits (`brain-route.ts`).
     expect(t.app.holds(null)).toBe(true);
     expect(t.app.holds("0193aaaa-bbbb-7ccc-8ddd-eeeeffff0001")).toBe(false);
+  },
+  20_000,
+);
+
+test.skipIf(!posix)(
+  "an image Codex makes: its call starts when Codex starts it, and the picture lands in the agent's folder as a file",
+  async () => {
+    const t = await setup();
+    const turn = start(t.ctx, request(1, "IMAGE please"));
+    await turn.done;
+    const events = notDeltas(turn.events);
+    const started = events.findIndex((e) => e.type === "tool_started");
+    expect(events[started]).toEqual({ type: "tool_started", id: "ig_1", name: "image_generation" });
+    const call = events.findIndex((e) => e.type === "tool_call" && e.name === "image_generation");
+    expect(call).toBeGreaterThan(started);
+    expect(events[call]).toMatchObject({ id: "ig_1", input: { prompt: "A lighthouse at dusk" } });
+    const file = events.find((e) => e.type === "file");
+    expect(file?.type === "file" && file.path).toMatch(/^generated-images\/image-\d{14}-ig1\.png$/);
+    expect(readFileSync(path.join(t.folder, file?.type === "file" ? file.path : ""), "utf8")).toBe("png bytes");
+    expect(events.at(-1)).toMatchObject({ type: "done", text: "Here it is." });
   },
   20_000,
 );
@@ -670,13 +706,17 @@ test("an approval is judged on its script exactly: a second line is a second com
   );
   expect(calls).toEqual([{ tool_name: "Bash", input: { command: "ls\nrm -rf /tmp/elsewhere" } }]);
   const asked: string[] = [];
-  const ask = async (tool: string): Promise<IpcReply> => {
-    asked.push(tool);
+  const ask = async (tool: string, args: Record<string, unknown>): Promise<IpcReply> => {
+    if (!args.refused) asked.push(tool);
     return { ok: true, text: JSON.stringify({ behavior: "allow" }) };
   };
   const scope = { cwd: "/w", folders: ["/w"] };
+  const why: string[] = [];
   // A plan turn refuses the write on the computer (joined on one line it read as `ls` with arguments, a plain read).
-  expect(await decideApproval(calls ?? [], ask, { scope, profile: "plan" })).toBe("decline");
+  expect(await decideApproval(calls ?? [], ask, { scope, profile: "plan", onDecline: (m) => why.push(m) })).toBe(
+    "decline",
+  );
+  expect(why).toEqual([PLAN_MESSAGE]);
   expect(await decideApproval([{ tool_name: "Bash", input: { command: "ls" } }], ask, { scope, profile: "plan" })).toBe(
     "accept",
   );
@@ -707,20 +747,37 @@ test.skipIf(!posix)(
   "a work turn's approvals get the command policy's answer: merges declined, reads accepted, the rest asks the server",
   async () => {
     const asked: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const told: Array<Record<string, unknown>> = [];
     const replies: unknown[] = [{ behavior: "allow" }, { behavior: "deny", message: "A person said no." }];
     const t = await setup({
       ask: async (_process, tool, args): Promise<IpcReply> => {
+        // A refusal the computer made is only told (its answer changes nothing).
+        if (args.refused) {
+          told.push(args);
+          return { ok: true, text: "{}" };
+        }
         asked.push({ tool, args });
         return { ok: true, text: JSON.stringify(replies.shift() ?? { behavior: "deny", message: "no" }) };
       },
     });
+    const steered = () =>
+      t.rpcs("turn/steer").map((p) => (p.input as Array<{ text: string }>).map((i) => i.text).join(""));
     const merge = start(t.ctx, request(1, "APPROVE gh pr merge 1"));
     await merge.done;
     expect(answerOf(merge.events)).toBe("decision: decline");
+    // Codex's decline carries no reason: the model gets it as steered input, and the server a step of the refusal.
+    const why = approvalMessage("This is a merge", ASK_IN_CHAT);
+    expect(steered()).toEqual([`${DECLINED_PREFIX}${why}`]);
+    await waitFor(() => told.length === 1);
+    expect(told[0]).toMatchObject({
+      tool_name: "Bash",
+      input: { command: "gh pr merge 1" },
+      refused: { code: "never", message: why },
+    });
     const status = start(t.ctx, request(2, "APPROVE git status"));
     await status.done;
     expect(answerOf(status.events)).toBe("decision: accept");
-    // Neither reached the server: the computer decides those by itself.
+    // Neither was asked of the server: the computer decides those by itself.
     expect(asked).toEqual([]);
     // An install: the server's rules decide (allowed here), then a person's no.
     const install = start(t.ctx, request(3, "APPROVE npm install left-pad"));
@@ -737,14 +794,19 @@ test.skipIf(!posix)(
     const again = start(t.ctx, request(4, "APPROVE npm install other"));
     await again.done;
     expect(answerOf(again.events)).toBe("decision: decline");
+    expect(steered().at(-1)).toBe(`${DECLINED_PREFIX}A person said no.`);
+    // The server decided that one: its own step, nothing told.
+    expect(told).toHaveLength(1);
   },
 );
 
 test.skipIf(!posix)("a plan turn's approvals are refused on the computer, never asked of anyone", async () => {
   const asked: unknown[] = [];
+  const told: Array<Record<string, unknown>> = [];
   const t = await setup({
     ask: async (_process, tool, args): Promise<IpcReply> => {
-      asked.push({ tool, args });
+      if (args.refused) told.push(args);
+      else asked.push({ tool, args });
       return { ok: true, text: JSON.stringify({ behavior: "allow" }) };
     },
   });
@@ -759,6 +821,10 @@ test.skipIf(!posix)("a plan turn's approvals are refused on the computer, never 
   await read.done;
   expect(answerOf(read.events)).toBe("decision: accept");
   expect(asked).toEqual([]);
+  expect(told.map((a) => a.refused)).toEqual([
+    { code: "policy", message: PLAN_MESSAGE },
+    { code: "policy", message: PLAN_MESSAGE },
+  ]);
 });
 
 test.skipIf(!posix)(
@@ -795,6 +861,81 @@ test("a refusal known by its words after a command says the turn worked", () => 
     message,
     worked: true,
   });
+});
+
+const fileOf = (events: CodexBrainEvent[]) => events.flatMap((e) => (e.type === "file" ? [e] : []))[0];
+
+test("an image Codex made is copied to the agent's folder and told to the server as a file", () => {
+  const folder = tempDir("brain-codex-app-img-");
+  const home = tempDir("brain-codex-app-home-");
+  dirs.push(folder, home);
+  const saved = path.join(home, "exec-1.png");
+  writeFileSync(saved, "png bytes");
+  const m = new CodexAppMapper({ cwd: folder, folder });
+  const { events } = m.completed({
+    id: "ig_abc123",
+    type: "imageGeneration",
+    status: "completed",
+    revisedPrompt: "A lighthouse at dusk",
+    result: "",
+    failure: null,
+    savedPath: saved,
+  });
+  const file = fileOf(events);
+  expect(file?.path).toMatch(/^generated-images\/image-\d{14}-abc123\.png$/);
+  expect(readFileSync(path.join(folder, file?.path ?? ""), "utf8")).toBe("png bytes");
+  expect(parseBrainEvent(file)).toEqual(file as never);
+  expect(events[0]).toMatchObject({
+    type: "tool_call",
+    name: "image_generation",
+    input: { prompt: "A lighthouse at dusk" },
+    executed: { content: `Saved ${file?.path} in your folder.` },
+  });
+
+  // No file Codex kept that this process can read: the image comes in the item itself.
+  const inline = m.completed({
+    id: "ig_inline",
+    type: "imageGeneration",
+    status: "completed",
+    revisedPrompt: null,
+    result: Buffer.from("inline bytes").toString("base64"),
+    failure: null,
+    savedPath: path.join(home, "gone.png"),
+  }).events;
+  const second = fileOf(inline);
+  expect(readFileSync(path.join(folder, second?.path ?? ""), "utf8")).toBe("inline bytes");
+});
+
+test("an image Codex couldn't make says why and names no file", () => {
+  const folder = tempDir("brain-codex-app-img-");
+  dirs.push(folder);
+  const m = new CodexAppMapper({ cwd: folder, folder });
+  const limit = m.completed({
+    id: "ig_1",
+    type: "imageGeneration",
+    status: "failed",
+    revisedPrompt: null,
+    result: "",
+    failure: { type: "usageLimitExceeded", limitId: "images", resetsAt: 1794528000 },
+  }).events;
+  expect(limit).toEqual([
+    {
+      type: "tool_call",
+      id: "ig_1",
+      name: "image_generation",
+      input: {},
+      executed: { content: "The plan's image limit was reached until 2026-11-13T00:00:00.000Z.", isError: true },
+    },
+  ]);
+  const empty = m.completed({
+    id: "ig_2",
+    type: "imageGeneration",
+    status: "failed",
+    result: "",
+    failure: null,
+  }).events;
+  expect(empty).toMatchObject([{ type: "tool_call", executed: { content: "Codex made no image.", isError: true } }]);
+  expect(existsSync(path.join(folder, "generated-images"))).toBe(false);
 });
 
 test("an agent message completed twice is sent once", () => {

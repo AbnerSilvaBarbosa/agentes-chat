@@ -21,7 +21,7 @@ export interface SpecDeps {
   pubsub?: PubSub;
 }
 
-/** The most spec runs of one company working at once (ADR 0185): the others wait in the order they were confirmed. */
+/** The most spec runs of one company working at once (ADR 0229): the others wait in the order they were confirmed. */
 export const SPEC_RUNS_PER_COMPANY = 3;
 
 /** `meta.cardSpec` of the message that starts a spec run: what `context.ts` reads to give the run its spec brief. */
@@ -140,7 +140,7 @@ async function startNextSpec(deps: SpecDeps, spaceId: string): Promise<Step> {
 
 /**
  * The runs of a company's specs that are working. One waiting on a person or an approval is not working: it holds no
- * slot, or three questions to a person would starve the queue until someone answers (ADR 0185).
+ * slot, or three questions to a person would starve the queue until someone answers (ADR 0229).
  */
 const runningIn = async (db: Pick<Database, "select">, spaceId: string) => {
   const [r] = await db

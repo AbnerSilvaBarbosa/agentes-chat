@@ -11,7 +11,7 @@ import { ChannelSkeleton } from "@/pages/ChannelPage";
 import { DmPage } from "@/pages/DmPage";
 
 /**
- * The person's chat with the workspace's PO about one company (ADR 0185). With no PO, or a company that is not one of
+ * The person's chat with the workspace's PO about one company (ADR 0229). With no PO, or a company that is not one of
  * the live ones, the page says so instead of failing.
  */
 export const Route = createFileRoute("/org/$orgId/po/$spaceId")({

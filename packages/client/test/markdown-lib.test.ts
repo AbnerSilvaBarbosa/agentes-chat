@@ -107,6 +107,25 @@ describe("collapsed details (ADR 0147)", () => {
   });
 });
 
+describe("fenced code", () => {
+  test("a fence line with an info string beyond the language opens a block, never loops", () => {
+    const blocks = parseMarkdown('Antes.\n```xxxxx {"a":1}\nresto\n```\nDepois.');
+    expect(blocks).toEqual([
+      { type: "paragraph", text: "Antes." },
+      { type: "code", lang: "xxxxx", text: "resto" },
+      { type: "paragraph", text: "Depois." },
+    ]);
+  });
+
+  test("an unclosed fence with an info string runs to the end, as any unclosed block does", () => {
+    expect(parseMarkdown('```json {"a":1}\nresto')).toEqual([{ type: "code", lang: "json", text: "resto" }]);
+  });
+
+  test("```ts closes and keeps its language", () => {
+    expect(parseMarkdown("```ts\nconst a = 1;\n```")).toEqual([{ type: "code", lang: "ts", text: "const a = 1;" }]);
+  });
+});
+
 test("a [[link]] to no page reads as a page's name; a bracketed sentence doesn't", () => {
   expect(readsAsPageTitle("Plano de férias")).toBe(true);
   expect(readsAsPageTitle("Processos/Onboarding#Primeiro dia")).toBe(true);
@@ -128,16 +147,30 @@ test("a title's `code` and **bold**, the rest as typed: no link or mention, noth
   expect(codeAndBoldParts("")).toEqual([]);
 });
 
+test("a typed name in a line stays as typed: its backticks neither mark it nor pair with the line's own", () => {
+  expect(codeAndBoldParts("a`b is down. Run `doctor`.", ["a`b"])).toEqual([
+    { text: "a`b" },
+    { text: " is down. Run " },
+    { text: "doctor", mark: "code" },
+    { text: "." },
+  ]);
+  expect(codeAndBoldParts("`x` **y** and `x` again", ["`x` **y**", null, ""])).toEqual([
+    { text: "`x` **y**" },
+    { text: " and " },
+    { text: "x", mark: "code" },
+    { text: " again" },
+  ]);
+});
+
 describe("lines that look like a block's start but open none", () => {
   test("are read as prose instead of stopping the parser for good", () => {
-    for (const text of [
-      "```foo``` no começo",
-      "Veja:\n```foo```\nfim",
-      "````\ncódigo\n````",
-      "# Título\u2028continua",
-    ]) {
-      const blocks = parseMarkdown(text, { breaks: true, details: true });
-      expect(blocks.length > 0 && blocks.every((b) => b.type === "paragraph")).toBe(true);
+    for (const [text, types] of [
+      ["```foo``` no começo", ["paragraph"]],
+      ["Veja:\n```foo```\nfim", ["paragraph", "paragraph"]],
+      ["````\ncódigo\n````", ["paragraph", "paragraph"]],
+      ["# Título\u2028continua", ["paragraph"]],
+    ] as const) {
+      expect(parseMarkdown(text, { breaks: true, details: true }).map((b) => b.type)).toEqual([...types]);
     }
   });
 

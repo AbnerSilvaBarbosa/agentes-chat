@@ -70,6 +70,7 @@ export const UNDOABLE_TOOLS = new Set([
   "update_thread",
   "save_how_to",
   "update_skill",
+  "create_skill",
 ]);
 
 export type AgentActionTargetType =
@@ -277,7 +278,7 @@ export function describeAction(a: Pick<AgentActionView, "kind" | "target" | "par
     case "issue.created":
       return `created ${issue}`;
     case "issue.updated":
-      return `changed ${Array.isArray(p.fields) ? p.fields.map((x) => (x === "alsoWith" ? "people also with" : x)).join(", ") : "fields"} of ${issue}`;
+      return `changed ${Array.isArray(p.fields) ? p.fields.join(", ") : "fields"} of ${issue}`;
     case "issue.assigned":
       return `assigned ${issue}${typeof p.assigneeName === "string" ? ` to ${p.assigneeName}` : ""}`;
     case "memory.saved":
@@ -309,7 +310,7 @@ export function describeAction(a: Pick<AgentActionView, "kind" | "target" | "par
     case "thread.closed":
       return `closed the thread${title}`;
     case "skill.created":
-      return `made the skill${title} from its how-tos`;
+      return p.asked === true ? `made the skill${title} as asked` : `made the skill${title} from its how-tos`;
     case "skill.updated":
       return `changed the skill${title}`;
     case "agent.settings_changed":

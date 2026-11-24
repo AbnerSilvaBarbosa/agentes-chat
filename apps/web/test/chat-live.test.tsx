@@ -355,6 +355,8 @@ describe("bottom anchoring", () => {
     Object.defineProperty(log, "clientHeight", { configurable: true, value: 500 });
     await sendText("primeira");
     await settle(3);
+    // The list measures how far up it is once a frame.
+    const frame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
     const latest = () => screen().queryByRole("button", { name: /Ir para as mensagens mais recentes/ });
     expect(latest()).toBeNull();
     // Less than a screen up: nothing new, no button.
@@ -363,6 +365,7 @@ describe("bottom anchoring", () => {
       fireEvent.wheel(log, { deltaY: -40 });
       fireEvent.scroll(log);
     });
+    await frame();
     expect(latest()).toBeNull();
     // More than a screen up: the button, keyboard reachable, with no count yet.
     log.scrollTop = 600;
@@ -370,6 +373,7 @@ describe("bottom anchoring", () => {
       fireEvent.wheel(log, { deltaY: -40 });
       fireEvent.scroll(log);
     });
+    await frame();
     const button = latest() as HTMLElement;
     expect(button.getAttribute("aria-label")).toBe("Ir para as mensagens mais recentes");
     expect(button.tabIndex).toBe(0);
@@ -406,6 +410,7 @@ describe("bottom anchoring", () => {
     // A frame of the glide down, still far up: the button does not come back.
     log.scrollTop = 1200;
     await act(async () => fireEvent.scroll(log));
+    await frame();
     expect(latest()).toBeNull();
   });
 
@@ -637,6 +642,10 @@ describe("receipts: a check with a popover", () => {
     expect(pop.textContent).toContain("Ada");
     expect(pop.textContent).toContain("Respondeu");
     expect(pop.querySelector(".ac-avatar--agent")).not.toBeNull();
+    // Its last line says when the message went out: a touch screen has no hover time.
+    expect(pop.querySelector(".receipt-sent:last-child")?.textContent).toMatch(
+      /^Enviada (hoje|ontem|em .+) às \d{2}:\d{2}$/,
+    );
     await act(async () => fireEvent.keyDown(pop, { key: "Escape" }));
     await act(() => new Promise((r) => setTimeout(r, 0)));
     expect(screen().queryByRole("dialog", { name: "Agentes" })).toBeNull();
@@ -1109,7 +1118,9 @@ describe("direct messages with an agent", () => {
     if (ada) ada.brain = { kind: "claude_code", model: "Sonnet", computer: "MacBook" };
     await open(state, `dm/agent/${ADA_ID}`);
     await settle(4);
-    expect(document.body.textContent).toContain("Dev · de João · Sonnet pelo plano do Claude");
+    // Its role and owner under the name; what it thinks with on the header's model button.
+    expect(document.body.textContent).toContain("Dev · de João");
+    expect(document.querySelector(".channel__brain")?.textContent).toBe("Sonnet pelo plano do Claude");
     expect(document.body.textContent).not.toContain("Claude Sonnet 5.5");
     const brain = document.querySelector(".channel__brain") as HTMLElement;
     expect(brain.querySelector(".ac-brand[data-mark='claude']")).not.toBeNull();
@@ -1120,7 +1131,7 @@ describe("direct messages with an agent", () => {
     if (codex) codex.brain = { kind: "codex", model: "GPT-6 Sol" };
     await open(member, `dm/agent/${ADA_ID}`);
     await settle(4);
-    expect(document.body.textContent).toContain("Dev · de João · GPT-6 Sol pelo plano do ChatGPT de João");
+    expect(document.querySelector(".channel__brain")?.textContent).toBe("GPT-6 Sol pelo plano do ChatGPT de João");
   });
 
   test("sidebar agent → DM via POST /dms: header with role, owner and model; empty state; the agent answers without a mention", async () => {
@@ -1129,7 +1140,8 @@ describe("direct messages with an agent", () => {
     await settle(4);
     expect(state.calls.find((c) => c.method === "dms.open")?.args).toEqual([ORG_ID, { agentId: ADA_ID }]);
     expect(screen().getByRole("heading", { level: 1, name: "Ada" })).toBeTruthy();
-    expect(document.body.textContent).toContain("Dev · de João · Claude Sonnet 5.5");
+    expect(document.body.textContent).toContain("Dev · de João");
+    expect(document.querySelector(".channel__header .channel__brain")?.textContent).toBe("Claude Sonnet 5.5");
     // The header's face and name: the agent's page in the panel beside the conversation (like a thread's), closed by its ×.
     const header = document.querySelector(".channel__header") as HTMLElement;
     await act(async () => fireEvent.click(within(header).getByRole("button", { name: "Perfil de Ada" })));

@@ -9,7 +9,7 @@ import { ErrorState, LoadingList } from "@/components/Loading";
 import { useOrg } from "@/components/org-context";
 
 /**
- * Configurações › Tarefas, the workspace's PO (ADR 0185): the agent the PO chats are with and who proposes the cards
+ * Configurações › Tarefas, the workspace's PO (ADR 0229): the agent the PO chats are with and who proposes the cards
  * in them. Who configures the workspace picks or clears it, saved at once; everyone else reads it. The options are the
  * agents that are neither archived nor the right hand, which the server refuses too; the one set now stays listed even
  * when it no longer qualifies, so the select never shows empty.

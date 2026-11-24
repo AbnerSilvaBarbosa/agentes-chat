@@ -1,8 +1,11 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, win32 } from "node:path";
+import { delimiter, isAbsolute, join, win32 } from "node:path";
 import {
+  CLI_ERROR_MAX,
+  CLI_GIT_MISSING,
+  CLI_HOME_ONLY,
   type CursorModelInfo,
   parseExecutors,
   type RunnerExecutorInfo,
@@ -10,6 +13,7 @@ import {
 } from "@agenteschat/adapters/machine-protocol";
 import { isOpencodeFreeModel, OPENCODE_FREE_MODELS } from "@agenteschat/providers/plans";
 import { readSmallJson, writeJson } from "./json-file";
+import { usualDirs } from "./login-path";
 import { SHARED_BIN_ENV } from "./shared-folder";
 
 /**
@@ -65,13 +69,46 @@ export function resolveCommand(
   sharedBin = process.env[SHARED_BIN_ENV],
 ): string {
   if (process.platform === "win32" || command.includes("/")) return command;
+  const picked = command === "codex" ? pickedCodex() : command === "agy" ? pickedAgy() : undefined;
+  if (picked) return picked;
   const dirs = pathList.split(delimiter).filter((dir) => dir && dir !== sharedBin);
-  for (const dir of dirs) {
-    const full = join(dir, command);
-    if (isExecutable(full)) return full;
-  }
+  const found = onPath(command, dirs);
+  if (found) return found;
   // A bare name would be looked up on the PATH again, shared `bin/` included: a path that isn't there fails the same.
   return sharedBin && dirs[0] ? join(dirs[0], command) : command;
+}
+
+const onPath = (command: string, dirs: readonly string[]) =>
+  dirs.map((dir) => join(dir, command)).find((full) => isExecutable(full));
+
+/** `command` on the PATH as the person has it, never a copy the runner picked in its place; null: not there. */
+export function ownCommand(
+  command: string,
+  pathList = process.env.PATH ?? "",
+  sharedBin = process.env[SHARED_BIN_ENV],
+): string | null {
+  if (process.platform === "win32") return null;
+  return (
+    onPath(
+      command,
+      pathList.split(delimiter).filter((dir) => dir && dir !== sharedBin),
+    ) ?? null
+  );
+}
+
+/**
+ * The Antigravity CLI the runner brought (`AgyCopy`, ADR 0143), where the person's own is older or missing:
+ * `resolveCommand` starts this one for every `agy`, so its looks, sign-ins and turns all run the version reported.
+ */
+let agyPick: string | undefined;
+
+export function setAgyPick(file: string | undefined) {
+  agyPick = file;
+}
+
+/** The runner's own `agy`, while it is the one to run and still there. */
+export function pickedAgy(): string | undefined {
+  return agyPick && isExecutable(agyPick) ? agyPick : undefined;
 }
 
 /**
@@ -163,6 +200,36 @@ export function windowsShellLine(
   };
 }
 
+/**
+ * The program npm's Windows launcher runs, when that launcher only starts a native binary in its own folder (npm writes
+ * `"%dp0%\node_modules\<package>\bin\<name>.exe" %*` for a package whose `bin` is an `.exe`, as OpenCode's): started
+ * directly, it takes its argv as given and dies with the tree `killTree` stops, with no cmd.exe between. Any other
+ * launcher (a Node script's, one edited by hand) or a binary that isn't there: null, and it runs through cmd.exe.
+ */
+export function npmNativeLauncher(
+  launcher: string,
+  read: (file: string) => string | null = (file) => {
+    try {
+      return statSync(file).size < 4096 ? readFileSync(file, "utf8") : null;
+    } catch {
+      return null;
+    }
+  },
+  exists: (file: string) => boolean = isFile,
+): string | null {
+  if (win32.extname(launcher).toLowerCase() !== ".cmd") return null;
+  const lines = (read(launcher) ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  // npm's preamble finds its own folder (`%dp0%`); the last line runs the binary with every argument.
+  if (lines[0]?.toLowerCase() !== "@echo off" || !lines.includes("SET dp0=%~dp0")) return null;
+  const target = /^"%dp0%\\([^"%]+\.exe)"\s+%\*$/i.exec(lines.at(-1) ?? "")?.[1];
+  if (!target || target.split("\\").includes("..")) return null;
+  const exe = win32.join(win32.dirname(launcher), target);
+  return exists(exe) ? exe : null;
+}
+
 /** How a CLI starts: the file, its argv, and what to add to its env (Windows: `windowsShellLine`'s). */
 export interface CliRun {
   file: string;
@@ -177,15 +244,20 @@ export interface CliRun {
  * `NO_CWD_LOOKUP`: it may be a launcher too, as Bun's are); a
  * `.cmd` launcher (npm's `claude.cmd`) through cmd.exe with every argument quoted (`windowsShellLine`), since Node's own
  * `shell: true` joins them as they are, so an empty one (`--setting-sources ""`) vanished and the next flag became its
- * value, and a path with a space split in two. One not found still goes to cmd.exe, which says it isn't there (exit
- * 9009). Elsewhere, and for a launcher: the file and its argv, no shell.
+ * value, and a path with a space split in two; unless the launcher only starts a native binary (`npmNativeLauncher`),
+ * which then starts as an `.exe`. One not found still goes to cmd.exe, which says it isn't there (exit 9009).
+ * Elsewhere, and for a launcher: the file and its argv, no shell.
  */
 export function cliSpawn(
   command: readonly string[],
   args: readonly string[],
   pathList?: string,
   platform: NodeJS.Platform = process.platform,
-  lookup: { pathExt?: string; exists?: (file: string) => boolean } = {},
+  lookup: {
+    pathExt?: string;
+    exists?: (file: string) => boolean;
+    read?: (file: string) => string | null;
+  } = {},
 ): CliRun {
   const [file = "", ...pre] = command;
   if (platform === "win32" && command.length === 1) {
@@ -195,7 +267,12 @@ export function cliSpawn(
       lookup.pathExt ?? envValue(process.env, "PATHEXT", platform),
       lookup.exists,
     );
-    if (found && /\.(?:exe|com)$/i.test(found)) return { file: found, args: [...args], env: { ...NO_CWD_LOOKUP } };
+    const exe = !found
+      ? null
+      : /\.(?:exe|com)$/i.test(found)
+        ? found
+        : npmNativeLauncher(found, lookup.read, lookup.exists);
+    if (exe) return { file: exe, args: [...args], env: { ...NO_CWD_LOOKUP } };
     return windowsShellLine(found ?? file, args);
   }
   return { file: resolveCommand(file, pathList), args: [...pre, ...args] };
@@ -374,11 +451,18 @@ export function parseOpencodeModels(output: string): CursorModelInfo[] {
 const OPENCODE_VERSION = /^(?:opencode\s+)?v?\d+\.\d+\.\d+\b/;
 
 /**
+ * `opencode models`' argv for a version line: OpenCode 2 answers on a private server of its own (`--standalone`), as
+ * it otherwise starts the person's background service and leaves it running; 1.x has no such flag (nor service).
+ */
+export const opencodeModelsArgs = (version: string) =>
+  Number(/^(?:opencode\s+)?v?(\d+)\./.exec(version)?.[1] ?? 0) >= 2 ? ["models", "--standalone"] : ["models"];
+
+/**
  * Protocol 39 (ADR 0132): OpenCode's CLI and the models it lists (`opencode models`: the free tier with no key). Its
  * version is kept without the name.
  */
 async function detectOpencode(run: Run): Promise<Probe> {
-  const probe = await detectWithModels(run, OPENCODE_BIN, OPENCODE_VERSION, parseOpencodeModels);
+  const probe = await detectWithModels(run, OPENCODE_BIN, OPENCODE_VERSION, parseOpencodeModels, opencodeModelsArgs);
   if (probe.entry) probe.entry = { ...probe.entry, version: probe.entry.version.replace(/^opencode\s+/, "") };
   return probe;
 }
@@ -441,12 +525,82 @@ function detectAntigravity(run: Run): Promise<Probe> {
  * One CLI's look: what it found, and whether it couldn't tell (then the last good look stands). `exited`: unsure
  * because `--version` failed with an exit code, counted toward `EXECUTORS_EXIT_STRIKES`.
  */
-type Probe = { entry?: RunnerExecutorInfo; unsure?: boolean; exited?: boolean };
+type Probe = { entry?: RunnerExecutorInfo; unsure?: boolean; exited?: boolean; said?: string };
+
+/** The last line a failing CLI wrote (its error), else its exit code. */
+const errorLine = (r: RunResult) =>
+  `${r.stderr ?? ""}\n${r.stdout}`
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .at(-1)
+    ?.slice(0, CLI_ERROR_MAX) || `exit code ${r.status}`;
 
 const versionFailed = (r: RunResult): Probe =>
-  missing(r) ? {} : r.error ? { unsure: true } : { unsure: true, exited: true };
+  missing(r) ? {} : r.error ? { unsure: true } : { unsure: true, exited: true, said: errorLine(r) };
 
 const firstLine = (r: RunResult) => r.stdout.trim().split("\n")[0]?.trim().slice(0, 80) ?? "";
+
+/** A version anywhere in a `--version` output: a warning may come first, or the CLI may write it to stderr. */
+const VERSION = /\d+\.\d+\.\d+[\w.+-]*/;
+
+/** The `--version` line that holds a version, else its first line; "unknown" when it printed nothing. */
+export function versionLine(r: Pick<RunResult, "stdout" | "stderr">): string {
+  const lines = `${r.stdout}\n${r.stderr ?? ""}`
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return (lines.find((l) => VERSION.test(l)) ?? lines[0] ?? "unknown").slice(0, 80);
+}
+
+/** `a` is a newer version than `b`; a line with no version in it is older than any. */
+export function newerVersion(a: string, b: string): boolean {
+  const parts = (s: string) => VERSION.exec(s)?.[0].split(/\D+/).slice(0, 3).map(Number) ?? [-1];
+  const x = parts(a);
+  const y = parts(b);
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+  return false;
+}
+
+/**
+ * Every `codex` this runner could start, each once: the PATH in order, then the usual install folders. Never one in
+ * the shared `bin/` (the agents write there) or in a folder that isn't a full path.
+ */
+export function codexCandidates(
+  pathList = process.env.PATH ?? "",
+  platform: NodeJS.Platform = process.platform,
+  sharedBin = process.env[SHARED_BIN_ENV],
+): string[] {
+  if (platform === "win32") return [];
+  const dirs = [...pathList.split(delimiter), ...usualDirs()].filter((d) => isAbsolute(d) && d !== sharedBin);
+  return [...new Set(dirs.map((d) => join(d, "codex")))].filter((f) => isFile(f) && isExecutable(f));
+}
+
+/**
+ * The `codex` the last look chose (`detectCodex`): `resolveCommand` starts this one, so a turn runs the Codex whose
+ * version was reported, never an older copy earlier on the PATH.
+ */
+let codexPick: string | undefined;
+
+/** The `codex` the last look chose, while it is still there. */
+export function pickedCodex(): string | undefined {
+  return codexPick && isExecutable(codexPick) ? codexPick : undefined;
+}
+
+/** Each copy's `--version`; the newest that answers wins (the first on the PATH among equals), with its path. */
+async function detectCodex(run: Run, bins: string[]): Promise<Probe> {
+  const looks = await Promise.all(bins.map(async (path) => ({ path, r: await run(path, ["--version"]) })));
+  const ok = looks
+    .filter(({ r }) => !r.error && r.status === 0)
+    .map(({ path, r }) => ({ path, version: versionLine(r) }));
+  const best = ok.reduce<(typeof ok)[number] | undefined>(
+    (a, b) => (!a || newerVersion(b.version, a.version) ? b : a),
+    undefined,
+  );
+  codexPick = best?.path;
+  if (best) return { entry: best };
+  return looks[0] ? versionFailed(looks[0].r) : detectVersion(run, "codex");
+}
 
 /** `<bin> --version` checked against `shape`, then `<bin> models` (none when signed out or offline). */
 async function detectWithModels(
@@ -454,12 +608,13 @@ async function detectWithModels(
   bin: string,
   shape: RegExp,
   parse: (output: string) => CursorModelInfo[],
+  modelsArgs: (version: string) => string[] = () => ["models"],
 ): Promise<Probe> {
   const r = await run(bin, ["--version"]);
   if (r.error || r.status !== 0) return versionFailed(r);
   const version = firstLine(r);
   if (!shape.test(version)) return {};
-  const m = await run(bin, ["models"]);
+  const m = await run(bin, modelsArgs(version));
   const models = !m.error && m.status === 0 ? parse(m.stdout) : [];
   return {
     entry: { version, ...(models.length ? { models } : {}) },
@@ -470,43 +625,68 @@ async function detectWithModels(
 async function detectVersion(run: Run, name: "claude" | "codex"): Promise<Probe> {
   const r = await run(name, ["--version"]);
   if (r.error || r.status !== 0) return versionFailed(r);
-  const version = firstLine(r);
-  if (!version) return {};
+  const version = versionLine(r);
   if (name !== "claude") return { entry: { version } };
   const auth = await claudeAuth(run);
   return auth ? { entry: { version, ...auth } } : { entry: { version }, unsure: true };
 }
 
+/** The CLIs whose installers put them in the home's `~/.local/bin`, by their command. */
+const HOME_INSTALLED = { cursor: CURSOR_BIN, grok: GROK_BIN, antigravity: AGY_BIN } as const;
+
+/** `bin` in the install folders under `home` (`~/.local/bin`…), which other users can't reach; null: none there. */
+export function inHomeDirs(bin: string, home = homedir(), isExe: (file: string) => boolean = isExecutable) {
+  return (
+    usualDirs(home)
+      .filter((dir) => dir.startsWith(`${home}/`))
+      .map((dir) => join(dir, bin))
+      .find(isExe) ?? null
+  );
+}
+
 /**
  * Every CLI looked up at once. One that couldn't tell keeps its entry from `prev` (the last good look), and the
  * whole look is `unsure`, so it is retried soon instead of cached. `strikes` counts each CLI's failing exits in a
- * row across looks (the caller keeps it).
+ * row across looks (the caller keeps it). A CLI whose `--version` fails with no good look to keep, or past its
+ * strikes, is `broken` with its error line: it is there and can't start, which is not missing. Claude Code on Windows
+ * says why only through `gitMissing`: without Git for Windows it can't start at all. `homeOnly`: a CLI of
+ * `HOME_INSTALLED` not found is in the runner's own home only (system mode), `CLI_HOME_ONLY`.
  */
 export async function detectExecutors(
   run: Run = defaultRun,
   prev: Executors = {},
   strikes: Partial<Record<string, number>> = {},
+  gitMissing: () => boolean = () => false,
+  codexBins: () => string[] = run === defaultRun ? codexCandidates : () => [],
+  homeOnly: (bin: string) => boolean = () => false,
 ): Promise<{ found: Executors; unsure: boolean }> {
   const safe = (p: () => Promise<Probe>) => p().catch((): Probe => ({ unsure: true }));
   const names = ["claude", "codex", "cursor", "opencode", "grok", "antigravity"] as const;
   const probes = await Promise.all([
     safe(() => detectVersion(run, "claude")),
-    safe(() => detectVersion(run, "codex")),
+    safe(() => detectCodex(run, codexBins())),
     safe(() => detectCursor(run)),
     safe(() => detectOpencode(run)),
     safe(() => detectGrok(run)),
     safe(() => detectAntigravity(run)),
   ]);
   const found: Executors = {};
+  const broken: NonNullable<Executors["broken"]> = {};
   let unsure = false;
   names.forEach((name, i) => {
     let p = probes[i] ?? {};
     strikes[name] = p.exited ? (strikes[name] ?? 0) + 1 : 0;
-    if ((strikes[name] ?? 0) >= EXECUTORS_EXIT_STRIKES) p = {};
+    const struck = (strikes[name] ?? 0) >= EXECUTORS_EXIT_STRIKES;
+    if (p.said && (struck || !prev[name])) broken[name] = name === "claude" && gitMissing() ? CLI_GIT_MISSING : p.said;
+    if (struck) p = {};
     const entry = p.unsure ? (prev[name] ?? p.entry) : p.entry;
     if (entry) found[name] = entry;
     if (p.unsure) unsure = true;
   });
+  for (const [name, bin] of Object.entries(HOME_INSTALLED) as [keyof typeof HOME_INSTALLED, string][]) {
+    if (!found[name] && !broken[name] && homeOnly(bin)) broken[name] = CLI_HOME_ONLY;
+  }
+  if (Object.keys(broken).length) found.broken = broken;
   return { found, unsure };
 }
 
@@ -535,7 +715,17 @@ export interface ExecutorsCache {
  * that changed.
  */
 export function cachedExecutors(
-  opts: { now?: () => number; run?: Run; file?: string; onChange?: (found: Executors) => void } = {},
+  opts: {
+    now?: () => number;
+    run?: Run;
+    file?: string;
+    onChange?: (found: Executors) => void;
+    /** Before each look (Windows: the PATH read again, so a CLI installed since is found). */
+    before?: () => void;
+    gitMissing?: () => boolean;
+    /** System mode: a CLI found only in root's own install folders (`CLI_HOME_ONLY`). */
+    homeOnly?: (bin: string) => boolean;
+  } = {},
 ): ExecutorsCache {
   const now = opts.now ?? Date.now;
   const kept = opts.file ? keptExecutors(opts.file) : null;
@@ -547,7 +737,10 @@ export function cachedExecutors(
   let running: Promise<Executors> | null = null;
   const strikes: Partial<Record<string, number>> = {};
   const look = (): Promise<Executors> =>
-    (running ??= detectExecutors(opts.run, value, strikes)
+    (running ??= Promise.resolve()
+      .then(() => opts.before?.())
+      .catch(() => undefined)
+      .then(() => detectExecutors(opts.run, value, strikes, opts.gitMissing, undefined, opts.homeOnly))
       .then(({ found, unsure }) => {
         at = now();
         retry = unsure ? Math.min(retry ? retry * 2 : EXECUTORS_RETRY_MS, EXECUTORS_TTL_MS) : 0;
@@ -585,11 +778,15 @@ export function cachedExecutors(
  * `codex --version` alone, for a Codex turn: a good answer is kept for the TTL; null when it couldn't tell (timed
  * out, failed), never cached.
  */
-export function cachedCodexVersion(run: Run = defaultRun, now: () => number = Date.now) {
+export function cachedCodexVersion(
+  run: Run = defaultRun,
+  now: () => number = Date.now,
+  codexBins: () => string[] = run === defaultRun ? codexCandidates : () => [],
+) {
   let kept: { version?: string; at: number } | undefined;
   return async (): Promise<string | undefined | null> => {
     if (kept && now() - kept.at < EXECUTORS_TTL_MS) return kept.version;
-    const p = await detectVersion(run, "codex").catch((): Probe => ({ unsure: true }));
+    const p = await detectCodex(run, codexBins()).catch((): Probe => ({ unsure: true }));
     if (p.unsure) return null;
     kept = { ...(p.entry ? { version: p.entry.version } : {}), at: now() };
     return kept.version;

@@ -9,7 +9,7 @@ import { SpaceMark } from "@/pages/IssueProjects";
 import "./factory.css";
 
 /**
- * "Esperando seu teste" (ADR 0184): the tasks sitting in a column flagged as one that waits for a person, longest
+ * "Esperando seu teste" (ADR 0228): the tasks sitting in a column flagged as one that waits for a person, longest
  * first, as the server sent them. Each row opens the task; past the rows shown, "Ver tudo" opens Tarefas filtered to
  * those columns. Without a task it draws nothing.
  */

@@ -40,6 +40,7 @@ import {
   type ToolNotice,
   type TurnContext,
 } from "@agenteschat/adapters/machine-protocol";
+import { saysDiskFull } from "@agenteschat/adapters/redact";
 import type { AccountGrant } from "./accounts";
 import { type AgentUser, keepContainers, readAgentUsers, rootlessContainers, systemLauncher } from "./agent-users";
 import { type BindPolicyOptions, ensureBrowserBindPolicy } from "./browser-bind-policy";
@@ -98,6 +99,8 @@ import type { HostedExit } from "./tasks";
 export const WORKER_TASKS_FILE = "worker-tasks.json";
 /** How long a worker may take to say hello once started. */
 const WORKER_START_TIMEOUT_MS = 20_000;
+/** How long a crashed worker's last stderr lines get to arrive after its exit. */
+const CRASH_WORDS_WAIT_MS = 200;
 /** A worker that ran this long before it stopped starts again without a wait. */
 const WORKER_STABLE_MS = 60_000;
 /** Pings keep each worker's session alive; well inside its watchdog (two heartbeats). */
@@ -162,13 +165,25 @@ export interface WorkerState {
   commitHost?: string;
   access: RunnerAccess;
   paused: RunnerPause;
-  limits: { maxConcurrentTasks: number; taskMaxSeconds: number; brainIdleMinutes: number; brainMaxProcesses: number };
+  limits: {
+    maxConcurrentTasks: number;
+    taskMaxSeconds: number;
+    brainIdleMinutes: number;
+    brainMaxProcesses: number;
+    /** Codex app-servers' own (`CODEX_DEFAULT_LIMITS`); absent: the brains'. */
+    codexIdleMinutes?: number;
+    codexMaxProcesses?: number;
+  };
   /** People watching or controlling its agent's desktop (root's): its Chrome there isn't idle meanwhile. */
   desktopViewers?: number;
+  /** Its agent holds its browser (`keep_running`, ADR 0176): it isn't closed as idle meanwhile. */
+  browserKept?: boolean;
   /** The account its agent thinks with now (null: none): its processes on any other close (`keepAccount`). */
   account?: string | null;
   /** The other accounts it thinks with (the right hand on people's own plans): kept too. */
   accounts?: string[];
+  /** The language of its agent's person (`MachineAgent.locale`), for the pages people see in its browser. */
+  locale?: string;
 }
 
 /** The agent's desktop as its worker uses it (desktop use, its Chrome): where it runs, never its VNC passwords. */
@@ -180,10 +195,10 @@ export type WorkerDesktopUse = "desktop" | "browser";
 /** Browser requests that may start the agent's Chrome, whose answers say what they waited on (protocol 27). */
 const BROWSER_SETUP_OPS: ReadonlySet<string> = new Set(["browser.act", "browser.batch", "browser.warm"]);
 
-/** The account a request's CLI signs in with: a turn's or route's, or a Claude Code or Codex task's (protocol 31). */
+/** The account a request's CLI signs in with: a turn's, route's or warm start's, or a Claude Code or Codex task's (protocol 31). */
 export function accountOf(req: MachineRequest): { kind: AccountKind; account: string } | null {
   const cli =
-    req.op === "brain.turn" || req.op === "brain.route"
+    req.op === "brain.turn" || req.op === "brain.route" || req.op === "brain.warm"
       ? req.kind
       : req.op === "task.start" && (req.executor === "claude" || req.executor === "codex")
         ? req.executor
@@ -211,6 +226,8 @@ export interface BrainReclaimed {
   idle?: { since: number; spare: boolean };
   /** A peek: `spare` has an open CLI. */
   warm?: boolean;
+  /** A browser peek: when the agent's browser `BrowserManager.reclaimIdle` would close was last used. */
+  browserIdle?: number;
 }
 
 export type WorkerLinkFrame =
@@ -246,10 +263,10 @@ export type WorkerLinkFrame =
   /** From the worker: its agent's Chrome is in use on the agent's desktop (`BROWSER_LEASE_MS`). */
   | { type: "browser.desktop" }
   /**
-   * To the worker: close its least recently used idle brain CLI (`BrainManager.reclaimIdle`), `spare` last; with
-   * `peek`, only say which it would (`idleCandidate`).
+   * To the worker: close its least recently used idle brain CLI (`BrainManager.reclaimIdle`), `spare` last, or with
+   * `browser` its agent's idle browser (`BrowserManager.reclaimIdle`); with `peek`, only say which it would.
    */
-  | { type: "brain.reclaim"; reclaimId: string; spare?: string; peek?: boolean }
+  | { type: "brain.reclaim"; reclaimId: string; spare?: string; peek?: boolean; browser?: boolean }
   /** From the worker: whether it closed one, or (`peek`) when the one it would close was last used. */
   | ({ type: "brain.reclaimed"; reclaimId: string } & BrainReclaimed)
   /**
@@ -269,6 +286,8 @@ export type WorkerLinkFrame =
   | { type: "usage"; kind: AccountKind; account: string; info: unknown }
   /** From the worker: its Codex refreshed the ChatGPT sign-in root keeps for all agents (`watchCodexAuth`). */
   | { type: "codex.auth"; account: string; auth: string }
+  /** From the worker: its Grok Build refreshed the sign-in root keeps for all agents (`watchGrokAuth`). */
+  | { type: "grok.auth"; account: string; auth: string }
   /** To the worker: a delegated CLI's bridge, again for each turn; a null `token` closes it (`delegated-tools.ts`). */
   | ({ type: "bridge.token" } & DelegatedBridge)
   /** From the worker: that bridge is open and the CLI's relay may dial, or why not. */
@@ -376,6 +395,8 @@ export interface SupervisorOptions {
   usage?: (kind: AccountKind, accountId: string, info: unknown) => void;
   /** A refreshed ChatGPT sign-in root keeps for all agents (`AccountManager.keepCodexAuth`). */
   codexAuth?: (accountId: string, auth: unknown) => void;
+  /** A refreshed Grok Build sign-in root keeps for all agents (`AccountManager.keepGrokAuth`). */
+  grokAuth?: (accountId: string, auth: unknown) => void;
   /** A background shell of a session root hosts (`AccountBrains.toolNotice`). */
   toolNotice?: (agentId: string, notice: ToolNotice) => void;
   /** The worker asked to stop the CLI of its task root hosts (`AccountBrains.stopTask`). */
@@ -384,10 +405,14 @@ export interface SupervisorOptions {
   desktop?: (agent: AgentScope, use: WorkerDesktopUse) => Promise<WorkerDesktop>;
   /** How many people watch or control the agent's desktop (`DesktopSessions.status`). */
   desktopViewers?: (agentId: string) => number;
+  /** The agent holds its browser (`keep_running`, ADR 0176): its worker keeps it open meanwhile. */
+  browserKept?: (agentId: string) => boolean;
   /** The account an agent thinks with now, still on this computer (the agents frame); null: none. */
   account?: (agentId: string) => string | null;
   /** The other accounts it thinks with now (`MachineAgent.accounts`). */
   accounts?: (agentId: string) => string[];
+  /** The language of the agent's person (`MachineAgent.locale`). */
+  locale?: (agentId: string) => string | undefined;
   /** Root's shared git cache (`systemGitCache`); without it a worker's clones get none. */
   gitCache?: (input: { connection: string; repo: string; github: string; uid: number }) => Promise<string | null>;
   /** Tests: the clock of the browser's lease. */
@@ -448,6 +473,8 @@ interface Worker {
   browserLeaseAt: number;
   /** The ChatGPT sign-ins root handed it (`codex_auth` grants): only theirs may come back refreshed. */
   codexAuths: Set<string>;
+  /** The Grok Build sign-ins root handed it (`grok_auth` grants): only theirs may come back refreshed. */
+  grokAuths: Set<string>;
   /** When it asked for its processes to be moved, in the last minute (`scope.enter`). */
   enters: number[];
   /** Its clone slots, by its id (`release` once it has one): a worker that stops gives them back. */
@@ -460,6 +487,8 @@ interface Worker {
   hostedTasks: Set<(err: RunnerError) => void>;
   /** What root asked it for such a turn, in order, by what the answer names. */
   asks: Map<string, Ask[]>;
+  /** Its process said its disk is full (`saysDiskFull`): its stop says so, so the run ends on that cause. */
+  diskFull: boolean;
 }
 
 interface Ask {
@@ -573,6 +602,7 @@ export class Supervisor {
         );
       grant = (await this.opts.grant?.(kind, account).catch(failed)) ?? null;
       if (grant?.kind === "codex_auth") w.codexAuths.add(account);
+      if (grant?.kind === "grok_auth") w.grokAuths.add(account);
       if (!grant) await this.opts.lend?.(kind, account, w.user.uid).catch(failed);
     }
     await this.ready(w, scope.signal);
@@ -835,6 +865,18 @@ export class Supervisor {
     return false;
   }
 
+  /** No idle CLI was left to close: the least recently used idle agent's browser across the workers closes instead. */
+  async reclaimBrowsers(): Promise<boolean> {
+    const workers = [...this.workers.values()].filter((w) => w.ready);
+    const peeks = await Promise.all(
+      workers.map(async (w) => ({ w, since: (await this.askBrains(w, { peek: true, browser: true }))?.browserIdle })),
+    );
+    const order = peeks.flatMap(({ w, since }) => (since === undefined ? [] : [{ w, since }]));
+    order.sort((a, b) => a.since - b.since);
+    for (const { w } of order) if ((await this.askBrains(w, { browser: true }))?.closed) return true;
+    return false;
+  }
+
   /** Whether the session `key` (`brainKey`) has an open CLI in its agent's worker. */
   async warmBrain(key: string): Promise<boolean> {
     const w = this.workers.get(key.split(":")[0] ?? "");
@@ -842,7 +884,10 @@ export class Supervisor {
     return (await this.askBrains(w, { spare: key, peek: true }))?.warm === true;
   }
 
-  private askBrains(w: Worker, ask: { spare?: string; peek?: boolean }): Promise<BrainReclaimed | null> {
+  private askBrains(
+    w: Worker,
+    ask: { spare?: string; peek?: boolean; browser?: boolean },
+  ): Promise<BrainReclaimed | null> {
     const reclaimId = String(++this.seq);
     return new Promise((resolve) => {
       const late = setTimeout(() => {
@@ -859,6 +904,7 @@ export class Supervisor {
         reclaimId,
         ...(ask.spare ? { spare: ask.spare } : {}),
         ...(ask.peek ? { peek: true } : {}),
+        ...(ask.browser ? { browser: true } : {}),
       });
     });
   }
@@ -1083,12 +1129,14 @@ export class Supervisor {
         shows: new Map(),
         browserLeaseAt: 0,
         codexAuths: new Set(),
+        grokAuths: new Set(),
         enters: [],
         slots: new Map(),
         reclaims: new Map(),
         hosted: new Set(),
         hostedTasks: new Set(),
         asks: new Map(),
+        diskFull: false,
       };
       this.workers.set(user.id, w);
     }
@@ -1152,6 +1200,7 @@ export class Supervisor {
       return;
     }
     w.proc = proc;
+    w.diskFull = false;
     const tag = `[${w.user.user}]`;
     // A broken pipe ends in the worker's exit, handled below.
     proc.stdin.on("error", () => {});
@@ -1170,7 +1219,10 @@ export class Supervisor {
       readLines(
         proc.stderr,
         16 * 1024,
-        (line) => this.opts.log(`${tag} ${line}`),
+        (line) => {
+          if (saysDiskFull(line)) w.diskFull = true;
+          this.opts.log(`${tag} ${line}`);
+        },
         () => this.opts.log(`${tag} (a log line too long was left out)`),
       );
     }
@@ -1180,8 +1232,16 @@ export class Supervisor {
       proc.kill();
     }, WORKER_START_TIMEOUT_MS);
     slow.unref?.();
-    void proc.exited.then((code) => {
+    void proc.exited.then(async (code) => {
       clearTimeout(slow);
+      // A crash's last words (a full disk) may still be in the pipe after its exit: read before saying why it stopped.
+      const stderr = proc.stderr;
+      if (stderr && !stderr.readableEnded && typeof code === "number" && code !== 0) {
+        await new Promise<void>((resolve) => {
+          stderr.once("end", resolve);
+          setTimeout(resolve, CRASH_WORDS_WAIT_MS).unref?.();
+        });
+      }
       this.stopped(w, proc, code);
     });
   }
@@ -1201,7 +1261,9 @@ export class Supervisor {
     w.browserPaced = false;
     this.endSession(
       w,
-      "The agent's worker on this computer stopped while this ran: it may have stopped partway or finished. Check before running it again.",
+      w.diskFull
+        ? "The agent's worker on this computer stopped because the disk is full (no space left on device)."
+        : "The agent's worker on this computer stopped while this ran: it may have stopped partway or finished. Check before running it again.",
       true,
     );
     this.endShows(w, "The agent's worker stopped on this computer. Try again.");
@@ -1280,8 +1342,10 @@ export class Supervisor {
         w.user.networkLauncher || w.user.networkMark ? true : s.privateNetwork === undefined ? undefined : false,
       access: { ...s.access, folders },
       ...(viewers > 0 ? { desktopViewers: viewers } : {}),
+      ...(this.opts.browserKept?.(w.user.id) ? { browserKept: true } : {}),
       ...(this.opts.account ? { account: this.opts.account(w.user.id) } : {}),
       ...(this.opts.accounts?.(w.user.id).length ? { accounts: this.opts.accounts(w.user.id) } : {}),
+      ...(this.opts.locale?.(w.user.id) ? { locale: this.opts.locale(w.user.id) } : {}),
     };
     const line = JSON.stringify(frame);
     if (line === w.state) return;
@@ -1350,6 +1414,11 @@ export class Supervisor {
         if (this.opts.send(f)) this.calls.set(f.callId, w);
         return;
       }
+      case "browser.pointer":
+      case "desktop.pointer":
+        // Its own agent's pointer only.
+        if (f.agentId === w.user.id) this.opts.send(f);
+        return;
       case "browser.frame":
       case "browser.stream.ended": {
         if (f.agentId !== w.user.id) return;
@@ -1484,6 +1553,7 @@ export class Supervisor {
         closed: f.closed === true,
         ...(valid ? { idle: { since: idle.since as number, spare: idle.spare as boolean } } : {}),
         ...(f.warm === true ? { warm: true } : {}),
+        ...(typeof f.browserIdle === "number" && Number.isFinite(f.browserIdle) ? { browserIdle: f.browserIdle } : {}),
       });
       return;
     }
@@ -1525,6 +1595,11 @@ export class Supervisor {
     if (f?.type === "codex.auth") {
       const account = typeof f.account === "string" ? f.account : "";
       if (w.codexAuths.has(account)) this.opts.codexAuth?.(account, f.auth);
+      return;
+    }
+    if (f?.type === "grok.auth") {
+      const account = typeof f.account === "string" ? f.account : "";
+      if (w.grokAuths.has(account)) this.opts.grokAuth?.(account, f.auth);
       return;
     }
     if (f?.type === "turn.context" || f?.type === "bridge.ready") {
@@ -1925,7 +2000,7 @@ export function launchWorker(
       stdout: child.stdout,
       stderr: child.stderr,
       exited,
-      // runuser passes SIGTERM on to the worker.
+      // Every step of the launcher execs the next one, so this is the worker itself.
       kill: () => {
         child.stdin.destroy();
         child.kill("SIGTERM");

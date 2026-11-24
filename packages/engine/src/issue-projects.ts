@@ -19,7 +19,7 @@ export const SPACE_NAME_MAX = 80;
 /** How many companies one workspace groups its boards into. */
 export const SPACES_MAX = 100;
 
-/** A company's image holds at most this (1 MiB): a mark, smaller than a photo (ADR 0180). */
+/** A company's image holds at most this (1 MiB): a mark, smaller than a photo (ADR 0224). */
 export const SPACE_IMAGE_LIMITS = { maxBytes: 1024 * 1024 };
 
 /** A space (a company, a client) as the boards menu shows it. */
@@ -312,7 +312,7 @@ const spaceByName = (orgId: string, name: string) =>
   and(eq(issueSpaces.orgId, orgId), sql`lower(${issueSpaces.name}) = lower(${name})`);
 
 /**
- * A space (ADR 0174): the company, client or product line a workspace groups boards under. Whoever may create tasks
+ * A space (ADR 0219): the company, client or product line a workspace groups boards under. Whoever may create tasks
  * creates, renames, recolours, archives and deletes one, as with a board.
  */
 export async function createIssueSpace(
@@ -513,7 +513,7 @@ export async function projectByName(
   spaceId: string | null = null,
 ) {
   const wanted = cleanName(name);
-  // Two companies may each have an "Entregas" (ADR 0178): with a company, that one; without, the only one or none.
+  // Two companies may each have an "Entregas" (ADR 0222): with a company, that one; without, the only one or none.
   const candidates = await deps.db
     .select()
     .from(issueProjects)

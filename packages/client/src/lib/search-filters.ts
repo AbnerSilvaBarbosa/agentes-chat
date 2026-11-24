@@ -34,7 +34,7 @@ export interface SearchActor {
   name: string;
   handle?: string | null;
 }
-/** A channel, a DM (`name` = the other person's name) or a PO chat (`name` = the PO and the company, ADR 0185). */
+/** A channel, a DM (`name` = the other person's name) or a PO chat (`name` = the PO and the company, ADR 0229). */
 export interface SearchPlace {
   id: string;
   name: string;

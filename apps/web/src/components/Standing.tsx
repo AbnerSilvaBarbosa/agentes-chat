@@ -7,6 +7,7 @@ import {
   useAuthConfig,
   useClosingMe,
   useComputerSetup,
+  usePlanMove,
   useRestoreAccount,
   useRestoreWorkspace,
 } from "@agenteschat/client";
@@ -23,7 +24,7 @@ import {
   workspaceNotes,
   workspaceOpens,
 } from "@agenteschat/client/lib/deletion";
-import { errorText, holdText, supportLineOf, suspendedText } from "@agenteschat/client/lib/errors";
+import { errorText, holdText, sessionEnded, supportLineOf, suspendedText } from "@agenteschat/client/lib/errors";
 import { stepPermissions } from "@agenteschat/client/lib/home";
 import { planHoldOf } from "@agenteschat/client/lib/no-ai";
 import { can } from "@agenteschat/client/lib/permissions";
@@ -31,17 +32,18 @@ import { isRightHand, leadsWithPlan, rightHandOf } from "@agenteschat/client/lib
 import type { FirstRunPowers } from "@agenteschat/client/lib/setup-checklist";
 import { isPersonal } from "@agenteschat/client/lib/workspace-mode";
 import { Button, cx, Icon, InfoHint, Spinner } from "@agenteschat/ui";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useAuth } from "@/auth/context";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { AuthShell } from "@/components/AuthLayout";
 import { BillingLinkButton } from "@/components/BillingLinkButton";
 import { DeleteAccountEntry } from "@/components/DeleteAccount";
 import { useOrg } from "@/components/org-context";
+import { PlanMoveButtons, PlanMoveHow } from "@/components/PlanMove";
 import { useDirectory } from "@/hooks/useDirectory";
+import { useSignOut } from "@/hooks/useSignOut";
 import { usePaidReturn } from "@/lib/paid-return";
 import { useToast } from "@/lib/toast";
 
@@ -196,10 +198,12 @@ function Deleting({ org, deletion }: { org: OrgSummary; deletion: OrgDeletion })
   const { me } = useOrg();
   const toast = useToast();
   const restore = useRestoreWorkspace(org.id);
+  const plan = usePlanMove(org.id);
   useClosingMe();
   const owner = restorable(org);
   const due = !!deletion.dueAt && Date.parse(deletion.dueAt) > Date.now();
   const by = deletedByText(t, i18n.language, deletion, me.user.id);
+  const moves = due && plan.targets.length > 0 && !plan.movedTo;
   return (
     <section className="outages" aria-label={t("standing.label")}>
       <div className="outage hold-banner deleting-banner" role="status">
@@ -208,22 +212,32 @@ function Deleting({ org, deletion }: { org: OrgSummary; deletion: OrgDeletion })
           <b>{deletingText(t, i18n.language, org.name, deletion)}</b>
           {by && <span>{by}</span>}
           {due && !owner && <span>{t("deleting.membersOnly")}</span>}
+          {moves && (
+            <span className="ac-hintline">
+              {t("planMove.deleting")}
+              <PlanMoveHow label={t("planMove.deleting")} />
+            </span>
+          )}
+          {plan.movedTo && <span>{t("planMove.moving", { name: plan.movedTo })}</span>}
         </span>
-        {owner && (
+        {(owner || moves) && (
           <span className="outage__acts">
-            <Button
-              size="sm"
-              variant="primary"
-              loading={restore.isPending}
-              disabled={restore.isPending}
-              onClick={() =>
-                restore.mutate(undefined, {
-                  onSuccess: () => toast.show(t("deleting.restored", { name: org.name })),
-                })
-              }
-            >
-              {t("deleting.restore")}
-            </Button>
+            {moves && <PlanMoveButtons plan={plan} size="sm" />}
+            {owner && (
+              <Button
+                size="sm"
+                variant="primary"
+                loading={restore.isPending}
+                disabled={restore.isPending}
+                onClick={() =>
+                  restore.mutate(undefined, {
+                    onSuccess: () => toast.show(t("deleting.restored", { name: org.name })),
+                  })
+                }
+              >
+                {t("deleting.restore")}
+              </Button>
+            )}
           </span>
         )}
       </div>
@@ -236,7 +250,7 @@ function Deleting({ org, deletion }: { org: OrgSummary; deletion: OrgDeletion })
  * behind an ⓘ), then the screen's buttons at the column's width, and `foot` apart under them. Signed in: no language
  * to pick there.
  */
-function ClosedScreen({
+export function ClosedScreen({
   title,
   lead,
   hint,
@@ -279,15 +293,16 @@ function ClosedScreen({
 /** Closed for now: which workspace, why when told, where to ask, the person's other workspaces and Sair. */
 export function SuspendedScreen({ org, me }: { org: OrgSummary; me: Me }) {
   const { t } = useTranslation();
+  const leave = useSignOut();
   return (
     <ClosedScreen
       title={t("standing.screen.titleNamed", { name: org.name })}
       lead={suspendedText(t, org.standing)}
-      foot={<WholeAccount me={me} />}
+      foot={<WholeAccount me={me} disabled={leave.pending} />}
     >
       <SupportLine className="auth__fine" />
-      <OtherWorkspaces org={org} me={me} />
-      <SignOutButton />
+      <OtherWorkspaces org={org} me={me} disabled={leave.pending} />
+      <SignOutButton leave={leave} />
     </ClosedScreen>
   );
 }
@@ -302,6 +317,7 @@ export function AccountDeletingScreen({ dueAt }: { dueAt: string | null }) {
   const toast = useToast();
   const navigate = useNavigate();
   const restore = useRestoreAccount();
+  const leave = useSignOut();
   const billing = Boolean(useAuthConfig().data?.billingUrl);
   useClosingMe();
   const due = !!dueAt && Date.parse(dueAt) > Date.now();
@@ -319,42 +335,36 @@ export function AccountDeletingScreen({ dueAt }: { dueAt: string | null }) {
           size="lg"
           block
           loading={restore.isPending}
-          disabled={restore.isPending}
+          disabled={restore.isPending || leave.pending}
           onClick={() =>
             restore.mutate(undefined, {
               onSuccess: async () => {
                 toast.show(t("accountDeleting.restored"));
                 await navigate({ to: "/" });
               },
-              onError: (error) => toast.show(errorText(t, error), "error"),
+              onError: (error) => {
+                if (!sessionEnded(error)) return toast.show(errorText(t, error), "error");
+                // Deleting the account ended its sessions, and this screen can outlast the one it was drawn with.
+                // The app takes an ended session to the sign-in and says why, except at the sign-in's own address,
+                // where it does nothing: there the screen yields (`useRestoreAccount`) and these words say why.
+                toast.show(t("common.signedOut"));
+              },
             })
           }
         >
           {t("accountDeleting.restore")}
         </Button>
       )}
-      <SignOutButton disabled={restore.isPending} />
+      <SignOutButton leave={leave} disabled={restore.isPending} />
     </ClosedScreen>
   );
 }
 
-/** Sair, from a screen in place of the app: out of the account, to the sign-in. */
-function SignOutButton({ disabled }: { disabled?: boolean }) {
+/** Sair, from a screen in place of the app: out of the account, to the sign-in. Working while it runs. */
+export function SignOutButton({ leave, disabled }: { leave: ReturnType<typeof useSignOut>; disabled?: boolean }) {
   const { t } = useTranslation();
-  const auth = useAuth();
-  const qc = useQueryClient();
-  const navigate = useNavigate();
   return (
-    <Button
-      size="lg"
-      block
-      disabled={disabled}
-      onClick={async () => {
-        await auth.signOut();
-        qc.clear();
-        await navigate({ to: "/login" });
-      }}
-    >
+    <Button size="lg" block loading={leave.pending} disabled={disabled} onClick={() => void leave.signOut()}>
       {t("auth.signOut")}
     </Button>
   );
@@ -365,7 +375,7 @@ function SignOutButton({ disabled }: { disabled?: boolean }) {
  * and a person must always be able to delete their account (`accountOutOfReach`). Apart from the screen's own actions
  * and under its own heading, so it can't be read as the way out of the workspace on screen.
  */
-function WholeAccount({ me }: { me: Me }) {
+function WholeAccount({ me, disabled }: { me: Me; disabled?: boolean }) {
   const { t } = useTranslation();
   if (!accountOutOfReach(me.organizations)) return null;
   return (
@@ -374,7 +384,7 @@ function WholeAccount({ me }: { me: Me }) {
       <p>{t("deleteAccount.card.text")}</p>
       <DeleteAccountEntry
         trigger={(open) => (
-          <Button size="sm" variant="danger" onClick={open}>
+          <Button size="sm" variant="danger" disabled={disabled} onClick={open}>
             {t("deleteAccount.card.button")}
           </Button>
         )}
@@ -384,7 +394,7 @@ function WholeAccount({ me }: { me: Me }) {
 }
 
 /** The person's other workspaces to go to (none suspended), the first that opens as the main action. */
-function OtherWorkspaces({ org, me }: { org: OrgSummary; me: Me }) {
+function OtherWorkspaces({ org, me, disabled }: { org: OrgSummary; me: Me; disabled?: boolean }) {
   const { t, i18n } = useTranslation();
   const others = otherWorkspaces(me.organizations, org.id);
   const notes = workspaceNotes(t, i18n.language, me.organizations);
@@ -393,7 +403,14 @@ function OtherWorkspaces({ org, me }: { org: OrgSummary; me: Me }) {
     <nav className="auth__ways" aria-labelledby="closed-others">
       <h2 id="closed-others">{t("standing.screen.others")}</h2>
       {others.map((o, i) => (
-        <Button key={o.id} asChild size="lg" block variant={i === 0 && workspaceOpens(o) ? "primary" : "default"}>
+        <Button
+          key={o.id}
+          asChild
+          size="lg"
+          block
+          disabled={disabled}
+          variant={i === 0 && workspaceOpens(o) ? "primary" : "default"}
+        >
           <Link to="/org/$orgId" params={{ orgId: o.id }}>
             {workspaceLabel(o.name, notes.get(o.id))}
           </Link>

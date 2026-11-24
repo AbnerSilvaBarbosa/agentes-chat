@@ -1,5 +1,5 @@
 /*
- * The factory on Início (ADR 0184): "Esperando seu teste" reuses the home list's rows (`.home-row`); only what a row
+ * The factory on Início (ADR 0228): "Esperando seu teste" reuses the home list's rows (`.home-row`); only what a row
  * of a task needs is here, and the company panels' grid.
  */
 

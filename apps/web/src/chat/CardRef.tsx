@@ -9,7 +9,7 @@ import type { CardRenderer } from "@/lib/markdown";
 import { inPlaceClick } from "@/lib/navigate";
 
 /**
- * `#128` in a message (ADR 0183): the card of that number in this workspace as a chip, "#128 title · status", opening
+ * `#128` in a message (ADR 0227): the card of that number in this workspace as a chip, "#128 title · status", opening
  * it. The server answers 404 for a card the reader may not see (and for one that is gone), so the number then stays the
  * text as written; the card's query is the one its page keeps, so a change of title or status shows at once. A long
  * title wraps inside the chip, as the task pill's does.

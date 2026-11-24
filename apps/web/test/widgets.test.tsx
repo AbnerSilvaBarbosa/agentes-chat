@@ -178,6 +178,52 @@ describe("My Home as a mural (ADR 0135)", () => {
     expect(widget("Vendas hoje").querySelector(".wk-num")?.textContent).toBe("R$18.420");
   });
 
+  test("a widget stopped after failing in a row says so, then the last failure and that failure's one way out", async () => {
+    const stoppedBy = (cause: string, ai: "ready" | "no_ai" = "no_ai") => {
+      const s = setup();
+      Object.assign(s.builds, { status: "failed", failure: { code: "failing", detail: null, cause } });
+      s.state.aiStatus = {
+        any: ai === "ready",
+        agents: s.state.agents.map((a) =>
+          ai === "ready" ? { agentId: a.id, state: ai } : { agentId: a.id, state: ai, reason: "no_key" as const },
+        ),
+      };
+      return s;
+    };
+    // No AI: Conectar, never Resolver (an update would only fail again).
+    const noAi = await open(`/org/${ORG_ID}/home`, stoppedBy("missing_credential"));
+    const card = widget("Tempo de build");
+    expect(card.textContent).toContain(
+      "Parou depois de 5 falhas seguidas. A última: Ada está sem chave ou plano de IA para trabalhar.",
+    );
+    expect(within(card).queryByRole("button", { name: "Resolver" })).toBeNull();
+    expect(calls(noAi.state, "dashboards.refreshWidget")).toEqual([]);
+    await click(within(card).getByRole("button", { name: "Conectar" }));
+    expect(screen().getByRole("dialog", { name: /Conectar uma IA/ })).toBeTruthy();
+    cleanup();
+
+    // An AI is there again: nothing starts it by itself (it stopped), and Resolver does, never Conectar.
+    const back = await open(`/org/${ORG_ID}/home`, stoppedBy("missing_credential", "ready"));
+    await settle(3);
+    const ready = widget("Tempo de build");
+    expect(ready.textContent).toContain("Parou depois de 5 falhas seguidas. A última: Ada está sem chave");
+    expect(calls(back.state, "dashboards.refreshWidget")).toEqual([]);
+    expect(within(ready).queryByRole("button", { name: "Conectar" })).toBeNull();
+    await click(within(ready).getByRole("button", { name: "Resolver" }));
+    await settle(3);
+    expect(last(back.state, "dashboards.refreshWidget")).toEqual([ORG_ID, back.builds.id]);
+    cleanup();
+
+    // Any other: trying again.
+    const slow = await open(`/org/${ORG_ID}/home`, stoppedBy("timeout"));
+    const again = widget("Tempo de build");
+    expect(again.textContent).toContain("Parou depois de 5 falhas seguidas. A última: A atualização demorou demais.");
+    expect(within(again).queryByRole("button", { name: "Conectar" })).toBeNull();
+    await click(within(again).getByRole("button", { name: "Resolver" }));
+    await settle(3);
+    expect(last(slow.state, "dashboards.refreshWidget")).toEqual([ORG_ID, slow.builds.id]);
+  });
+
   test("a widget whose agent has no AI says why with Conectar (or who can), and builds with no click once it has one", async () => {
     const waitingFor = (ai: "ready" | "no_ai", detail: string | null = null) => {
       const s = setup();
@@ -742,18 +788,22 @@ describe("a board's notices in Waiting on you", () => {
     expect(state.calls).toContainEqual({ method: "notifications.read", args: [ORG_ID, "n-alert", true] });
   });
 
-  test("in the inbox too: a dashboard's chip, and the request decided in its row", async () => {
+  test("in the inbox too: where it is from on its row, and the request decided in the open item", async () => {
     const s = noticed();
     const { state } = await open(`/org/${ORG_ID}/notifications`, s);
     const row = document.querySelector('[data-n="n-proposal"]') as HTMLElement;
     expect(row.textContent).toContain("Ada quer publicar um painel");
     expect(row.textContent).toContain("Painel");
-    await click(within(row).getByRole("button", { name: "Publicar para o workspace" }));
-    await settle(3);
-    expect(last(state, "dashboards.decideProposal")).toEqual([ORG_ID, s.board.id, "publish"]);
+    // A row has no buttons (ADR 0218): the open item, beside the list, decides.
     const failed = document.querySelector('[data-n="n-failed"]') as HTMLElement;
     expect(failed.textContent).toContain("A última atualização terminou sem dados.");
-    expect(within(failed).getByRole("button", { name: "Resolver" })).toBeTruthy();
+    await click(failed);
+    const read = () => document.querySelector(".ib-read") as HTMLElement;
+    expect(within(read()).getByRole("button", { name: "Resolver" })).toBeTruthy();
+    await click(row);
+    await click(within(read()).getByRole("button", { name: "Publicar para o workspace" }));
+    await settle(3);
+    expect(last(state, "dashboards.decideProposal")).toEqual([ORG_ID, s.board.id, "publish"]);
   });
 });
 

@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { ADA_ID, ATLAS_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
-/** The sidebar's Início and PO rows, and the PO agent's own row (ADR 0185 addendum). */
+/** The sidebar's Início and PO rows, and the PO agent's own row (ADR 0229 addendum). */
 
 afterEach(() => {
   cleanup();

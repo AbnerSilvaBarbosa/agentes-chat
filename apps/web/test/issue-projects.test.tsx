@@ -55,12 +55,17 @@ async function withProjects() {
   return { state, api, clinic, bakery, long, old };
 }
 
-const go = async (api = createFakeApi(seedState()), search = "") => {
+/** Every task of the workspace: the level where the Board chip lives (the root lists companies, ADR 0223). */
+const ALL = "?all=1";
+const go = async (api = createFakeApi(seedState()), search = ALL) => {
   const r = await renderApp(`/org/${ORG_ID}/issues${search}`, { api });
   await settle(8);
   return { ...r, api };
 };
-const chip = () => document.querySelector<HTMLElement>(".ac-toolbar .ac-filter__trigger[aria-haspopup=listbox]");
+const chip = () =>
+  [...document.querySelectorAll<HTMLElement>(".ac-toolbar .ac-filter__trigger[aria-haspopup=listbox]")].find((t) =>
+    t.textContent?.startsWith("Board"),
+  );
 const openChip = async () => {
   await click(chip() as HTMLElement);
   await settle(3);
@@ -69,18 +74,18 @@ const openChip = async () => {
 const projectOf = (router: Awaited<ReturnType<typeof go>>["router"]) =>
   (router.state.location.search as { project?: string }).project;
 
-describe("Tarefas: projects", () => {
-  test("no project yet: the chip offers only Novo projeto, and the new one opens as its own board", async () => {
+describe("Tarefas: boards", () => {
+  test("no board yet: the chip offers only Novo board, and the new one opens as its own board", async () => {
     const { api, router } = await go();
-    expect(chip()?.textContent).toBe("Projeto");
+    expect(chip()?.textContent).toBe("Board");
     expect(facts(cardOf(131)).slice(0, 2)).toEqual(["#131", "produto"]);
     const menu = await openChip();
     expect(menu.querySelectorAll("[role=option]")).toHaveLength(0);
     expect(menu.querySelector(".ac-menu__separator")).toBeNull();
-    await click(within(menu).getByRole("button", { name: "Novo projeto" }));
+    await click(within(menu).getByRole("button", { name: "Novo board" }));
     await settle(3);
-    const dialog = screen().getByRole("dialog", { name: "Novo projeto" });
-    const create = within(dialog).getByRole("button", { name: "Criar projeto" });
+    const dialog = screen().getByRole("dialog", { name: "Novo board" });
+    const create = within(dialog).getByRole("button", { name: "Criar board" });
     expect(create.hasAttribute("disabled")).toBe(true);
     // Seven colours, the first one no project wears already chosen.
     const swatches = within(dialog).getAllByRole("radio");
@@ -92,26 +97,26 @@ describe("Tarefas: projects", () => {
     await settle(6);
     const made = (await api.issues.projects(ORG_ID)).projects;
     expect(made).toMatchObject([{ name: "Mercado Ana", color: "teal" }]);
-    expect(screen().queryByRole("dialog", { name: "Novo projeto" })).toBeNull();
+    expect(screen().queryByRole("dialog", { name: "Novo board" })).toBeNull();
     // Its own board: its URL, its name as the title, nothing in it yet and one way to add.
     expect(projectOf(router)).toBe(made[0]?.id);
     expect(title()).toBe("Mercado Ana");
     // The dot is the title's own first glyph, so it stays with the first line of a name that wraps.
     expect(document.querySelector("h1.ac-pagehead__title > .ac-colordot:first-child")).toBeTruthy();
-    expect(screen().getByText("Nenhuma tarefa neste projeto ainda.")).toBeTruthy();
+    expect(screen().getByText("Nenhuma tarefa neste board ainda.")).toBeTruthy();
     expect(cards()).toEqual([]);
   });
 
-  test("the main board: each card says its project, the chip lists twenty with their open tasks, the archived last", async () => {
+  test("the main board: each card says its board, the chip lists twenty with their open tasks, the archived last", async () => {
     const { api } = await withProjects();
     await go(api);
     expect(title()).toBe("Tarefas");
-    // The dot and the name, right after the number. A task with no project says nothing.
+    // The dot and the name, right after the number. A task with no board says nothing.
     expect(facts(cardOf(131)).slice(0, 3)).toEqual(["#131", "Clínica Teo", "produto"]);
-    expect(cardOf(131).querySelector('.ac-factline__fact[title="Projeto"] > .ac-colordot')).toBeTruthy();
+    expect(cardOf(131).querySelector('.ac-factline__fact[title="Board"] > .ac-colordot')).toBeTruthy();
     expect(facts(cardOf(130))[1]).toBe(LONG);
-    expect(cardOf(126).querySelector('.ac-factline__fact[title="Projeto"]')).toBeNull();
-    // An archived project's task keeps its label.
+    expect(cardOf(126).querySelector('.ac-factline__fact[title="Board"]')).toBeNull();
+    // An archived board's task keeps its label.
     expect(facts(cardOf(127))).toContain("Acme 2025");
 
     const menu = await openChip();
@@ -119,23 +124,23 @@ describe("Tarefas: projects", () => {
     const row = (name: string) => rows.find((r) => r.querySelector(".ac-filter__label")?.textContent === name);
     expect(rows).toHaveLength(21);
     // Past eight options the menu has a search.
-    expect(within(menu).getByRole("searchbox", { name: "Projeto" })).toBeTruthy();
+    expect(within(menu).getByRole("searchbox", { name: "Board" })).toBeTruthy();
     expect(row("Clínica Teo")?.querySelector(".ac-countchip")?.textContent).toBe("3");
     expect(row("Padaria Lia")?.querySelector(".ac-countchip")?.textContent).toBe("1");
     expect(row(LONG)?.querySelector(".ac-countchip")?.textContent).toBe("1");
     expect(row("Cliente 07")?.querySelector(".ac-countchip")?.textContent).toBe("0");
     // The one closed task with none isn't counted. Done ones never are.
-    expect(row("Sem projeto")?.querySelector(".ac-countchip")?.textContent).toBe("0");
-    expect(row("Sem projeto")?.querySelector(".ac-colordot[data-none]")).toBeTruthy();
-    expect(rows.at(-1)?.querySelector(".ac-filter__label")?.textContent).toBe("Acme 2025");
-    expect(rows.at(-1)?.parentElement?.querySelector(".ac-menu__heading")?.textContent).toBe("Arquivados");
-    expect(rows.at(-2)?.querySelector(".ac-filter__label")?.textContent).toBe("Sem projeto");
-    expect(within(menu).getByRole("button", { name: "Novo projeto" })).toBeTruthy();
-    await type(within(menu).getByRole("searchbox", { name: "Projeto" }), "padaria");
+    expect(row("Sem board")?.querySelector(".ac-countchip")?.textContent).toBe("0");
+    expect(row("Sem board")?.querySelector(".ac-colordot[data-none]")).toBeTruthy();
+    // The archived board comes after the live ones, and "Sem board" closes the list.
+    expect(rows.at(-1)?.querySelector(".ac-filter__label")?.textContent).toBe("Sem board");
+    expect(rows.at(-2)?.querySelector(".ac-filter__label")?.textContent).toBe("Acme 2025");
+    expect(within(menu).getByRole("button", { name: "Novo board" })).toBeTruthy();
+    await type(within(menu).getByRole("searchbox", { name: "Board" }), "padaria");
     expect(menu.querySelectorAll("[role=option]")).toHaveLength(1);
   });
 
-  test("a project's board: only its tasks, its name as the title, no label on its cards, × back to everything", async () => {
+  test("a board's page: only its tasks, its name as the title, no label on its cards, the path back to everything", async () => {
     const { api, clinic } = await withProjects();
     const { router } = await go(api);
     const menu = await openChip();
@@ -146,31 +151,34 @@ describe("Tarefas: projects", () => {
     expect(cards().sort()).toEqual([128, 129, 131]);
     expect(facts(cardOf(131)).slice(0, 2)).toEqual(["#131", "produto"]);
     expect(screen().getByText("3 em aberto · 2 com agentes")).toBeTruthy();
-    // The chip wears the project: its dot in place of the icon, its name, and a × beside it.
-    expect(chip()?.textContent).toBe("Clínica Teo");
-    expect(chip()?.querySelector(".ac-colordot")).toBeTruthy();
-    expect(chip()?.querySelector("svg.ac-icon")).toBeNull();
-    // The search still works, inside the project.
+    // The board's page is the board: the Board and Empresa selects are for every task, so it has neither. Its dot is
+    // the title's own first glyph.
+    expect(chip()).toBeUndefined();
+    expect(document.querySelector("h1.ac-pagehead__title > .ac-colordot:first-child")).toBeTruthy();
+    // The search still works, inside the board.
     await type(screen().getByRole("searchbox", { name: "Buscar tarefas" }), "#132");
     await settle(6);
     expect(cards()).toEqual([]);
     await type(screen().getByRole("searchbox", { name: "Buscar tarefas" }), "");
     await settle(6);
-    await click(screen().getByRole("button", { name: "Limpar Projeto" }));
+    // The path is the way back: Tarefas, which opens on the companies.
+    const path = screen().getByRole("navigation", { name: "Caminho" });
+    expect(path.textContent).toContain("Tarefas›Clínica Teo");
+    await click(within(path).getByRole("link", { name: "Tarefas" }));
     await settle(8);
     expect(projectOf(router)).toBeUndefined();
     expect(title()).toBe("Tarefas");
-    expect(cards()).toHaveLength(7);
+    expect(cards()).toEqual([]);
   });
 
-  test("a project's own link opens its board; Sem projeto is a board too; a link to a deleted one falls back", async () => {
+  test("a board's own link opens it; Sem board is a board too; a link to a deleted one falls back", async () => {
     const { api, bakery } = await withProjects();
     await go(api, `?project=${bakery.id}`);
     expect(title()).toBe("Padaria Lia");
     expect(cards()).toEqual([132]);
     cleanup();
     await go(api, "?project=none");
-    expect(title()).toBe("Sem projeto");
+    expect(title()).toBe("Sem board");
     expect(cards()).toEqual([126]);
     cleanup();
     const { router } = await go(api, "?project=00000000-0000-7000-8000-000000000000");
@@ -182,12 +190,12 @@ describe("Tarefas: projects", () => {
     expect(projectOf(gone.router)).toBeUndefined();
   });
 
-  test("Nova tarefa on a project's board starts in it; the Projeto button changes it and makes a new one in place", async () => {
+  test("Nova tarefa on a board starts in it; the Board button changes it and makes a new one in place", async () => {
     const { api, clinic, bakery } = await withProjects();
     await go(api, `?project=${clinic.id}`);
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
-    const button = within(dialog).getByRole("button", { name: "Projeto: Clínica Teo" });
+    const button = within(dialog).getByRole("button", { name: "Board: Clínica Teo" });
     expect(button.querySelector(".ac-colordot")).toBeTruthy();
     // The first control of the strip.
     expect(dialog.querySelector(".issue-new__props button")).toBe(button);
@@ -196,31 +204,31 @@ describe("Tarefas: projects", () => {
     // The projects in use (never an archived one), then none.
     expect(options).toHaveLength(20);
     expect(options.map((o) => o.textContent)).not.toContain("Acme 2025");
-    expect(options.at(-1)?.textContent).toBe("Sem projeto");
+    expect(options.at(-1)?.textContent).toBe("Sem board");
     expect(options.find((o) => o.getAttribute("aria-checked") === "true")?.textContent).toBe("Clínica Teo");
     await click(within(screen().getByRole("menu")).getByRole("menuitemcheckbox", { name: "Padaria Lia" }));
     await settle(3);
-    expect(within(dialog).getByRole("button", { name: "Projeto: Padaria Lia" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Board: Padaria Lia" })).toBeTruthy();
     await type(within(dialog).getByLabelText("Título"), "Pedido por encomenda");
     await click(within(dialog).getByRole("button", { name: "Criar tarefa" }));
     await settle(6);
     const created = (await api.issues.list(ORG_ID, { projectId: bakery.id })).map((i) => i.title);
     expect(created).toContain("Pedido por encomenda");
 
-    // "Novo projeto" from the task: made in place, the task's form stays open with it chosen.
+    // "Novo board" from the task: made in place, the task's form stays open with it chosen.
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const again = screen().getByRole("dialog", { name: "Nova tarefa" });
     await type(within(again).getByLabelText("Título"), "Vitrine de ofertas");
-    await key(within(again).getByRole("button", { name: "Projeto: Clínica Teo" }), "Enter");
-    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Novo projeto" }));
+    await key(within(again).getByRole("button", { name: "Board: Clínica Teo" }), "Enter");
+    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Novo board" }));
     await settle(3);
-    const fresh = screen().getByRole("dialog", { name: "Novo projeto" });
+    const fresh = screen().getByRole("dialog", { name: "Novo board" });
     await type(within(fresh).getByLabelText("Nome"), "Mercado Ana");
-    await click(within(fresh).getByRole("button", { name: "Criar projeto" }));
+    await click(within(fresh).getByRole("button", { name: "Criar board" }));
     await settle(6);
-    expect(screen().queryByRole("dialog", { name: "Novo projeto" })).toBeNull();
+    expect(screen().queryByRole("dialog", { name: "Novo board" })).toBeNull();
     expect((within(again).getByLabelText("Título") as HTMLInputElement).value).toBe("Vitrine de ofertas");
-    expect(within(again).getByRole("button", { name: "Projeto: Mercado Ana" })).toBeTruthy();
+    expect(within(again).getByRole("button", { name: "Board: Mercado Ana" })).toBeTruthy();
   });
 
   test("the longest name: whole as the board's title and on Nova tarefa's button, never cut", async () => {
@@ -231,7 +239,7 @@ describe("Tarefas: projects", () => {
     expect(cards()).toEqual([130]);
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
-    expect(within(dialog).getByRole("button", { name: `Projeto: ${LONG}` }).textContent).toBe(LONG);
+    expect(within(dialog).getByRole("button", { name: `Board: ${LONG}` }).textContent).toBe(LONG);
     // The strip's buttons wrap their words, as its selects do.
     const css = await Bun.file(
       new URL("../../../packages/ui/src/styles/components.css", import.meta.url).pathname,
@@ -242,19 +250,19 @@ describe("Tarefas: projects", () => {
     expect(rule).toContain("max-width: 100%");
   });
 
-  test("on the main board Nova tarefa has no project until one is picked", async () => {
+  test("on every task Nova tarefa has no board until one is picked", async () => {
     const { api } = await withProjects();
     await go(api);
     await click(screen().getByRole("button", { name: "Nova tarefa" }));
     const dialog = screen().getByRole("dialog", { name: "Nova tarefa" });
-    expect(within(dialog).getByRole("button", { name: "Projeto" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Board" })).toBeTruthy();
     await type(within(dialog).getByLabelText("Título"), "Avulsa");
     await click(within(dialog).getByRole("button", { name: "Criar tarefa" }));
     await settle(6);
     expect((await api.issues.list(ORG_ID, { projectId: "none" })).map((i) => i.title)).toContain("Avulsa");
   });
 
-  test("the board's ⋯ on a project: edit, archive and delete; deleting keeps its tasks and goes back to everything", async () => {
+  test("the board's ⋯: edit, archive and delete; deleting keeps its tasks and goes back to Tarefas", async () => {
     const { api, clinic } = await withProjects();
     const { router } = await go(api, `?project=${clinic.id}`);
     const more = () => screen().getByRole("button", { name: "Mais opções" });
@@ -263,10 +271,10 @@ describe("Tarefas: projects", () => {
       within(screen().getByRole("menu"))
         .getAllByRole("menuitem")
         .map((m) => m.textContent),
-    ).toEqual(["Adicionar coluna", "Editar projeto", "Arquivar projeto", "Excluir projeto"]);
-    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Editar projeto" }));
+    ).toEqual(["Colunas do board", "Adicionar coluna", "Editar board", "Arquivar board", "Excluir board"]);
+    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Editar board" }));
     await settle(3);
-    const edit = screen().getByRole("dialog", { name: "Editar projeto" });
+    const edit = screen().getByRole("dialog", { name: "Editar board" });
     expect((within(edit).getByLabelText("Nome") as HTMLInputElement).value).toBe("Clínica Teo");
     expect(within(edit).getByRole("radio", { name: /teal/ }).getAttribute("aria-checked")).toBe("true");
     await type(within(edit).getByLabelText("Nome"), "Clínica Teo e Filhos");
@@ -276,23 +284,26 @@ describe("Tarefas: projects", () => {
 
     // Archived: its board and its tasks stay and say so, and it takes no new task.
     await key(more(), "Enter");
-    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Arquivar projeto" }));
+    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Arquivar board" }));
     await settle(8);
     expect((await api.issues.projects(ORG_ID)).projects.find((p) => p.id === clinic.id)?.archived).toBe(true);
     expect(cards().sort()).toEqual([128, 129, 131]);
     expect(document.querySelector(".ac-pagehead__count")?.textContent).toContain("· Arquivado");
     expect(screen().queryByRole("button", { name: /^Nova tarefa/ })).toBeNull();
     await key(more(), "Enter");
-    expect(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Desarquivar projeto" })).toBeTruthy();
+    expect(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Desarquivar board" })).toBeTruthy();
 
-    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Excluir projeto" }));
+    await click(within(screen().getByRole("menu")).getByRole("menuitem", { name: "Excluir board" }));
     await settle(3);
-    const confirm = screen().getByRole("dialog", { name: "Excluir o projeto Clínica Teo e Filhos?" });
-    expect(confirm.textContent).toContain("As tarefas dele continuam, sem projeto.");
-    await click(within(confirm).getByRole("button", { name: "Excluir projeto" }));
+    const confirm = screen().getByRole("dialog", { name: "Excluir o board Clínica Teo e Filhos?" });
+    expect(confirm.textContent).toContain("As tarefas dele continuam, sem board.");
+    await click(within(confirm).getByRole("button", { name: "Excluir board" }));
     await settle(8);
     expect(projectOf(router)).toBeUndefined();
     expect(title()).toBe("Tarefas");
+    // The tasks stay, with no board: every task shows them again.
+    cleanup();
+    await go(api);
     expect(cards()).toHaveLength(7);
     expect(facts(cardOf(131)).slice(0, 2)).toEqual(["#131", "produto"]);
   });
@@ -301,34 +312,36 @@ describe("Tarefas: projects", () => {
     const { state, api, clinic } = await withProjects();
     const org = state.me?.organizations[0];
     if (org) org.permissions = ["read"];
-    await go(api, `?project=${clinic.id}`);
-    expect(title()).toBe("Clínica Teo");
+    await go(api);
     const menu = await openChip();
     expect(menu.querySelectorAll("[role=option]")).toHaveLength(21);
-    expect(within(menu).queryByRole("button", { name: "Novo projeto" })).toBeNull();
+    expect(within(menu).queryByRole("button", { name: "Novo board" })).toBeNull();
+    cleanup();
+    await go(api, `?project=${clinic.id}`);
+    expect(title()).toBe("Clínica Teo");
     await key(screen().getByRole("button", { name: "Mais opções" }), "Enter");
     expect(
       within(screen().getByRole("menu"))
         .getAllByRole("menuitem")
         .map((m) => m.textContent),
-    ).toEqual(["Adicionar coluna"]);
+    ).toEqual(["Colunas do board", "Adicionar coluna"]);
   });
 
-  test("no project and no right to make one: no chip at all", async () => {
+  test("no board and no right to make one: no chip at all", async () => {
     const state = seedState();
     const org = state.me?.organizations[0];
     if (org) org.permissions = ["read"];
     await go(createFakeApi(state));
-    expect(chip()).toBeNull();
+    expect(chip()).toBeUndefined();
     expect(screen().getByRole("button", { name: "Filtro" })).toBeTruthy();
   });
 
-  test("the task's dialog: Projeto is the strip's first field, with the task's own archived project still named", async () => {
+  test("the task's dialog: Board is the strip's first field, with the task's own archived board still named", async () => {
     const { api, clinic } = await withProjects();
     await go(api, "?open=127");
     const dialog = screen().getByRole("dialog");
     const strip = dialog.querySelector(".issue-props") as HTMLElement;
-    const field = within(strip).getByRole("combobox", { name: "Projeto" });
+    const field = within(strip).getByRole("combobox", { name: "Board" });
     expect(strip.querySelector("[role=combobox]")).toBe(field);
     expect(field.textContent).toBe("Acme 2025");
     await key(field, "Enter");
@@ -336,33 +349,33 @@ describe("Tarefas: projects", () => {
     // The nineteen in use, its own archived one, none, and a new one past a line.
     expect(options).toHaveLength(22);
     expect(options.map((o) => o.textContent)).toContain("Acme 2025");
-    expect(options.slice(-2).map((o) => o.textContent)).toEqual(["Sem projeto", "Novo projeto"]);
+    expect(options.slice(-2).map((o) => o.textContent)).toEqual(["Sem board", "Novo board"]);
     await click(within(screen().getByRole("listbox")).getByRole("option", { name: "Clínica Teo" }));
     await settle(6);
     expect((await api.issues.get(ORG_ID, 127)).project?.id).toBe(clinic.id);
-    await key(within(strip).getByRole("combobox", { name: "Projeto" }), "Enter");
-    await click(within(screen().getByRole("listbox")).getByRole("option", { name: "Sem projeto" }));
+    await key(within(strip).getByRole("combobox", { name: "Board" }), "Enter");
+    await click(within(screen().getByRole("listbox")).getByRole("option", { name: "Sem board" }));
     await settle(6);
     expect((await api.issues.get(ORG_ID, 127)).project).toBeNull();
-    expect(within(strip).getByRole("combobox", { name: "Projeto" }).textContent).toBe("Sem projeto");
+    expect(within(strip).getByRole("combobox", { name: "Board" }).textContent).toBe("Sem board");
   });
 
-  test("on a project's board a task moved to another project stays open, and a link to one outside it opens", async () => {
+  test("on a board a task moved to another project stays open, and a link to one outside it opens", async () => {
     const { api, clinic, bakery } = await withProjects();
     await go(api, `?project=${clinic.id}&open=131`);
     const strip = () => screen().getByRole("dialog").querySelector(".issue-props") as HTMLElement;
-    await key(within(strip()).getByRole("combobox", { name: "Projeto" }), "Enter");
+    await key(within(strip()).getByRole("combobox", { name: "Board" }), "Enter");
     await click(within(screen().getByRole("listbox")).getByRole("option", { name: "Padaria Lia" }));
     await settle(8);
     expect((await api.issues.get(ORG_ID, 131)).project?.id).toBe(bakery.id);
     expect(cards().sort()).toEqual([128, 129]);
-    expect(within(strip()).getByRole("combobox", { name: "Projeto" }).textContent).toBe("Padaria Lia");
+    expect(within(strip()).getByRole("combobox", { name: "Board" }).textContent).toBe("Padaria Lia");
     cleanup();
     await go(api, `?project=${clinic.id}&open=126`);
-    expect(within(strip()).getByRole("combobox", { name: "Projeto" }).textContent).toBe("Sem projeto");
+    expect(within(strip()).getByRole("combobox", { name: "Board" }).textContent).toBe("Sem board");
   });
 
-  test("the list shows the project too, and Exibição's Projeto toggle takes it off the cards", async () => {
+  test("the list shows the board too, and Exibição's Board toggle takes it off the cards", async () => {
     const { state, api } = await withProjects();
     state.issuesView = { ...structuredClone(ISSUES_VIEW_DEFAULT), layout: "list" };
     await go(api);

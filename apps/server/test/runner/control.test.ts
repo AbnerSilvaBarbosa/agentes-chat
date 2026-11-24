@@ -2,15 +2,20 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { MACHINE_PROTOCOL_VERSION, type ServerFrame } from "@agenteschat/adapters/machine-protocol";
+import {
+  MACHINE_PROTOCOL_VERSION,
+  type RunnerReportParts,
+  type ServerFrame,
+} from "@agenteschat/adapters/machine-protocol";
 import { CONTROL_PROTOCOL_VERSION, type ControlEvent, type ControlOut } from "@agenteschat/adapters/runner-control";
 import { configPath, readStoredConfig, type StoredConfig, writeConfig } from "../../runner/config";
 import type { Dial, Socket, SocketHandlers } from "../../runner/connection";
 import { EXIT_LOCKED, type RunControlOptions, runControl } from "../../runner/control";
-import { RunnerDaemon } from "../../runner/daemon";
+import { DEFAULT_LIMITS, RunnerDaemon, sizedTaskLimit } from "../../runner/daemon";
 import { RUNNER_VERSION } from "../../runner/errors";
 import { ORG_LOGO_MAX_BYTES, orgLogoPath } from "../../runner/org-logo";
 import type { FetchFn } from "../../runner/pairing";
+import { askStandby, standbyAcked } from "../../runner/standby";
 import { removeDirs, tempDir, waitFor } from "./helpers";
 
 const dirs: string[] = [];
@@ -155,6 +160,30 @@ const sharedGrant = () => ({ path: expect.stringMatching(/[\\/]shared$/), agents
 
 const stored = (home: string) => JSON.parse(readFileSync(configPath(home), "utf8")) as Record<string, unknown>;
 
+test("checking again publishes the upgraded Codex version on the same connection", async () => {
+  const { home } = pairedHome();
+  let version = "0.149.0";
+  const c = control(home, {
+    executors: undefined,
+    refreshPath: () => {},
+    executorRun: async (bin) =>
+      bin === "codex" ? { status: 0, stdout: `codex-cli ${version}` } : { status: 127, stdout: "" },
+  });
+  const socket = await c.connect();
+  expect(await c.data({ type: "executors.check" })).toMatchObject({
+    executors: { codex: { version: "codex-cli 0.149.0" } },
+  });
+  version = "0.169.0";
+  expect(await c.data({ type: "executors.check" })).toMatchObject({
+    connection: "online",
+    executors: { codex: { version: "codex-cli 0.169.0" } },
+  });
+  await waitFor(() =>
+    socket.of("executors.changed").some((frame) => JSON.stringify(frame).includes("codex-cli 0.169.0")),
+  );
+  expect(c.sockets).toHaveLength(1);
+});
+
 test("hello carries what this computer builds with and the phones it reaches; a phone found after it goes out", async () => {
   const { home } = pairedHome();
   const root = tempDir("phones-");
@@ -236,8 +265,13 @@ test("paired: status and hello carry pause and access; pause/resume persist, go 
     exec: false,
     paused: { paused: false },
     access: { folders: [sharedGrant()], tools: { claude: false, codex: false, commands: false } },
-    // Protocol 22: how big this computer is.
-    size: { cpus: expect.any(Number), memoryGb: expect.any(Number), diskGb: expect.any(Number) },
+    // Protocol 22: how big this computer is; `TASK_LIMIT_PROTOCOL`: the tasks it runs at once.
+    size: {
+      cpus: expect.any(Number),
+      memoryGb: expect.any(Number),
+      diskGb: expect.any(Number),
+      maxTasks: DEFAULT_LIMITS.maxConcurrentTasks,
+    },
   });
   await waitFor(() => c.events("status").some((e) => e.kind === "status" && e.status.connection === "online"));
   s.frame({ type: "agents", agents: [{ id: AGENT.id, handle: "dev", name: "Dev", look: { color: "amber" } }] });
@@ -262,6 +296,19 @@ test("paired: status and hello carry pause and access; pause/resume persist, go 
   s.frame({ type: "request", id: "q1", op: "list", path: "", depth: 1, agent: AGENT });
   await waitFor(() => s.sent.some((f) => f.id === "q1"));
   expect(s.sent.find((f) => f.id === "q1")).toMatchObject({ ok: false, error: { code: "paused" } });
+
+  // Its task limit from the apps, paused or not: stored, and said back to the server.
+  s.frame({ type: "request", id: "l1", op: "limits.set", maxTasks: 1 });
+  await waitFor(() => s.sent.some((f) => f.id === "l1"));
+  expect(s.sent.find((f) => f.id === "l1")).toMatchObject({ ok: true, data: { maxTasks: 1 } });
+  expect(stored(home).maxConcurrentTasks).toBe(1);
+  expect(s.of("runner.state").at(-1)).toMatchObject({ type: "runner.state", maxTasks: 1 });
+  s.frame({ type: "request", id: "l2", op: "limits.set", maxTasks: 21 });
+  await waitFor(() => s.sent.some((f) => f.id === "l2"));
+  expect(s.sent.find((f) => f.id === "l2")).toMatchObject({ ok: false, error: { code: "bad_request" } });
+  // Changed on the computer (its app): the server hears it too.
+  await c.data({ type: "config.set", patch: { maxConcurrentTasks: 2 } });
+  expect(s.of("runner.state").at(-1)).toMatchObject({ type: "runner.state", maxTasks: 2 });
 
   expect(await c.data({ type: "resume" })).toEqual({ paused: { paused: false } });
   expect(stored(home).paused).toBeUndefined();
@@ -312,6 +359,39 @@ test("hello never waits on the CLIs' looks; what a look finds later reaches the 
   expect(JSON.parse(readFileSync(path.join(home, "executors.json"), "utf8"))).toMatchObject({
     claude: { version: "2.1.300 (Claude Code)" },
   });
+});
+
+test("Grok Build's models are the ones a signed-in account listed, not the computer's own signed-out list", async () => {
+  const { home } = pairedHome();
+  const grok = { version: "grok 1.0.70 (3736acbc8658) [stable]", models: [{ id: "grok-4.6" }] };
+  writeFileSync(path.join(home, "executors.json"), JSON.stringify({ grok }));
+  mkdirSync(path.join(home, "accounts"), { recursive: true });
+  writeFileSync(
+    path.join(home, "accounts", "grok-models.json"),
+    JSON.stringify([{ id: "grok-4.7" }, { id: "grok-4.6" }]),
+  );
+  const executorRun = () => new Promise<never>(() => {});
+  const c = control(home, { executors: undefined, executorRun });
+  const s = await c.connect();
+  expect(s.of("hello")[0]?.executors).toEqual({ grok: { ...grok, models: [{ id: "grok-4.7" }, { id: "grok-4.6" }] } });
+});
+
+test("Antigravity's models are the ones its signed-in accounts listed: the computer's own `agy models` lists none", async () => {
+  const { home } = pairedHome();
+  // Signed out, the computer's own look finds the CLI and no models.
+  const antigravity = { version: "agy 1.5.12" };
+  writeFileSync(path.join(home, "executors.json"), JSON.stringify({ antigravity }));
+  const account = "0193eeee-0000-7000-8000-0000000000f1";
+  mkdirSync(path.join(home, "accounts", "antigravity", account), { recursive: true });
+  const listed = [
+    { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
+    { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
+  ];
+  writeFileSync(path.join(home, "accounts", "agy-models.json"), JSON.stringify({ [account]: listed }));
+  const executorRun = () => new Promise<never>(() => {});
+  const c = control(home, { executors: undefined, executorRun });
+  const s = await c.connect();
+  expect(s.of("hello")[0]?.executors).toEqual({ antigravity: { ...antigravity, models: listed } });
 });
 
 test("a new install's hello leaves the CLIs out until the first look, then sends what it found", async () => {
@@ -366,6 +446,38 @@ test("a service with no app still looks for the CLIs on a new install, and tells
     type: "executors.changed",
     executors: { codex: { version: "codex-cli 0.164.0" } },
   });
+  await daemon.stop();
+});
+
+test("an operator's standby: the link drops and stays down with the rest running; resume dials at once", async () => {
+  const { home } = pairedHome();
+  const sockets: FakeSocket[] = [];
+  const daemon = new RunnerDaemon({
+    home,
+    mode: "start",
+    log: () => {},
+    print: () => {},
+    watch: false,
+    self: SELF,
+    caffeinate: false,
+    dial: (_url, handlers) => {
+      const s = new FakeSocket(handlers);
+      sockets.push(s);
+      return s;
+    },
+    fetch: async () => new Response(null, { status: 404 }),
+  });
+  void daemon.runStart();
+  await waitFor(() => sockets.length === 1);
+  const s = sockets[0] as FakeSocket;
+  s.handlers.onOpen();
+  s.frame({ type: "welcome", machineId: "m1", name: "box", heartbeatMs: 25_000 });
+  const ask = askStandby(home, 5);
+  await waitFor(() => s.closed && standbyAcked(home, ask.id), 3000);
+  await Bun.sleep(1500);
+  expect(sockets).toHaveLength(1);
+  const resume = askStandby(home, 0);
+  await waitFor(() => sockets.length === 2 && standbyAcked(home, resume.id), 3000);
   await daemon.stop();
 });
 
@@ -569,6 +681,42 @@ test("access requests: pending until the person answers on the machine; the answ
   expect(lines.some((l) => l.includes(`agentes-runner folders allow ${other} --agent dev`))).toBe(true);
 });
 
+test("a tool turned on from the apps: the switch is written, the server and the app are told, and Undo turns it off", async () => {
+  const { home } = pairedHome();
+  const lines: string[] = [];
+  const c = control(home, { print: (l) => lines.push(l) });
+  const s = await c.connect();
+  await c.data({ type: "tools.set", tool: "browser", on: false });
+  s.frame({ type: "request", id: "w1", op: "access.allow", tool: "browser", by: "u-bia", byName: "Bia Rocha" });
+  await waitFor(() => s.sent.some((f) => f.id === "w1"));
+  expect(s.sent.find((f) => f.id === "w1")).toMatchObject({ ok: true, data: { access: { tools: { browser: true } } } });
+  expect((stored(home).access as { tools: { browser?: boolean } }).tools.browser).toBe(true);
+  expect(s.of("access.changed").at(-1)).toMatchObject({ access: { tools: { browser: true } } });
+  expect(c.events("access.allowed")).toEqual([{ kind: "access.allowed", tool: "browser", byName: "Bia Rocha" }]);
+  expect(lines.some((l) => l.includes("agentes-runner tools disable browser"))).toBe(true);
+
+  // Already on: nothing to tell again.
+  s.frame({ type: "request", id: "w2", op: "access.allow", tool: "browser", by: "u-bia", byName: "Bia Rocha" });
+  await waitFor(() => s.sent.some((f) => f.id === "w2"));
+  expect(c.events("access.allowed")).toHaveLength(1);
+
+  // Undo is the app's own switch.
+  await c.data({ type: "tools.set", tool: "browser", on: false });
+  expect((stored(home).access as { tools: { browser?: boolean } }).tools.browser).toBe(false);
+
+  // A tool the runner doesn't know is refused, and nothing changes.
+  s.frame({
+    type: "request",
+    id: "w3",
+    op: "access.allow",
+    tool: "everything" as never,
+    by: "u-bia",
+    byName: "Bia Rocha",
+  });
+  await waitFor(() => s.sent.some((f) => f.id === "w3"));
+  expect(s.sent.find((f) => f.id === "w3")).toMatchObject({ ok: false, error: { code: "bad_request" } });
+});
+
 test("folders, tools and settings from the app: system folders refused, everything lands in config.json", async () => {
   const { home } = pairedHome();
   const folder = tempDir("proj-");
@@ -610,11 +758,12 @@ test("folders, tools and settings from the app: system folders refused, everythi
 
   expect(await c.data({ type: "config.get" })).toEqual({
     name: "box",
-    maxConcurrentTasks: 3,
+    maxConcurrentTasks: DEFAULT_LIMITS.maxConcurrentTasks,
     taskMaxSeconds: 14400,
-    brainIdleMinutes: 3,
-    brainMaxProcesses: 1,
+    brainIdleMinutes: DEFAULT_LIMITS.brainIdleMinutes,
+    brainMaxProcesses: DEFAULT_LIMITS.brainMaxProcesses,
     workspace: expect.any(String),
+    defaultMaxConcurrentTasks: DEFAULT_LIMITS.maxConcurrentTasks,
     managedBy: "desktop",
   });
   expect(await c.data({ type: "config.set", patch: { name: "Notebook", maxConcurrentTasks: 5 } })).toMatchObject({
@@ -630,6 +779,50 @@ test("folders, tools and settings from the app: system folders refused, everythi
   const diag = await c.data<{ text: string }>({ type: "diagnostics" });
   expect(diag.text).toContain(`agentes runner ${RUNNER_VERSION}`);
   expect(diag.text).not.toContain(TOKEN);
+});
+
+test("the task limit is sized to the memory: one per 1.5 GiB past 4, at least 3, at most 20, whatever the CPUs", () => {
+  for (const cpus of [2, 4, 8]) {
+    const sizes = [4, 8, 12, 16, 32].map((memoryGb) => ({ cpus, memoryGb }));
+    expect(sizes.map(sizedTaskLimit)).toEqual([3, 3, 5, 8, 18]);
+  }
+  // A 12 GB computer reads a little less than 12 GiB.
+  expect(sizedTaskLimit({ memoryGb: 11.5 })).toBe(5);
+  expect(sizedTaskLimit({ memoryGb: 512 })).toBe(20);
+  // A container's limit, not the host's.
+  expect(sizedTaskLimit({ memoryGb: 256, limit: { cpus: 4, memoryGb: 8 } })).toBe(3);
+  expect(DEFAULT_LIMITS.maxConcurrentTasks).toBeGreaterThanOrEqual(3);
+});
+
+test("report: facts and the end of the log, with no paths, names, addresses or token", async () => {
+  const { home } = pairedHome();
+  const logFile = path.join(home, "logs", "runner.log");
+  mkdirSync(path.dirname(logFile), { recursive: true });
+  writeFileSync(
+    logFile,
+    [
+      `started in ${home} for Acme`,
+      `connected to https://agentes.test/api/machines/connect as box with ${TOKEN}`,
+      "C:\\Users\\someone\\.agentes-runner\\runner.log from someone@example.com",
+    ].join("\n"),
+  );
+  const c = control(home, { logFile });
+  const parts = await c.data<RunnerReportParts>({ type: "report" });
+  expect(parts).toMatchObject({
+    runner: RUNNER_VERSION,
+    protocol: MACHINE_PROTOCOL_VERSION,
+    managedBy: "desktop",
+    compiled: true,
+    tools: { claude: false, codex: false, commands: false },
+  });
+  const text = JSON.stringify(parts);
+  for (const secret of [home, "Acme", "agentes.test", TOKEN, "someone"]) {
+    expect(text).not.toContain(secret);
+  }
+  expect(parts.logTail).toHaveLength(3);
+  expect(parts.logTail[0]).toContain("[computer]");
+  expect(parts.logTail[1]).toContain("https://[server]/…");
+  expect(parts.logTail[2]).toStartWith("~\\.agentes-runner");
 });
 
 test("device pairing from the app: code, confirmation, a desktop home with safe defaults; unpair forgets the token", async () => {

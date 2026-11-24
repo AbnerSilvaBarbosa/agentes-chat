@@ -8,7 +8,18 @@
  * from nothing in the dither's own steps, so a band laid mid-screen never starts on a hard line; 0 = none),
  * `clear` (1 = the first tone is see-through, for a drawing over glass). Arrays are only read with loop indices (SkSL rule).
  */
-export type DitherKind = "sky" | "computer" | "fuse" | "bar" | "track" | "sweep" | "pill" | "horizon" | "workspace";
+export type DitherKind =
+  | "sky"
+  | "computer"
+  | "fuse"
+  | "bar"
+  | "track"
+  | "sweep"
+  | "pill"
+  | "horizon"
+  | "workspace"
+  | "forming"
+  | "card";
 
 const PRELUDE = `
 uniform float2 size;
@@ -169,6 +180,14 @@ float field(float u, float v, float x, float y) {
   return f;
 }
 `,
+  // A service's own sky on its page: its color from the top down into the surface by `reach` of the height, a
+  // slow wave on its horizon; still (a page, not a scene).
+  card: `
+uniform float reach;
+float field(float u, float v, float x, float y) {
+  return 1.0 - v / max(0.05, reach) + 0.05 * sin(u * 6.2832 + 0.8);
+}
+`,
   // Behind an agent's computer while its screen opens: the web's `ComputerSky`, the same field.
   computer: `
 float field(float u, float v, float x, float y) {
@@ -218,6 +237,21 @@ float field(float u, float v, float x, float y) {
   if (st > 0.5) return 0.3 + 0.32 * (0.5 + 0.5 * sin(t * 4.0 + k));
   bool edge = v < 0.2 || v > 0.8 || loc < 0.12 || loc > 0.68;
   return (edge && mod(x + y, 2.0) < 0.5) ? 0.2 : 0.0;
+}
+`,
+  // A picture forming out of the agent's sky (@agenteschat/ui sky/forming `formingField`, line by line): cells arrive
+  // from the bottom-left with noise, deeper at the bottom; whole, it holds, fades and starts again (8 s). Drawn still
+  // (t = 0: reduced motion, off screen) it is whole.
+  forming: `
+float field(float u, float v, float x, float y) {
+  float deep = 0.16 + 0.44 * v;
+  if (t < 0.001) return deep;
+  float p = mod(t, 8.0) / 6.0;
+  float d = (u + (1.0 - v)) / 2.0;
+  float n = hash2(floor(u * 50.0), floor(v * 50.0)) * 0.16;
+  float reveal = clamp((p - d + n) / 0.1, 0.0, 1.0);
+  float o = p > 1.12 ? clamp(1.0 - (p - 1.12) / 0.2, 0.0, 1.0) : 1.0;
+  return reveal * o * deep;
 }
 `,
   sweep: `

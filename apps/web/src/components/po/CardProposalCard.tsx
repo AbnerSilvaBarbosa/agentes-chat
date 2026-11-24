@@ -55,7 +55,7 @@ function SpecOpen({ slug }: { slug: string }) {
 }
 
 /**
- * The PO's card proposal in its chat (ADR 0185): the person it was written for creates the card there, as they edited
+ * The PO's card proposal in its chat (ADR 0229): the person it was written for creates the card there, as they edited
  * it, or drops it; anyone else reads who decides. Editar turns the fields into inputs and Criar sends what is in them.
  * A refusal (an archived board, no right to post) shows under the buttons and the proposal stays, so another board can
  * be picked. Decided, it is one line: the card made with its number as a link, or the proposal dropped.

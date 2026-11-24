@@ -51,7 +51,7 @@ export const NO_SPACE = "";
 export const NO_TEMPLATE = "";
 
 /**
- * A company's mark, drawn in one place for its card, the chip and the picker (ADR 0180): its image when it has one,
+ * A company's mark, drawn in one place for its card, the chip and the picker (ADR 0224): its image when it has one,
  * else its color as the dot a board wears. The box is the dot's, so it sits where the dot sat in every row.
  */
 export function SpaceMark({ space }: { space: Pick<IssueSpaceRef, "color" | "image"> }) {
@@ -290,7 +290,7 @@ export function ProjectDialog({
   const [name, setName] = useState(project?.name ?? "");
   const [picked, setPicked] = useState<string | null>(project?.color ?? null);
   const [spaceId, setSpaceId] = useState<string>(project?.spaceId ?? lockedSpace ?? NO_SPACE);
-  // A new board starts from a set of columns (ADR 0177); editing one keeps the columns it has.
+  // A new board starts from a set of columns (ADR 0221); editing one keeps the columns it has.
   const [template, setTemplate] = useState<string>(NO_TEMPLATE);
   const color = picked ?? freeColor(projects);
   // An archived company takes no new board; the one a board is already in stays in its own picker.
@@ -575,7 +575,7 @@ export function useProjectOptions(current: IssueProjectRef | null | undefined, m
   const { org } = useOrg();
   const data = useIssueProjects(org.id).data;
   const projects = data?.projects ?? (current ? [{ ...current, open: 0 }] : []);
-  // Two boards may share a name in different companies: the picker says which company each one is in (ADR 0178).
+  // Two boards may share a name in different companies: the picker says which company each one is in (ADR 0222).
   const label = boardLabels(projects, data?.spaces);
   return [
     ...pickableProjects(projects, current).map((p) => ({
@@ -589,7 +589,7 @@ export function useProjectOptions(current: IssueProjectRef | null | undefined, m
 }
 
 /**
- * A company's own page (ADR 0177): its boards, each with the tasks open in it, and "Novo board" beside them. Picking a
+ * A company's own page (ADR 0221): its boards, each with the tasks open in it, and "Novo board" beside them. Picking a
  * board opens its kanban; the company itself holds no task, so this is where a person chooses what to look at.
  */
 export function SpaceBoards({
@@ -607,7 +607,7 @@ export function SpaceBoards({
   mayCreate: boolean;
   onOpen: (projectId: string) => void;
   onNew?: () => void;
-  /** Who may create tasks edits, archives and deletes a board from its own card (ADR 0179). */
+  /** Who may create tasks edits, archives and deletes a board from its own card (ADR 0223). */
   onEdit?: (board: IssueProjectRef) => void;
   onDelete?: (board: IssueProjectRef) => void;
   onArchive?: (board: IssueProjectRef) => void;
@@ -674,7 +674,7 @@ export function SpaceBoards({
 }
 
 /**
- * Tarefas opens here (ADR 0179): the companies, each with the open tasks in its boards and how many boards it has, the
+ * Tarefas opens here (ADR 0223): the companies, each with the open tasks in its boards and how many boards it has, the
  * boards in no company after them, and "todas as tarefas" for the workspace's whole board. Picking a company opens its
  * boards; picking a board opens its kanban.
  */

@@ -294,6 +294,18 @@ describe("Sua conta › Conversa", () => {
     await settle(4);
   };
 
+  test("full messages can be switched on and off without changing other chat choices", async () => {
+    const state = withChatPrefs(seedState(), { textSize: "xl" });
+    await openSettings(state);
+    const control = () => screen().getByRole("switch", { name: "Mostrar mensagens completas" });
+    expect(control().getAttribute("aria-checked")).toBe("false");
+    await click(control());
+    expect(state.me?.organizations[0]?.chatPrefs).toEqual({ textSize: "xl", fullMessages: true });
+    expect(control().getAttribute("aria-checked")).toBe("true");
+    await click(control());
+    expect(state.me?.organizations[0]?.chatPrefs).toEqual({ textSize: "xl", fullMessages: false });
+  });
+
   test("channels and DMs each save their own style; Clara and Forte show only with Bolhas", async () => {
     const state = withChatPrefs(seedState());
     await openSettings(state);
@@ -440,4 +452,13 @@ describe("opening at the last read message", () => {
     await openUnread({ openAt: "latest" });
     expect(document.querySelector(".channel__unread")).toBeNull();
   });
+});
+
+test("in bubbles, the cards under someone else's words are bubbles of that message", () => {
+  const looks = readFileSync(new URL("../src/chat/looks.css", import.meta.url), "utf8");
+  expect(looks).toMatch(
+    /\.ac-msg\[data-look="bubbles"\]:not\(\.ac-msg--own\)\s*\.ac-msg__body\s*:is\(\.ag-rc:not\(\.ag-rc--talk\), \.ag-rcg, \.ac-workline\.handed-line, \.rq\) \{\s*background: var\(--msg-bubble\);\s*box-shadow: none;\s*border-radius: 6px 18px 18px 6px;/,
+  );
+  expect(looks).toContain('.ac-msg[data-look="bubbles"]:not(.ac-msg--own) .rq > .ac-approval__sky {\n  display: none;');
+  expect(looks).toMatch(/\.ac-msg__body > \.ac-msg__text ~ :is\(\.ag-rcs, \.handed-line, \.rq\) \{\s*margin-top: 3px;/);
 });

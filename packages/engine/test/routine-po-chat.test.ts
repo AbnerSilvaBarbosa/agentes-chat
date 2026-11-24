@@ -14,7 +14,7 @@ import {
 import { type Fixture, setup } from "./fixtures";
 import { channelRoutine, messagesIn, routineDeps } from "./routine-fixtures";
 
-/** ADR 0185 addendum: the PO's routines speak in the company's PO chat; the plain DM is the fallback. */
+/** ADR 0229 addendum: the PO's routines speak in the company's PO chat; the plain DM is the fallback. */
 
 let f: Fixture;
 afterEach(async () => {

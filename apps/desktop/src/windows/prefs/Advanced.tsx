@@ -1,24 +1,33 @@
+import { TASK_LIMIT_BOUNDS } from "@agenteschat/adapters/machine-protocol";
 import type { ControlConfig, ControlConfigPatch } from "@agenteschat/adapters/runner-control";
 import { Button, Segmented } from "@agenteschat/ui";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useHost, useSnapshot, useStore } from "../../app";
+import type { Platform } from "../../control/platform";
 import { orgName, pairedHomes } from "../../control/store";
 import { OrgTile, Stepper } from "../../ui/bits";
 import { CardTitle, hintFor, PrefCard, PrefHead, PrefRow } from "../../ui/settings";
 import { useToast } from "../../ui/Toast";
 import { shortPath } from "../../ui/time";
 
-/** The runner's defaults (the same numbers `agentes-runner` uses when the config has none). */
-export const DEFAULT_LIMITS: Required<Omit<ControlConfigPatch, "name">> = {
-  maxConcurrentTasks: 3,
+/**
+ * The runner's defaults (the same numbers `agentes-runner`'s `DEFAULT_LIMITS` uses when the config has none): on
+ * Linux, where it reads free memory and closes idle conversations once memory runs short, they stay open longer. Its
+ * task limit is sized to the computer: `config.get` says it (`defaultMaxConcurrentTasks`), 3 from an older runner.
+ */
+export const defaultLimits = (
+  platform: Platform,
+  maxConcurrentTasks = 3,
+): Required<Omit<ControlConfigPatch, "name">> => ({
+  maxConcurrentTasks,
   taskMaxSeconds: 4 * 3600,
-  brainMaxProcesses: 1,
-  brainIdleMinutes: 3,
-};
+  brainMaxProcesses: platform === "linux" ? 8 : 1,
+  brainIdleMinutes: platform === "linux" ? 60 : 3,
+});
 
 const TASK_MAX = ["3600", "14400", "28800"] as const;
-const IDLE = ["3", "5", "10", "30"] as const;
+const idleChoices = (platform: Platform) => (platform === "linux" ? ["10", "20", "30", "60"] : ["3", "5", "10", "30"]);
 
 export function Advanced() {
   const { t } = useTranslation();
@@ -42,7 +51,9 @@ export function Advanced() {
     };
   }, [store, first]);
 
-  const limits = { ...DEFAULT_LIMITS, ...(config ?? {}) };
+  const defaults = defaultLimits(host.platform, config?.defaultMaxConcurrentTasks);
+  const idle = idleChoices(host.platform);
+  const limits = { ...defaults, ...(config ?? {}) };
 
   // Limits apply to each organization: the same numbers go to every one.
   const change = async (patch: ControlConfigPatch, done?: string) => {
@@ -66,7 +77,7 @@ export function Advanced() {
             size="sm"
             variant="ghost"
             disabled={disabled}
-            onClick={() => void change(DEFAULT_LIMITS, t("desktop.prefs.advanced.defaultsDone"))}
+            onClick={() => void change(defaults, t("desktop.prefs.advanced.defaultsDone"))}
           >
             {t("desktop.prefs.advanced.defaults")}
           </Button>
@@ -82,8 +93,8 @@ export function Advanced() {
             <Stepper
               label={t("desktop.prefs.advanced.concurrent")}
               value={limits.maxConcurrentTasks}
-              min={1}
-              max={8}
+              min={TASK_LIMIT_BOUNDS[0]}
+              max={TASK_LIMIT_BOUNDS[1]}
               onChange={(v) => void change({ maxConcurrentTasks: v })}
             />
           }
@@ -131,14 +142,10 @@ export function Advanced() {
             <Segmented
               size="sm"
               label={t("desktop.prefs.advanced.brainIdle")}
-              value={
-                (IDLE as readonly string[]).includes(String(limits.brainIdleMinutes))
-                  ? String(limits.brainIdleMinutes)
-                  : ""
-              }
+              value={idle.includes(String(limits.brainIdleMinutes)) ? String(limits.brainIdleMinutes) : ""}
               onValueChange={(v) => void change({ brainIdleMinutes: Number(v) })}
-              options={IDLE.map((m) => ({
-                value: m as string,
+              options={idle.map((m) => ({
+                value: m,
                 label: t("desktop.common.minutes", { count: Number(m) }),
               }))}
             />

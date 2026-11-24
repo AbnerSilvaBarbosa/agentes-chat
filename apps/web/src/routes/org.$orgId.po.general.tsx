@@ -8,7 +8,7 @@ import { ChannelSkeleton } from "@/pages/ChannelPage";
 import { DmPage } from "@/pages/DmPage";
 
 /**
- * The PO's plain DM with the person, reached from the PO view as "Avisos e rotinas" (ADR 0185 addendum): its routines
+ * The PO's plain DM with the person, reached from the PO view as "Avisos e rotinas" (ADR 0229 addendum): its routines
  * and hand-offs write here, about no one company. With no PO, the page says so.
  */
 export const Route = createFileRoute("/org/$orgId/po/general")({

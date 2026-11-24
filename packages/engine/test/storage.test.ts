@@ -78,7 +78,7 @@ async function deleteForGood(orgId: string) {
     .where(eq(schema.organizations.id, orgId));
   expect(await purgeWorkspace({ db: f.db }, orgId)).toBe(true);
 }
-const doc = (title: string) => ({ title, content: { kind: "document" as const, markdown: `# ${title}` } });
+const doc = (title: string) => ({ title, content: { kind: "table" as const, columns: ["file"], rows: [[title]] } });
 
 describe("S3 client against the fake server", () => {
   test("put, get, list, delete and a presigned GET, path-style and virtual-hosted", async () => {
@@ -104,6 +104,29 @@ describe("S3 client against the fake server", () => {
     const error = await wrong.get("x").catch((e) => e);
     expect(error).toBeInstanceOf(StorageError);
     expect((error as StorageError).code).toBe("auth");
+  });
+
+  test("a range streams only its part; a link downloads under the name as is, as the type given; none when off", async () => {
+    f = await setup();
+    const settings = { ...bucket(), accessKeyId: "AKIATEST", secretAccessKey: SECRET };
+    const store = createS3BlobStore(settings, { fetch: f.s3.fetch });
+    await store.put("a/clip", new TextEncoder().encode("0123456789"), { contentType: "application/octet-stream" });
+    expect(await new Response(await store.stream?.("a/clip", { start: 2, end: 5 })).text()).toBe("2345");
+    const options = { expiresInSeconds: 60, filename: "relatório final.mp4", contentType: "video/mp4" };
+    const res = await f.s3.fetch((await store.signedUrl("a/clip", options)) ?? "", { method: "GET" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("video/mp4");
+    expect(res.headers.get("content-disposition")).toBe(
+      `attachment; filename="relat_rio final.mp4"; filename*=UTF-8''relat%C3%B3rio%20final.mp4`,
+    );
+    const off = createS3BlobStore(settings, { fetch: f.s3.fetch, presign: false });
+    expect(await off.signedUrl("a/clip", options)).toBeNull();
+    // An http bucket's link can't load in a page served over https: its files go through the server.
+    const plain = createS3BlobStore({ ...settings, endpoint: "http://minio.example.com:9000" }, { fetch: f.s3.fetch });
+    expect(await plain.signedUrl("a/clip", options)).toBeNull();
+    // A store that answers a range with the whole object would play garbage: refused.
+    const whole = createS3BlobStore(settings, { fetch: async () => new Response("0123456789", { status: 200 }) });
+    await expect(whole.stream?.("a/clip", { start: 2, end: 5 })).rejects.toBeInstanceOf(StorageError);
   });
 });
 
@@ -159,7 +182,9 @@ describe("org storage", () => {
     // Downloads of bucket files are signed by the bucket (and the signature holds).
     const link = await artifactDownload(f.artifactDeps, f.owner.id, f.org.id, after.id);
     expect(link.url.startsWith(`https://s3.example.com/acme-files/agentes/artifacts/${after.id}/v1-`)).toBe(true);
-    expect(await (await f.s3.fetch(link.url, { method: "GET" })).text()).toBe("# Depois");
+    expect(await (await f.s3.fetch(link.url, { method: "GET" })).text()).toBe(
+      JSON.stringify({ columns: ["file"], rows: [["Depois"]] }),
+    );
 
     // Back to platform storage: new files go there; bucket files still read.
     await saveStorage(f.storage, f.owner.id, f.org.id, { kind: "agentes" });
@@ -168,6 +193,23 @@ describe("org storage", () => {
       [...f.platformBlobs.objects.keys()].some((k) => k.startsWith(`orgs/${f.org.id}/artifacts/${back.id}/v1-`)),
     ).toBe(true);
     expect((await getArtifact(f.artifactDeps, person(f.owner.id), f.org.id, after.id)).title).toBe("Depois");
+  });
+
+  test("a migration asked for twice runs once; one that stopped moving starts over", async () => {
+    f = await setup();
+    await createArtifact(f.artifactDeps, person(f.owner.id), f.org.id, doc("Um"));
+    await testStorage(f.storage, f.owner.id, f.org.id, bucket());
+    await saveStorage(f.storage, f.owner.id, f.org.id, { kind: "s3", s3: bucket() });
+    const jobs = () => f.db.select().from(schema.outbox).where(eq(schema.outbox.kind, "storage.migrate"));
+    await startMigration(f.storage, f.owner.id, f.org.id);
+    // Asked again while it runs (a second click): the one running is the answer, with no second job beside it.
+    expect(await startMigration(f.storage, f.owner.id, f.org.id)).toMatchObject({ status: "running", total: 1 });
+    expect(await jobs()).toHaveLength(1);
+    // No file copied for over ten minutes: nothing is behind it any more, so asking again starts it over.
+    await f.db.update(schema.storageMigrations).set({ updatedAt: new Date(Date.now() - 11 * 60_000) });
+    await startMigration(f.storage, f.owner.id, f.org.id);
+    expect(await jobs()).toHaveLength(2);
+    expect(await f.db.select().from(schema.storageMigrations)).toHaveLength(1);
   });
 
   test("the migration copies old files to the bucket and resumes after a failure", async () => {
@@ -423,6 +465,26 @@ describe("org storage", () => {
     await expect(startMigration(f.storage, bia.id, f.org.id)).rejects.toBeInstanceOf(ForbiddenError);
   });
 
+  test("the service picked in the app is kept with the settings, outside what ties a test to its activation", async () => {
+    f = await setup();
+    expect((await testStorage(f.storage, f.owner.id, f.org.id, { ...bucket(), provider: "r2" })).ok).toBe(true);
+    // Saved under another name, it's still the same bucket that passed: it switches on, as it was tested.
+    const view = await saveStorage(f.storage, f.owner.id, f.org.id, {
+      kind: "s3",
+      s3: { ...bucket(), provider: "b2" },
+    });
+    expect(view.s3).toMatchObject({ provider: "r2", bucket: "acme-files" });
+    expect((await getStorage(f.db, f.owner.id, f.org.id)).s3?.provider).toBe("r2");
+    // An older app says none, and a name it doesn't know is none too.
+    expect((await testStorage(f.storage, f.owner.id, f.org.id, { ...bucket(), bucket: "acme-new" })).ok).toBe(true);
+    await saveStorage(f.storage, f.owner.id, f.org.id, { kind: "s3", s3: { ...bucket(), bucket: "acme-new" } });
+    expect((await getStorage(f.db, f.owner.id, f.org.id)).s3?.provider).toBeNull();
+    const odd = { ...bucket(), prefix: "third", provider: "gcs" } as unknown as S3Input;
+    expect((await testStorage(f.storage, f.owner.id, f.org.id, odd)).ok).toBe(true);
+    await saveStorage(f.storage, f.owner.id, f.org.id, { kind: "s3", s3: odd });
+    expect((await getStorage(f.db, f.owner.id, f.org.id)).s3).toMatchObject({ provider: null, prefix: "third" });
+  });
+
   test("the SSRF guard holds: https only, no private, loopback, link-local or metadata addresses", async () => {
     f = await setup();
     const requests = f.s3.state.requests;
@@ -440,6 +502,8 @@ describe("org storage", () => {
       const result = await testStorage(f.storage, f.owner.id, f.org.id, bucket({ endpoint }));
       expect(result.ok).toBe(false);
       expect(result.steps[0]?.error).toBeTruthy();
+      // Refused before any request, still with a code the app translates.
+      expect(result.steps[0]?.code).toMatch(/^url\./);
     }
     expect(f.s3.state.requests).toBe(requests); // nothing was sent
     const blocked = ["10.1.2.3", "172.20.0.1", "192.168.1.1", "100.64.0.1", "0.0.0.0", "::ffff:127.0.0.1", "fe80::1"];

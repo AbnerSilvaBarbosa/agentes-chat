@@ -110,7 +110,7 @@ const PoProgress = z
 
 const CompanyParams = OrgParams.extend({ spaceId: z.uuid() });
 
-/** The PO chat per company (ADR 0185): the PO and its companies, and opening the person's chat for one. */
+/** The PO chat per company (ADR 0229): the PO and its companies, and opening the person's chat for one. */
 export function poRoutes(deps: AppDeps) {
   const { db, adapters } = deps;
   const app = createAppRouter(deps);

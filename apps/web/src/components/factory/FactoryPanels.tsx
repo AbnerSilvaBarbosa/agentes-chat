@@ -8,10 +8,10 @@ import { SpaceMark } from "@/pages/IssueProjects";
 import "./factory.css";
 
 /**
- * One panel per company (ADR 0184): its mark and name, the open tasks of A fazer, Em andamento and Em revisão, and
+ * One panel per company (ADR 0228): its mark and name, the open tasks of A fazer, Em andamento and Em revisão, and
  * what it concluded in the last 7 days. Late and waiting show only above zero. The whole panel opens the company's
  * Painel; past the panels the server sent, a link goes to the companies' page of Tarefas. Where the workspace has a PO,
- * a live company's panel also offers "Conversar com o PO" under the stats (ADR 0185): a button cannot sit inside the
+ * a live company's panel also offers "Conversar com o PO" under the stats (ADR 0229): a button cannot sit inside the
  * link, so the card is the list item and the link its body.
  */
 export function FactoryPanels({ home }: { home: FactoryHome }) {

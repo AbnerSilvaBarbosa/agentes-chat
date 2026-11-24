@@ -10,8 +10,8 @@ import { fileIcon, formatBytes, MAX_UPLOAD_BYTES, previewKind } from "@agentesch
 import { taskNoticeOf } from "@agenteschat/client/lib/missions";
 import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, within } from "@testing-library/react";
-import { fileSaver } from "@/components/artifacts/ArtifactViewer";
 import { objectUrls } from "@/components/artifacts/FileView";
+import { fileSaver } from "@/components/artifacts/fileSaver";
 import { createI18n } from "@/i18n";
 import { ADA_ID, createFakeApi, ENG_ID, fakeMachinesOf, ORG_ID, seedState } from "./fake-api";
 import { hintOf, shownText } from "./hint";
@@ -114,7 +114,9 @@ describe("uploaded files in the Drive", () => {
     const tiles = Array.from(document.querySelectorAll<HTMLElement>(".artifact-cards > .artifact-tile"));
     expect(tiles).toHaveLength(2);
     const [thumb, row] = tiles as [HTMLElement, HTMLElement];
-    expect(thumb.querySelector(".artifact-tile__picture img")?.getAttribute("src")).toMatch(/^blob:preview-/);
+    expect(thumb.querySelector(".artifact-tile__picture img")?.getAttribute("src")).toEndWith(
+      `/artifacts/${image.id}/thumb?version=1&w=480`,
+    );
     // A picture is only the picture (its name and size are in its tip and the viewer's header, below).
     expect(thumb.querySelector(".artifact-tile__foot")).toBeNull();
     expect(row.querySelector(".artifact-tile__title")?.textContent).toBe("carrossel.zip");
@@ -211,6 +213,26 @@ describe("uploaded files in the Drive", () => {
     dialog = screen().getByRole("dialog", { name: "notas.txt" });
     expect(dialog.querySelector(".file-view__text")?.textContent).toBe("linha 1\nlinha 2");
     expect(dialog.querySelector("textarea")).toBeNull();
+  });
+
+  test("a Markdown file reads as a document and a code file in a code card", async () => {
+    const api = createFakeApi(seedState());
+    const md = await api.artifacts.upload(
+      ORG_ID,
+      new File(["# Plano\n\nUm **passo** por vez"], "plano.md", { type: "text/markdown" }),
+    );
+    const ts = await api.artifacts.upload(ORG_ID, new File(["const total = 1;"], "soma.ts", { type: "text/plain" }));
+    await renderApp(`/org/${ORG_ID}/drive?artifact=${md.id}`, { api });
+    await settle(8);
+    let dialog = screen().getByRole("dialog", { name: "plano.md" });
+    expect(dialog.querySelector(".file-view__doc strong")?.textContent).toBe("passo");
+    expect(dialog.querySelector(".file-view__text")).toBeNull();
+    cleanup();
+    await renderApp(`/org/${ORG_ID}/drive?artifact=${ts.id}`, { api });
+    await settle(8);
+    dialog = screen().getByRole("dialog", { name: "soma.ts" });
+    expect(dialog.querySelector(".code-card .code-card__code")?.textContent).toBe("const total = 1;");
+    expect(dialog.querySelector(".file-view__text")).toBeNull();
   });
 
   test("a JSON file reads formatted in a code card, the text as written one press away", async () => {
@@ -739,7 +761,7 @@ describe("the computer page: pause, folders and tools (ADR 0036)", () => {
     // "Pausado", "até 16:24" (past midnight the date comes first: "até 10 nov 00:08").
     const sameDay = new Date(until).toDateString() === new Date().toDateString();
     const line = head.querySelector(".dv-statusline")?.textContent ?? "";
-    expect(line).toContain("Pausado");
+    expect(head.querySelector(".dv-headchips")?.textContent).toContain("Pausado");
     expect(line).toContain(sameDay ? `até ${time}` : "até ");
     expect(line).toContain(time);
     expect(head.textContent).toContain("Pausado no próprio computador por quem o conectou.");
@@ -849,19 +871,55 @@ describe("the computer page: pause, folders and tools (ADR 0036)", () => {
     );
   });
 
-  test("the browser off: whoever is at the computer turns it on in the app, or on Linux with the command", async () => {
+  test("the browser off on an app too old to switch from here: update it there, on Linux the command too", async () => {
     const card = () => document.querySelector('[aria-labelledby="sec-machine-browser"]') as HTMLElement;
     await open();
-    expect(card().textContent).toContain(
-      "Só quem está no computador liga, no app do agentes.chat: Preferências → Ferramentas.",
-    );
+    expect(card().textContent).toMatch(/Atualize o app do agentes\.chat no .+ para ligar daqui\./);
+    expect(card().textContent).not.toContain("Preferências");
     expect(card().querySelector(".machine-command__code")).toBeNull();
     cleanup();
     await open({ os: "linux", name: "Servidor", mode: "system" });
-    expect(card().textContent).toContain("Sem o app? No terminal do computador:");
+    expect(card().textContent).toContain("Prefiro no Terminal");
     expect(card().querySelector(".machine-command__code")?.textContent).toBe(
       "sudo agentes-runner tools enable browser",
     );
+  });
+
+  test("its owner turns the browser and a coding CLI on from here; someone else's computer offers to ask them", async () => {
+    const card = () => document.querySelector('[aria-labelledby="sec-machine-browser"]') as HTMLElement;
+    const allowCalls = (state: ReturnType<typeof seedState>) =>
+      state.calls.filter((c) => c.method === "machines.allowTool").map((c) => c.args);
+    const mine = await open({
+      pairedBy: { id: "u-walter", name: "Walter White" },
+      accessAllow: true,
+      access: { folders: [], tools: { claude: true, codex: false, commands: true, browser: false } },
+    });
+    await click(within(card()).getByRole("button", { name: "Ligar o navegador" }));
+    await settle(4);
+    expect(allowCalls(mine.state)).toEqual([[ORG_ID, mine.m.id, "browser"]]);
+    // An off coding CLI in the tools list gets its own Ligar.
+    const codex = document.querySelector('[data-tool="codex"]') as HTMLElement;
+    await click(within(codex).getByRole("button", { name: "Ligar Codex" }));
+    expect(allowCalls(mine.state).at(-1)).toEqual([ORG_ID, mine.m.id, "codex"]);
+    cleanup();
+    const theirs = await open({ pairedBy: { id: "u-rui", name: "Rui Tanaka" }, accessAllow: true });
+    expect(within(card()).queryByRole("button", { name: "Ligar o navegador" })).toBeNull();
+    await click(within(card()).getByRole("button", { name: "Pedir a Rui" }));
+    expect(theirs.state.calls.filter((c) => c.method === "machines.askTool").map((c) => c.args)).toEqual([
+      [ORG_ID, theirs.m.id, "browser"],
+    ]);
+    // Offline: the button waits for it, and one line says so.
+    cleanup();
+    await open({ pairedBy: { id: "u-walter", name: "Walter White" }, accessAllow: true, online: false });
+    expect(card().textContent).toContain("está offline. Assim que ele voltar, o botão liga o navegador.");
+    expect((within(card()).getByRole("button", { name: "Ligar o navegador" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    // An app too old for it: update it there.
+    cleanup();
+    await open({ pairedBy: { id: "u-walter", name: "Walter White" }, accessAllow: false });
+    expect(within(card()).queryByRole("button", { name: "Ligar o navegador" })).toBeNull();
+    expect(card().textContent).toContain("para ligar daqui.");
   });
 
   test("to allow more: the app on a Mac or a PC, the computer's terminal on Linux", async () => {

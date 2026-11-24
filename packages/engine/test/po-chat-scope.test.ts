@@ -254,7 +254,7 @@ describe("the PO chat block in a run's context", () => {
     const secret = await createIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, {
       title: "Campanha secreta de Natal",
       projectId: betaBoard.id,
-      assignee: { type: "agent", id: f.agent.id },
+      assignees: [{ type: "agent", id: f.agent.id }],
     });
     expect(secret.title).toBe("Campanha secreta de Natal");
     const text = await contextOf(chat.channelId, "O que voce tem aberto?");

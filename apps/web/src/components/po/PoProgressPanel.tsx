@@ -338,7 +338,7 @@ function Content({ spaceId }: { spaceId: string }) {
 }
 
 /**
- * The right column of a company's PO chat (ADR 0185 addendum): its cards by stage, following the board's columns, live
+ * The right column of a company's PO chat (ADR 0229 addendum): its cards by stage, following the board's columns, live
  * through the events the app already hears. Beside the conversation on a wide window; with `onClose` it floats over
  * the chat as the app's panels do, opened by the header's button.
  */

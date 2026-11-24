@@ -6,7 +6,7 @@ import { isGone } from "@agenteschat/client/lib/errors";
 import { agentGrammar } from "@agenteschat/client/lib/grammar";
 import { isRightHand, rightHandSeenKey } from "@agenteschat/client/lib/right-hand";
 import { badgeCount } from "@agenteschat/client/lib/unread";
-import { Avatar, BrainIcon, Button, CountBadge, EmptyState, ProviderLogo, Select } from "@agenteschat/ui";
+import { Avatar, Button, CountBadge, EmptyState, Select } from "@agenteschat/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
@@ -16,6 +16,8 @@ import { AudienceChip } from "@/components/AgentAudience";
 import { AgentAvatar } from "@/components/AgentAvatar";
 import { AgentSetupIntro, useSetupSteps } from "@/components/AgentSetup";
 import { useAgentPanelShown, useOpenAgentPanel } from "@/components/agent-panel-context";
+import { ModelPickerButton } from "@/components/ai/ModelPicker";
+import { DmMoreMenu } from "@/components/ConversationMenu";
 import { ComputerButton } from "@/components/computer/ComputerDialog";
 import { ErrorState } from "@/components/Loading";
 import { NavToggle } from "@/components/NavDrawer";
@@ -26,7 +28,6 @@ import { LetMeTalkButton } from "@/components/ReachLines";
 import { RightHandIntro } from "@/components/RightHandIntro";
 import { HeaderSearch } from "@/components/search/HeaderSearch";
 import { AgentTasksPill } from "@/components/tasks/AgentTasksPanel";
-import { useAgentThinks } from "@/hooks/useAgentThinks";
 import { useDirectory } from "@/hooks/useDirectory";
 import { rightHandSeen } from "@/lib/storage";
 import { ChannelPage, ChannelSkeleton, type DmSideControl } from "./ChannelPage";
@@ -34,7 +35,7 @@ import { SpaceMark } from "./IssueProjects";
 
 /**
  * A direct message with an agent or a person: the channel layout with its own header and empty state. With `po`, the
- * person's chat with that agent about one company (ADR 0185): opened for the company, each company its own history.
+ * person's chat with that agent about one company (ADR 0229): opened for the company, each company its own history.
  * With `poGeneral`, the PO's plain DM (where its routines and hand-offs write), reached from the PO view.
  */
 export function DmPage({
@@ -73,7 +74,6 @@ export function DmPage({
   const person = "userId" in target ? dir.memberById.get(target.userId) : undefined;
   const name = agent?.name ?? person?.name ?? "";
   const rightHand = isRightHand(agent);
-  const thinks = useAgentThinks(agent);
   // A new agent's setup checklist (ADR 0155 §2) for whoever sets it up: its greeting and the checklist on top.
   const setup = useSetupSteps(agent).length > 0;
   // Its DM is open, from its row or any other way in: its row's "Novo" goes.
@@ -100,16 +100,32 @@ export function DmPage({
   }
   if (!dm.data || dir.loading) return <ChannelSkeleton dm={kind} />;
 
-  const owner = agent?.ownerUserId ? dir.memberById.get(agent.ownerUserId) : undefined;
+  // A person's name or, when a role answers for it, the role's (ADR 0085, addendum of 2026-11-21).
+  const owner = agent ? dir.ownerName(agent) : undefined;
   const role = agent ? agent.role || `@${agent.handle}` : "";
   // The right hand (ADR 0137) says what it is and whose permissions it acts with, never an owner, nor a model: each
   // person's DM with it thinks with their own AI, shown with its maker's logo in the side panel's Como pensa.
-  const header = ({ onSearch, side }: { onSearch: () => void; side: DmSideControl | null }) => (
+  const agentLine = agent
+    ? rightHand
+      ? `${t("rightHand.label")} · ${t("rightHand.actsAsYou")}`
+      : owner
+        ? t("dm.subtitle", { role, owner })
+        : t("dm.subtitleNoOwner", { role })
+    : undefined;
+  const header = ({
+    onSearch,
+    side,
+    searching,
+  }: {
+    onSearch: () => void;
+    side: DmSideControl | null;
+    searching: boolean;
+  }) => (
     <header className="channel__header">
       <NavToggle />
       {/* Who it is with and the header's glyphs: the glyphs go under a name that can't keep its line beside them. */}
       <div className="ac-actline channel__line">
-        <DmWho agentId={agent?.id} userId={person?.userId} label={t("profile.of", { name })}>
+        <DmWho agentId={agent?.id} userId={person?.userId} label={t("profile.of", { name })} tip={agentLine}>
           <div className="dm-who__text">
             {agent ? (
               <AgentAvatar agentId={agent.id} name={agent.name} />
@@ -127,25 +143,8 @@ export function DmPage({
             )}
             {agent && poGeneral && <span className="channel__topic">{t("dm.poGeneralTopic")}</span>}
             {agent && !po && !poGeneral && (
-              <span className="channel__topic" data-right-hand={rightHand || undefined}>
-                {rightHand
-                  ? `${t("rightHand.label")} · ${t("rightHand.actsAsYou")}`
-                  : owner
-                    ? t("dm.subtitle", { role, owner: owner.name })
-                    : t("dm.subtitleNoOwner", { role })}
-                {thinks?.text && !rightHand && (
-                  <>
-                    {" · "}
-                    <span className="channel__brain ac-iconline">
-                      {thinks.mark ? (
-                        <ProviderLogo id={thinks.mark} size="xs" />
-                      ) : (
-                        <BrainIcon kind={thinks.kind} size={14} />
-                      )}
-                      {thinks.text}
-                    </span>
-                  </>
-                )}
+              <span className="channel__topic channel__topic--line" data-right-hand={rightHand || undefined}>
+                {agentLine}
               </span>
             )}
             {person && <span className="channel__topic">{person.email}</span>}
@@ -155,15 +154,19 @@ export function DmPage({
           {/* Its tasks (ADR 0128), while it has any: they open in the side panel. */}
           {agent && <AgentTasksPill />}
           {/* The sidebar has the computer: only a line of turns waiting for it still shows here. A viewer of its public
-              card gets the sidebar's head alone, so the way in stays for one who may still watch the computer. */}
-          {agent && !rightHand && <ComputerButton agent={agent} queueOnly={side?.docked && seesDetails(agent)} />}
-          {/* The PO chat's company (ADR 0185): another company opens that company's own chat. */}
+              card gets the sidebar's head alone, so the way in stays for one who may still watch the computer. The
+              right hand's AI is each person's own ("Sua IA" in the sidebar), so its header has no model button. */}
+          {agent && !rightHand && !po && <ModelPickerButton agent={agent} className="channel__brain" />}
+          {agent && <ComputerButton agent={agent} queueOnly={side?.docked && seesDetails(agent)} />}
+          {/* The PO chat's company (ADR 0229): another company opens that company's own chat. */}
           {po && <PoCompanySwitch spaceId={po.spaceId} />}
-          {/* …and the PO's plain DM beside it, lit while it holds unread messages (ADR 0185 addendum). */}
+          {/* …and the PO's plain DM beside it, lit while it holds unread messages (ADR 0229 addendum). */}
           {po && agent && <PoGeneralLink agentId={agent.id} />}
           {poGeneral && <PoBackLink />}
           {/* The same field as a channel's, held to this DM. */}
-          <HeaderSearch channelId={dm.data.channelId} onOpen={onSearch} dm />
+          <HeaderSearch channelId={dm.data.channelId} onOpen={onSearch} searching={searching} dm />
+          {/* Its own list, as its right click elsewhere, with this conversation's background. */}
+          <DmMoreMenu channelId={dm.data.channelId} name={name} agent={agent} person={person} />
           {side && (
             <Button
               size="sm"
@@ -264,11 +267,14 @@ function DmWho({
   agentId,
   userId,
   label,
+  tip,
   children,
 }: {
   agentId?: string;
   userId?: string;
   label: string;
+  /** The agent's line whole: under the name it keeps one line and may end in "…". */
+  tip?: string;
   children: ReactNode;
 }) {
   const openPanel = useOpenAgentPanel();
@@ -282,6 +288,7 @@ function DmWho({
           className="profile-trigger dm-who__hit"
           aria-label={label}
           aria-expanded={shown === agentId}
+          title={tip}
           onClick={() => openPanel?.(agentId)}
         />
       ) : userId ? (

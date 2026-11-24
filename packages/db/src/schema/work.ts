@@ -51,13 +51,13 @@ export const issueColumns = pgTable(
     stage: issueStatusEnum().notNull(),
     name: text(),
     /**
-     * The board these columns belong to (ADR 0177); null: the workspace's own set, which a board uses until it
+     * The board these columns belong to (ADR 0221); null: the workspace's own set, which a board uses until it
      * personalizes them. A board's columns go with the board.
      */
     projectId: uuid().references((): AnyPgColumn => issueProjects.id, { onDelete: "cascade" }),
     /** Order inside its stage. */
     position: doublePrecision().notNull(),
-    /** A task sitting here waits for a person to act on it; Início lists it (ADR 0184). */
+    /** A task sitting here waits for a person to act on it; Início lists it (ADR 0228). */
     waitsForPerson: boolean().notNull().default(false),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
@@ -65,7 +65,7 @@ export const issueColumns = pgTable(
 );
 
 /**
- * A set of columns a board can be created from (ADR 0177): a name and the columns, in order. A workspace starts with
+ * A set of columns a board can be created from (ADR 0221): a name and the columns, in order. A workspace starts with
  * two of them (a simple kanban and a development pipeline) and saves its own from a board.
  */
 export const issueColumnTemplates = pgTable(
@@ -86,7 +86,7 @@ export const issueColumnTemplates = pgTable(
 );
 
 /**
- * A space (ADR 0174): a company, a client, a product line — a group of boards. It holds no task of its own: the tasks
+ * A space (ADR 0219): a company, a client, a product line — a group of boards. It holds no task of its own: the tasks
  * of a space are its boards', so there is never a task whose board and space disagree. Archived: out of every picker,
  * its boards and their tasks stay.
  */
@@ -113,7 +113,7 @@ export const issueSpaces = pgTable(
 
 /**
  * A task's project (ADR 0171): a name and a colour. A task has at most one, and a project's board is the org's board
- * showing only its tasks. Archived: offered nowhere new, its tasks keep it. Its `spaceId` (ADR 0174) is the company it
+ * showing only its tasks. Archived: offered nowhere new, its tasks keep it. Its `spaceId` (ADR 0219) is the company it
  * belongs to: a board sits in one space or in none, and never decides who sees its tasks.
  */
 export const issueProjects = pgTable(
@@ -133,7 +133,7 @@ export const issueProjects = pgTable(
     archivedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  // Two boards of one company can't differ only by case; two companies can each have their own "Entregas" (ADR 0178).
+  // Two boards of one company can't differ only by case; two companies can each have their own "Entregas" (ADR 0222).
   // `coalesce`: a board in no company is a group of its own, and a plain `space_id` in the index wouldn't tell two
   // of those apart (NULLs are distinct in a unique index).
   (t) => [
@@ -148,7 +148,7 @@ export const issueProjects = pgTable(
 /**
  * Native issues. Visible to the whole org, or like the conversation they came from (`channel_id`: a DM or a private
  * channel, set by "Transformar em issue" and by an agent's `create_issue` there). Acceptance criteria are a checklist;
- * assignee is a person or an agent.
+ * who has it is in `issue_assignees`.
  */
 export const issues = pgTable(
   "issues",
@@ -168,14 +168,17 @@ export const issues = pgTable(
     /** Order inside its column, lowest first; a move by the system puts it on top (minus the time). */
     boardRank: doublePrecision().notNull().default(0),
     /**
-     * Since when it sits in its column (ADR 0184). Kept by the `issues_column_since` trigger, which resets it when the
+     * Since when it sits in its column (ADR 0228). Kept by the `issues_column_since` trigger, which resets it when the
      * status, the column or the board changes, so no writer has to remember.
      */
     columnSince: timestamp({ withTimezone: true }).notNull().defaultNow(),
     priority: issuePriorityEnum().notNull().default("normal"),
     /** Its project; deleting the project clears it, the task stays. */
     projectId: uuid().references(() => issueProjects.id, { onDelete: "set null" }),
-    /** `person` or `agent`. */
+    /**
+     * Read by nothing since `issue_assignees` (ADR 0188). They stay one release, as a deploy migrates while the version
+     * before it still serves and reads them; a later migration drops them and their index.
+     */
     assigneeType: text(),
     assigneeId: text(),
     labels: text().array().notNull().default(sql`'{}'::text[]`),
@@ -210,7 +213,7 @@ export const issues = pgTable(
      */
     conversationChannelId: uuid().references((): AnyPgColumn => channels.id, { onDelete: "set null" }),
     conversationRootId: uuid(),
-    /** The wiki page holding its spec (ADR 0185); a link that survives a rename, cleared when the page goes. */
+    /** The wiki page holding its spec (ADR 0229); a link that survives a rename, cleared when the page goes. */
     specPageId: uuid().references((): AnyPgColumn => wikiPages.id, { onDelete: "set null" }),
     createdByType: text().notNull(),
     createdById: text().notNull(),
@@ -224,41 +227,35 @@ export const issues = pgTable(
     index().on(t.orgId, t.projectId),
     index().on(t.parentIssueId),
     uniqueIndex().on(t.conversationChannelId),
-    // Every run reads its agent's open tasks, latest activity first (`openTasksBrief`).
+    // Of the two columns nothing reads any more; dropped with them.
     index().on(t.orgId, t.assigneeType, t.assigneeId, t.updatedAt),
   ],
 );
 
 /**
- * The people on a card besides its principal, in order (ADR 0186). The principal stays in `issues.assignee_*`, and an
- * agent on a card is always its principal, so every agent-side reader keeps reading one column. People only: an agent
- * is never a row here.
+ * Who has a task (ADR 0188): any number of people and agents, in the order they were put (`position`, lowest first).
+ * The first agent in that order answers what names nobody in the task's conversation.
  */
-export const issueCoAssignees = pgTable(
-  "issue_co_assignees",
+export const issueAssignees = pgTable(
+  "issue_assignees",
   {
-    issueId: uuid()
-      .notNull()
-      .references(() => issues.id, { onDelete: "cascade" }),
-    /** Always set: a test enforces it on every tenant table. */
+    id: uuid().primaryKey().defaultRandom(),
     orgId: uuid()
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    userId: text()
+    issueId: uuid()
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    /** Order among the people also with, lowest first. */
-    position: integer().notNull(),
-    /** `person` or `agent`: who added them. */
-    addedByType: text().notNull(),
-    addedById: text().notNull(),
+      .references(() => issues.id, { onDelete: "cascade" }),
+    /** `person` or `agent`. */
+    assigneeType: text().notNull(),
+    assigneeId: text().notNull(),
+    position: integer().notNull().default(0),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    // One entry per person: the same person twice is one.
-    primaryKey({ columns: [t.issueId, t.userId] }),
-    // "Minhas tarefas" and the person filter.
-    index().on(t.orgId, t.userId),
+    unique().on(t.issueId, t.assigneeType, t.assigneeId),
+    // Every run reads its agent's open tasks (`openTasksBrief`).
+    index().on(t.orgId, t.assigneeType, t.assigneeId),
   ],
 );
 
@@ -313,7 +310,7 @@ export const routines = pgTable(
     description: text(),
     event: text(),
     /**
-     * Narrows an event routine to some of its events (ADR 0175): `{ projectId, spaceId, columnId, fromColumnId }` for
+     * Narrows an event routine to some of its events (ADR 0220): `{ projectId, spaceId, columnId, fromColumnId }` for
      * `issue.moved`, each one set only when the routine cares. Empty: every event of that kind.
      */
     eventFilter: jsonb().$type<Record<string, string>>().notNull().default({}),
@@ -385,7 +382,15 @@ export const routineRuns = pgTable(
     finishedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique().on(t.routineId, t.at), unique().on(t.routineId, t.dedupeKey), index().on(t.routineId, t.createdAt)],
+  (t) => [
+    unique().on(t.routineId, t.at),
+    unique().on(t.routineId, t.dedupeKey),
+    index().on(t.routineId, t.createdAt),
+    // A run's routine, joined per run by the task list.
+    index().on(t.agentRunId),
+    // The open runs (few of all ever made), read by the reaper and the stall sweep every tick (`reapRoutineRuns`).
+    index("routine_runs_open_idx").on(t.status, t.createdAt).where(sql`${t.finishedAt} is null`),
+  ],
 );
 
 /**
@@ -410,6 +415,11 @@ export const routineHooks = pgTable("routine_hooks", {
   source: jsonb(),
   /** The HTTP methods the address answers (GET passes its query string as the call's data). */
   methods: text().array().notNull().default(sql`'{POST}'::text[]`),
+  /**
+   * "Group calls by": a dot path into a call's data (`conversation.id`). Calls with the same value there run one
+   * after another, in order; different values run side by side. Null: one line for every call.
+   */
+  groupBy: text(),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 });
@@ -564,7 +574,7 @@ export const calendarProposals = pgTable(
 );
 
 /**
- * A card the PO agent proposed in a PO chat (ADR 0185). Nothing is an issue until the person confirms: the claim on
+ * A card the PO agent proposed in a PO chat (ADR 0229). Nothing is an issue until the person confirms: the claim on
  * `status` is one conditional update, and the spec run's queue (`spec_*`) lives on the same row.
  */
 export const poCardProposals = pgTable(

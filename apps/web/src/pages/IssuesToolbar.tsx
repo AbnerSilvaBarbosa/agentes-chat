@@ -1,11 +1,13 @@
 import type { Actor, Issue, IssuePriority, IssuesView } from "@agenteschat/client";
-import { assigneeKeys } from "@agenteschat/client/lib/issue-assignees";
 import {
+  DONE_RECENT_DAYS,
   ISSUE_CARD_FIELDS,
+  ISSUES_DONE,
   ISSUES_GROUPS,
   ISSUES_SORTS,
   type IssuesViewChange,
   isDefaultIssuesView,
+  issueAssigneeKeys,
   PRIORITY_ORDER,
 } from "@agenteschat/client/lib/issues-view";
 import {
@@ -34,8 +36,8 @@ const toggled = <V extends string>(list: V[], value: V) =>
   list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 
 /**
- * "Filtro" and the filters in use. One menu filters by assignee (me, each agent and person with a task here, nobody)
- * and by priority; each filter in use shows as a chip that opens the same menu, with a × to take it off.
+ * "Filtro" and the filters in use. One menu filters by assignee (me, each agent and person with a task here, nobody),
+ * by priority and by label (the ones the tasks here have); each filter in use shows as a chip that opens the same menu, with a × to take it off.
  */
 export function IssueFilters({
   view,
@@ -47,7 +49,7 @@ export function IssueFilters({
   /** The tasks loaded: who has one is who the menu offers. */
   issues: Issue[];
   onChange: (change: IssuesViewChange) => void;
-  /** `false`: no assignee choice, on the page that is that filter (the member's own tasks, ADR 0181). */
+  /** `false`: no assignee choice, on the page that is that filter (the member's own tasks, ADR 0225). */
   assignee?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -55,8 +57,7 @@ export function IssueFilters({
   const actors = useActors();
   const copy = useFilterCopy();
   const mine: Actor = { type: "person", id: me.user.id };
-  // Everyone on a card, the principal and the people also with it, can be filtered on (ADR 0186).
-  const keys = new Set([...issues.flatMap(assigneeKeys), ...view.assignees]);
+  const keys = new Set([...issues.flatMap(issueAssigneeKeys), ...view.assignees]);
   keys.delete(actorKey(mine));
   keys.delete(NO_ACTOR);
   // Agents first, then people, each by name.
@@ -69,6 +70,9 @@ export function IssueFilters({
     const actor = actorFromKey(key);
     return actor ? actors.name(actor) : t("issues.noAssignee");
   };
+  const labels = [...new Set([...issues.flatMap((i) => i.labels), ...view.labels])].sort((a, b) =>
+    a.localeCompare(b, i18n.language),
+  );
   const who: { key: string; label: string; actor: Actor | null }[] = [
     { key: actorKey(mine), label: t("issues.me"), actor: mine },
     ...others.map((a) => ({ key: actorKey(a), label: actors.name(a), actor: a })),
@@ -105,6 +109,21 @@ export function IssueFilters({
           {t(`issues.priority.${p}`)}
         </MenuCheckboxItem>
       ))}
+      {labels.length > 0 && (
+        <>
+          <MenuSeparator />
+          <MenuHeading>{t("issues.labelFilter")}</MenuHeading>
+          {labels.map((l) => (
+            <MenuCheckboxItem
+              key={l}
+              checked={view.labels.includes(l)}
+              onCheckedChange={() => onChange({ labels: toggled(view.labels, l) })}
+            >
+              {l}
+            </MenuCheckboxItem>
+          ))}
+        </>
+      )}
     </>
   );
   const chips: { key: string; icon: IconName; filter: string; value: string; clear: () => void }[] = [
@@ -121,6 +140,13 @@ export function IssueFilters({
       filter: t("issues.priorityFilter"),
       value: t(`issues.priority.${p}`),
       clear: () => onChange({ priorities: view.priorities.filter((x) => x !== p) }),
+    })),
+    ...view.labels.map((l) => ({
+      key: `label:${l}`,
+      icon: "pin" as const,
+      filter: t("issues.labelFilter"),
+      value: l,
+      clear: () => onChange({ labels: view.labels.filter((x) => x !== l) }),
     })),
   ];
   return (
@@ -216,7 +242,8 @@ function MiniLayout({ layout }: { layout: IssuesView["layout"] }) {
 
 /**
  * "Exibição": the button reads the layout and the grouping ("Quadro · Etapa") and opens the choices: board or list,
- * group by stage, assignee or priority, the order inside each group, what the cards show, canceled tasks. Every
+ * group by stage, assignee or priority, the order inside each group, what the cards show, which finished tasks show,
+ * canceled tasks, groups with no task. Every
  * change is kept for the person in this workspace at once; "Voltar ao padrão" when it differs from the default.
  */
 export function DisplayButton({
@@ -280,7 +307,7 @@ export function DisplayButton({
           options={ISSUES_GROUPS.map((g) => ({ value: g, label: t(`issues.display.by.${g}`) }))}
         />
       </div>
-      <div className="issues-display__row">
+      <div className="issues-display__row issues-display__row--col">
         <span className="issues-display__label">{t("issues.display.sort")}</span>
         <Segmented
           size="sm"
@@ -310,6 +337,19 @@ export function DisplayButton({
           ))}
         </div>
       </div>
+      <div className="issues-display__row issues-display__row--col">
+        <span className="issues-display__label">{t("issues.display.done")}</span>
+        <Segmented
+          size="sm"
+          label={t("issues.display.done")}
+          value={view.done}
+          onValueChange={(done) => onChange({ done })}
+          options={ISSUES_DONE.map((d) => ({
+            value: d,
+            label: t(`issues.display.doneIs.${d}`, { days: DONE_RECENT_DAYS }),
+          }))}
+        />
+      </div>
       <div className="issues-display__row">
         <label className="issues-display__label" htmlFor={`${id}-canceled`}>
           {t("issues.showCanceled")}
@@ -319,6 +359,12 @@ export function DisplayButton({
           checked={view.showCanceled}
           onCheckedChange={(showCanceled) => onChange({ showCanceled })}
         />
+      </div>
+      <div className="issues-display__row">
+        <label className="issues-display__label" htmlFor={`${id}-empty`}>
+          {t("issues.display.hideEmpty")}
+        </label>
+        <Switch id={`${id}-empty`} checked={view.hideEmpty} onCheckedChange={(hideEmpty) => onChange({ hideEmpty })} />
       </div>
       <div className="issues-display__foot">
         <span>

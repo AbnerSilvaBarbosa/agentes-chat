@@ -32,7 +32,7 @@ const byStage = (columns: SetColumn[]): SetColumn[] => {
 };
 
 /**
- * Configurações › Tarefas (ADR 0177): the status sets a board can start from, each with its columns by stage. Whoever
+ * Configurações › Tarefas (ADR 0221): the status sets a board can start from, each with its columns by stage. Whoever
  * may create tasks makes, renames and deletes sets and edits their columns, each gesture saved at once; everyone else
  * reads them. A board made from a set keeps its own copy, so nothing here changes a board that already exists.
  */

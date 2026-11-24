@@ -69,7 +69,7 @@ describe("a task's GitHub link", () => {
     const api = createFakeApi(seedState());
     const task = await api.issues.get(ORG_ID, 131);
     await api.issues.update(ORG_ID, task.id, { githubUrl: url });
-    await renderApp(`/org/${ORG_ID}/issues`, { api });
+    await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
     await settle(8);
     const card = document.querySelector('[data-card="131"]') as HTMLElement;
     expect(card.querySelector(`.ac-factline__fact[title="${url}"]`)?.textContent).toBe("app#40");

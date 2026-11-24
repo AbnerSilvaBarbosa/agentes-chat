@@ -1,5 +1,5 @@
 /**
- * `#128` in chat (web): a card named by its number (ADR 0183). Where the numbers are in a text, and what the "#"
+ * `#128` in chat (web): a card named by its number (ADR 0227). Where the numbers are in a text, and what the "#"
  * picker offers beside the channels. A number is a workspace's own (`issues.number`), so the renderer asks for the
  * card by it; one that is no card the reader may see stays the text as written.
  */

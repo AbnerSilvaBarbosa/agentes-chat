@@ -75,7 +75,7 @@ describe("what agents can do with cards", () => {
       project: "CRM",
       company: "Empresa A",
       column: "Ready for dev",
-      assignee: "me",
+      assignees: ["me"],
     });
     expect(made.isError).toBe(false);
     const card = await getIssue(f.db, person(f.owner.id), f.org.id, { id: issueOf(made.data) });
@@ -85,7 +85,7 @@ describe("what agents can do with cards", () => {
     expect(card.project?.id).toBe(crm.id);
     expect(card.columnId).toBe(ready.id);
     expect(card.status).toBe("in_progress");
-    expect(card.assignee).toEqual({ type: "agent", id: f.agent.id });
+    expect(card.assignees).toEqual([{ type: "agent", id: f.agent.id }]);
   });
 
   test("update_issue moves a card to a column of its board", async () => {
@@ -124,27 +124,25 @@ describe("what agents can do with cards", () => {
     expect(other.id).not.toBe(f.agent.id);
     const { run } = await agentTools(f);
     const id = issueOf((await run("create_issue", { title: "Contrato" })).data);
-    const assigneeOf = async () => (await getIssue(f.db, person(f.owner.id), f.org.id, { id })).assignee;
+    const assigneesOf = async () => (await getIssue(f.db, person(f.owner.id), f.org.id, { id })).assignees;
 
-    await run("update_issue", { issue: id, assignee: "me" });
-    expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
-    await run("update_issue", { issue: id, assignee: "@dev" });
-    expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
+    await run("update_issue", { issue: id, assignees: ["me"] });
+    expect(await assigneesOf()).toEqual([{ type: "agent", id: f.agent.id }]);
+    await run("update_issue", { issue: id, assignees: ["@dev"] });
+    expect(await assigneesOf()).toEqual([{ type: "agent", id: f.agent.id }]);
     // Another agent's handle sets that agent, not the caller.
-    const toOther = await run("update_issue", { issue: id, assignee: "@other" });
+    const toOther = await run("update_issue", { issue: id, assignees: ["@other"] });
     expect(toOther.isError).toBe(false);
-    expect(await assigneeOf()).toEqual({ type: "agent", id: other.id });
-    await run("update_issue", { issue: id, assignee: "me" });
-    expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
-    const toPerson = await run("update_issue", { issue: id, assignee: "bia" });
-    expect(toPerson.isError).toBe(false);
-    // A person named on a card that has an agent joins beside it; the agent stays the principal (ADR 0186).
-    expect(await assigneeOf()).toEqual({ type: "agent", id: f.agent.id });
-    expect((await getIssue(f.db, person(f.owner.id), f.org.id, { id })).alsoWith).toEqual([
+    expect(await assigneesOf()).toEqual([{ type: "agent", id: other.id }]);
+    // The whole list, in order: a person beside an agent (ADR 0188).
+    const together = await run("update_issue", { issue: id, assignees: ["me", "bia"] });
+    expect(together.isError).toBe(false);
+    expect(await assigneesOf()).toEqual([
+      { type: "agent", id: f.agent.id },
       { type: "person", id: bia.id },
     ]);
-    await run("update_issue", { issue: id, assignee: "none" });
-    expect(await assigneeOf()).toBeNull();
+    await run("update_issue", { issue: id, assignees: [] });
+    expect(await assigneesOf()).toEqual([]);
   });
 
   test("update_issue places a card in a company and a board", async () => {
@@ -279,9 +277,9 @@ describe("what agents can do with cards", () => {
       const schema = tools.find((t) => t.name === name)?.inputSchema as { properties?: Record<string, unknown> };
       return Object.keys(schema?.properties ?? {});
     };
-    expect(fields("create_issue")).toEqual(expect.arrayContaining(["column", "assignee", "company", "project"]));
+    expect(fields("create_issue")).toEqual(expect.arrayContaining(["column", "assignees", "company", "project"]));
     expect(fields("update_issue")).toEqual(
-      expect.arrayContaining(["column", "status", "assignee", "company", "project"]),
+      expect.arrayContaining(["column", "status", "assignees", "company", "project"]),
     );
     expect(fields("list_issues")).toEqual(expect.arrayContaining(["company", "project"]));
     expect(tools.map((t) => t.name)).toContain("list_boards");

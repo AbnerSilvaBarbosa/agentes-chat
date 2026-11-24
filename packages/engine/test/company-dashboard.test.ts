@@ -40,9 +40,11 @@ async function scene() {
       /** `[status, daysAgo]` moves, oldest first, written as `status_changed` events. */
       moves?: [Status, number][];
       projectId?: string | null;
+      /** Who has it (its first assignee, ADR 0188); left out: nobody. */
+      assignedTo?: { type: "agent" | "person"; id: string };
     } = {},
   ) {
-    const { moves, ...values } = input;
+    const { moves, assignedTo, ...values } = input;
     const [row] = await f.db
       .insert(schema.issues)
       .values({
@@ -56,6 +58,15 @@ async function scene() {
         ...values,
       })
       .returning();
+    if (assignedTo && row) {
+      await f.db.insert(schema.issueAssignees).values({
+        orgId: f.org.id,
+        issueId: row.id,
+        assigneeType: assignedTo.type,
+        assigneeId: assignedTo.id,
+        position: 0,
+      });
+    }
     for (const [to, daysAgo] of moves ?? []) {
       await f.db.insert(schema.issueActivity).values({
         orgId: f.org.id,
@@ -150,7 +161,7 @@ describe("companyDashboard stages", () => {
 });
 
 describe("companyDashboard assignees", () => {
-  const as = (type: "agent" | "person", id: string) => ({ assigneeType: type, assigneeId: id });
+  const as = (type: "agent" | "person", id: string) => ({ assignedTo: { type, id } });
 
   test("lists each assignee with open and done tasks", async () => {
     f = await setup();
@@ -369,7 +380,7 @@ describe("companyDashboard weeks, late and unassigned", () => {
     const { task, read } = await scene();
     await task({ status: "todo" });
     await task({ status: "in_review" });
-    await task({ status: "todo", assigneeType: "agent", assigneeId: f.agent.id });
+    await task({ status: "todo", ...as("agent", f.agent.id) });
     await task({ status: "done", moves: [["done", 2]] });
     await task({ status: "canceled" });
     expect((await read()).unassigned).toBe(2);
@@ -517,14 +528,23 @@ describe("companyDashboard size", () => {
       title: `Bulk ${i}`,
       status: statuses[i % statuses.length] as (typeof statuses)[number],
       projectId: board?.id,
-      assigneeType: i % 3 === 0 ? null : "agent",
-      assigneeId: i % 3 === 0 ? null : f.agent.id,
       dueDate: i % 7 === 0 ? "2026-10-01" : null,
       createdByType: "person",
       createdById: f.owner.id,
       createdAt: ago(60 + (i % 20)),
     }));
     await f.db.insert(schema.issues).values(tasks);
+    await f.db.insert(schema.issueAssignees).values(
+      tasks
+        .filter((_, i) => i % 3 !== 0)
+        .map((t) => ({
+          orgId: f.org.id,
+          issueId: t.id,
+          assigneeType: "agent",
+          assigneeId: f.agent.id,
+          position: 0,
+        })),
+    );
     const events = tasks.flatMap((t, i) => [
       {
         orgId: f.org.id,
@@ -623,7 +643,7 @@ async function addRun(issueId: string, agentId: string, at: Date, usd: number) {
   });
 }
 
-const as = (type: "agent" | "person", id: string) => ({ assigneeType: type, assigneeId: id });
+const as = (type: "agent" | "person", id: string) => ({ assignedTo: { type, id } });
 const EMPTY_SPAN = { count: 0, medianMs: null, averageMs: null };
 
 describe("companyDashboard review", () => {

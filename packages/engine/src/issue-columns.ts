@@ -19,18 +19,18 @@ export interface IssueColumnView {
   position: number;
   /** The board it belongs to; null: the workspace's own set, which a board uses until it has its own. */
   projectId: string | null;
-  /** A task sitting here waits for a person to act on it (ADR 0184). */
+  /** A task sitting here waits for a person to act on it (ADR 0228). */
   waitsForPerson: boolean;
 }
 
-/** One column of a set; `waitsForPerson` is only ever present as `true` (ADR 0184). */
+/** One column of a set; `waitsForPerson` is only ever present as `true` (ADR 0228). */
 export interface TemplateColumn {
   name: string;
   stage: IssueStatus;
   waitsForPerson?: boolean;
 }
 
-/** A set of columns a board can be created from (ADR 0177). */
+/** A set of columns a board can be created from (ADR 0221). */
 export interface ColumnTemplateView {
   id: string;
   name: string;
@@ -58,7 +58,7 @@ const sortColumns = (rows: ColumnRow[]) =>
 const STAGE_COLUMNS_MAX = 10;
 
 /**
- * The two templates a workspace starts with (ADR 0177): a plain kanban, and the pipeline a software team runs — the
+ * The two templates a workspace starts with (ADR 0221): a plain kanban, and the pipeline a software team runs — the
  * columns a person would otherwise build by hand on every board. Names are data, in the words of the person who set
  * the workspace up; a board created from one gets its own copy.
  */
@@ -115,7 +115,7 @@ export async function boardColumns(db: Database, orgId: string): Promise<ColumnR
 }
 
 /**
- * Every column of the workspace, the boards' and its own (ADR 0177): what a list of tasks from several boards needs to
+ * Every column of the workspace, the boards' and its own (ADR 0221): what a list of tasks from several boards needs to
  * resolve each one's column. Not a board's set: see `boardColumnsOf`.
  */
 export async function allColumns(db: Database, orgId: string): Promise<ColumnRow[]> {
@@ -135,7 +135,7 @@ export async function boardColumnsOf(db: Database, orgId: string, projectId: str
 }
 
 /**
- * The board's own columns, made from the workspace's the first time it changes them (ADR 0177): editing a board never
+ * The board's own columns, made from the workspace's the first time it changes them (ADR 0221): editing a board never
  * edits the workspace's set, so a board that never asked keeps following it.
  */
 export async function ensureBoardColumns(db: Database, orgId: string, projectId: string): Promise<ColumnRow[]> {
@@ -178,7 +178,7 @@ export function columnOf(columns: ColumnRow[], issue: { status: IssueStatus; col
 }
 
 /**
- * The column the `issues` row `alias` sits in, as a `left join lateral … col` (ADR 0184): the column `columnOf` gives
+ * The column the `issues` row `alias` sits in, as a `left join lateral … col` (ADR 0228): the column `columnOf` gives
  * over the board's columns (`boardColumnsOf`), in SQL, so a list reads one column per task in one statement. The
  * task's own column when it is in the board's set and in the task's stage; else the first column of that stage in the
  * board's own set, or in the workspace's when the board has none. Exposes `col.id`, `col.name`, `col.stage` and
@@ -199,7 +199,7 @@ export function effectiveColumnSql(alias: string): SQL {
 }
 
 /**
- * Whether the task `alias` waits for a person (ADR 0184): open, and in a flagged column. Reads the `col` of
+ * Whether the task `alias` waits for a person (ADR 0228): open, and in a flagged column. Reads the `col` of
  * `effectiveColumnSql` for the same alias, which the query must join.
  */
 export const waitingSql = (alias: string): SQL =>
@@ -278,7 +278,7 @@ export async function createIssueColumn(
 
 /**
  * Renames a column, moves it inside its stage (`index`: its place among the stage's columns), or moves it to another
- * stage (ADR 0179): its tasks follow it, each one's status becoming the new stage. Without this, changing where a
+ * stage (ADR 0223): its tasks follow it, each one's status becoming the new stage. Without this, changing where a
  * column sits meant deleting it and making another, which moved every card by hand.
  */
 export async function updateIssueColumn(
@@ -347,7 +347,7 @@ export async function updateIssueColumn(
 }
 
 /**
- * Flags a column as one whose tasks wait for a person, or clears it (ADR 0184). A board that still follows the
+ * Flags a column as one whose tasks wait for a person, or clears it (ADR 0228). A board that still follows the
  * workspace's set has no row of its own to flag: given `projectId`, it gets its own copy first (the workspace's columns
  * stay as they were) and each of its tasks is re-pointed to the copy of the column it was in, keeping its clock.
  */
@@ -468,13 +468,13 @@ export async function deleteIssueColumn(
     }
     await tx.delete(issueColumns).where(eq(issueColumns.id, column.id));
   });
-  // The board's alert rules that name it could never fire again (ADR 0175 addendum).
+  // The board's alert rules that name it could never fire again (ADR 0220 addendum).
   await deleteColumnRoutines(deps, userId, orgId, column.id);
   return announce(deps, orgId);
 }
 
 /**
- * Validates a column for an issue move (ADR 0177): it must be a column of that task's board, or one of the workspace's
+ * Validates a column for an issue move (ADR 0221): it must be a column of that task's board, or one of the workspace's
  * when the board has none of its own.
  */
 export async function columnForMove(db: Database, orgId: string, columnId: string, projectId?: string | null) {
@@ -551,7 +551,7 @@ export async function templateByName(db: Database, orgId: string, name: string) 
 }
 
 /**
- * A board's columns become this template's (ADR 0177): the board gets its own copy, and the tasks of columns it no
+ * A board's columns become this template's (ADR 0221): the board gets its own copy, and the tasks of columns it no
  * longer has move to the first column of their stage.
  */
 export async function applyColumnTemplate(
@@ -685,7 +685,7 @@ function templateColumns(columns: TemplateColumn[]) {
 const takenName = (name: string) =>
   new ValidationError(`There is already a template named "${name}"`, "issue_template.name_taken", { name });
 
-/** Makes a status set from a name and its columns, in the order the board will show them (ADR 0177). */
+/** Makes a status set from a name and its columns, in the order the board will show them (ADR 0221). */
 export async function createColumnTemplate(
   deps: ColumnDeps,
   userId: string,

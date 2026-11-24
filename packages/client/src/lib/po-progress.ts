@@ -1,7 +1,7 @@
 import type { PoProgressCard, PoProgressGroup } from "../api/types";
 
 /**
- * What a row of the PO chat's progress panel says about its card's spec (ADR 0185 addendum): the spec's state as the PO
+ * What a row of the PO chat's progress panel says about its card's spec (ADR 0229 addendum): the spec's state as the PO
  * chat's proposal keeps it. A spec that is still to be written (queued, running) or did not finish belongs to a card
  * still to be specified, so those only show in a group of the to-do stage; a finished spec shows wherever the card sits,
  * with its page when the reader may open it. No spec, no badge.
@@ -44,7 +44,7 @@ export function specReasonKey(reason: string | null): SpecReasonKey {
 }
 
 /**
- * The column a row's "Liberar para dev" moves its card to (ADR 0185 addendum): the server names it only for a card a
+ * The column a row's "Liberar para dev" moves its card to (ADR 0229 addendum): the server names it only for a card a
  * finished spec left in Especificado (Priorizado on older boards) when the reader may move cards; the group is checked
  * again here so no other group ever shows the button.
  */

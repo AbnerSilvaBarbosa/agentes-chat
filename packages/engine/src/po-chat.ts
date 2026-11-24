@@ -26,7 +26,7 @@ const {
 } = schema;
 
 /**
- * A PO chat is the DM between a person and the workspace's PO about one company (ADR 0185): a DM whose key carries a
+ * A PO chat is the DM between a person and the workspace's PO about one company (ADR 0229): a DM whose key carries a
  * third part, `s:<company>`, so each company has its own history and no table or column is added. Keys sort, so the
  * form is always `a:<po>|s:<company>|u:<person>`.
  */
@@ -75,7 +75,7 @@ export async function poAgentOf(db: Database, orgId: string): Promise<Agent | nu
 
 export type PoCompany = IssueSpaceRef & { open: number; channelId: string | null; unread: number };
 
-/** Messages in each of the person's PO chats they have not read: the routines' own count here (ADR 0185 addendum). */
+/** Messages in each of the person's PO chats they have not read: the routines' own count here (ADR 0229 addendum). */
 async function poChatUnread(db: Database, userId: string, orgId: string, channelIds: string[]) {
   if (channelIds.length === 0) return new Map<string, number>();
   const reads = await db
@@ -142,7 +142,7 @@ export async function listPoCompanies(
 }
 
 /**
- * Opens the person's PO chat for one company (ADR 0185): their DM with the PO, made the first time and the same one
+ * Opens the person's PO chat for one company (ADR 0229): their DM with the PO, made the first time and the same one
  * after, its key ending in the company. It follows `openDm`: the person's right to post, the PO's audience, a
  * workspace being deleted opens only what it has, an archived chat comes back.
  */
@@ -211,7 +211,7 @@ export async function openPoChat(
 }
 
 /**
- * The company a conversation is a PO chat of (ADR 0185), read from the channel's key through the per-process channel
+ * The company a conversation is a PO chat of (ADR 0229), read from the channel's key through the per-process channel
  * cache: the one thing the PO's tools and context ask. Null in any other conversation, so no other chat changes.
  * With `runId`, the PO's own spec run (the run a confirmed proposal started, in the card's conversation) has the same
  * company scope, so writing a spec reads and writes nothing of another company; the lookup is made only in a card's
@@ -250,7 +250,7 @@ export async function poScopeOf(
 }
 
 /**
- * Where a DM routine of the PO reports (ADR 0185 addendum): the person's PO chat of one company, so the PO's routines
+ * Where a DM routine of the PO reports (ADR 0229 addendum): the person's PO chat of one company, so the PO's routines
  * and its conversation are one thread. The company is the target's `spaceId`; else the one the routine's event filter
  * names (its `spaceId`, or its board's company); else the only company the PO chat can open for the person. Null when
  * the agent is not the PO or no single company applies (several, none, an archived one): the caller keeps the plain DM.

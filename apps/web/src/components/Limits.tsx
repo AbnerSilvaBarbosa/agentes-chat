@@ -11,6 +11,7 @@ import {
 import { can } from "@agenteschat/client/lib/permissions";
 import { Meter, SettingNote, SettingRow } from "@agenteschat/ui";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { BillingLinkButton, useOpenBilling } from "@/components/BillingLinkButton";
 import { useOrg } from "@/components/org-context";
@@ -58,6 +59,7 @@ export function useUploadFailed() {
   const qc = useQueryClient();
   const billing = useBillingAccess();
   const open = useOpenBilling(org.id, "upload_full");
+  const navigate = useNavigate();
   return (error: unknown) => {
     const text = errorText(t, error, i18n.language);
     if (errorCode(error) !== "storage.full") return toast.show(text, "error");
@@ -66,7 +68,22 @@ export function useUploadFailed() {
     toast.show(
       text,
       "error",
-      { label: t("billing.seeOptions"), run: () => open.mutate() },
+      [
+        { label: t("billing.seeOptions"), run: () => open.mutate() },
+        ...(can(org, "configure")
+          ? [
+              {
+                label: t("limits.storage.connectBucket"),
+                run: () =>
+                  void navigate({
+                    to: "/org/$orgId/settings/$section",
+                    params: { orgId: org.id, section: "storage" },
+                    search: {},
+                  }),
+              },
+            ]
+          : []),
+      ],
       t("limits.storage.fullAdmin"),
     );
   };
@@ -116,14 +133,15 @@ export function StorageMeter() {
 
 /**
  * Plano e cobrança: people and files against the plan's limits, in plain numbers. People count against the plan's
- * top when the billing service says one, with the seats paid for under it.
+ * top when the billing service says one, with the seats paid for under it. X's month, once the workspace used it, as
+ * a share alone: this server shows no price.
  */
 export function BillingMeters() {
   const { t, i18n } = useTranslation();
   const { org } = useOrg();
   const limits = useWorkspaceLimits(org.id).data;
   if (!limits) return null;
-  const { members, storage } = limits;
+  const { members, storage, connectors } = limits;
   const bytes = (n: number) => formatBytes(i18n.language, n);
   const people = members.max ?? members.limit;
   const rows = [
@@ -146,6 +164,21 @@ export function BillingMeters() {
           : t("billing.usedOf", { used: bytes(storage.usedBytes), limit: bytes(storage.limitBytes) }),
       note: null,
     },
+    ...(connectors && connectors.limitUsd !== null && connectors.limitUsd > 0 && connectors.usedUsd > 0
+      ? [
+          {
+            key: "connectors" as const,
+            used: Math.min(connectors.usedUsd, connectors.limitUsd),
+            limit: connectors.limitUsd,
+            value: t("billing.shareUsed", {
+              share: new Intl.NumberFormat(i18n.language, { style: "percent" }).format(
+                Math.min(1, connectors.usedUsd / connectors.limitUsd),
+              ),
+            }),
+            note: null,
+          },
+        ]
+      : []),
   ] as const;
   return (
     <div className="stack-4" style={{ gap: 12 }}>

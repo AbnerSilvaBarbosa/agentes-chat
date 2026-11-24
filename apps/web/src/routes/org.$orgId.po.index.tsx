@@ -9,7 +9,7 @@ import { ChannelSkeleton } from "@/pages/ChannelPage";
 
 /**
  * The PO view without a company (the sidebar's PO row, the PO agent's row): it replaces itself with the chat of the
- * company the person opened last, else the first live one (ADR 0185). With no PO, or no company, the page says so.
+ * company the person opened last, else the first live one (ADR 0229). With no PO, or no company, the page says so.
  */
 export const Route = createFileRoute("/org/$orgId/po/")({
   component: function PoLanding() {

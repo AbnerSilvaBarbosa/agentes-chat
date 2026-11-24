@@ -114,6 +114,7 @@ describe("a channel", () => {
       "Silenciar canal",
       "Editar canal",
       "Fixar no topo",
+      "Fundo da conversa…",
       "Copiar link",
       "Sair do canal",
       "Arquivar canal",
@@ -211,7 +212,7 @@ describe("lists of things", () => {
   });
 
   test("an issue card: open beside, open its page, copy link, and delete for who may", async () => {
-    await go("issues");
+    await go("issues?all=1");
     const card = document.querySelector(".issue-card");
     if (!card) throw new Error("no issue card");
     await rightClick(card);

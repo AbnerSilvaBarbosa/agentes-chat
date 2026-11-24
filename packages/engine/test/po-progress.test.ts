@@ -455,7 +455,7 @@ describe("poProgress", () => {
     expect((await read(bare.spaceId)).groups).toEqual([]);
   });
 
-  describe("releaseTo (ADR 0185 addendum)", () => {
+  describe("releaseTo (ADR 0229 addendum)", () => {
     const ids = (p: Awaited<ReturnType<typeof read>>) =>
       Object.fromEntries(p.groups.flatMap((g) => g.items.map((i) => [i.title, i.releaseTo] as const)));
 

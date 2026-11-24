@@ -16,7 +16,7 @@ type Period = (typeof PERIODS)[number];
 const WEEKS_MAX = 14;
 
 /**
- * A company's Painel (ADR 0182): the numbers of the tasks on its boards for the last 7, 30 or 90 days, 30 at first,
+ * A company's Painel (ADR 0226): the numbers of the tasks on its boards for the last 7, 30 or 90 days, 30 at first,
  * drawn with the Painéis' own cards. Read when it opens and when the period changes; nothing here is built or
  * refreshed by anyone. `onNewBoard`: the empty company's way in.
  */

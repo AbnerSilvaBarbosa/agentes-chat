@@ -6,7 +6,7 @@ import { taskSeenSql } from "./task-access";
 import { canViewCost } from "./usage";
 
 /**
- * A company's Painel (ADR 0182): the numbers of the tasks on its boards, for one viewer and one period. Read when the
+ * A company's Painel (ADR 0226): the numbers of the tasks on its boards, for one viewer and one period. Read when the
  * tab opens, from rows that exist (`issues`, `issue_activity`); nothing is stored.
  */
 
@@ -77,12 +77,17 @@ export const OPEN = sql`status in ('todo', 'in_progress', 'in_review')`;
 
 /**
  * The tasks of the company's boards (archived boards included) that `userId` sees, as a CTE named `vis`. Canceled
- * ones are in it: `t` (the next CTE) leaves them out of every count.
+ * ones are in it: `t` (the next CTE) leaves them out of every count. A task counts for its first assignee only (the
+ * first in its list, ADR 0188), whoever else has it.
  */
 function visibleTasks(userId: string, orgId: string, spaceId: string) {
   return sql`vis as (
-      select i.id, i.status, i.created_at, i.due_date, i.assignee_type, i.assignee_id
+      select i.id, i.status, i.created_at, i.due_date, lead.assignee_type, lead.assignee_id
       from ${schema.issues} i join ${schema.issueProjects} p on p.id = i.project_id
+      left join lateral (
+        select ia.assignee_type, ia.assignee_id from ${schema.issueAssignees} ia
+        where ia.issue_id = i.id order by ia.position limit 1
+      ) lead on true
       where i.org_id = ${orgId}::uuid and p.space_id = ${spaceId}::uuid and ${taskSeenSql("i", sql`${userId}::text`)}
     ),
     t as (select * from vis where status <> 'canceled')`;

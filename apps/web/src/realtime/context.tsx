@@ -18,18 +18,20 @@ import {
   ApiError,
   applyBrowserHandoff,
   applyChannelEvent,
+  applyCodeSessionEvent,
   applyComputerEvent,
   applyConsultEvent,
   applyConversationEvent,
   applyDashboardEvent,
   applyIssueEvent,
+  applyLiveEvent,
   applyMachineEvent,
   applyMembershipEvent,
   applyNotificationEvent,
   applyPoProposalEvent,
   applyReactions,
   applyReceiptEvent,
-  applyTyping,
+  applyTypingEvent,
   applyUnreadEvent,
   applyWorkspaceEvent,
   type BrowserFrame,
@@ -38,10 +40,12 @@ import {
   type BrowserLiveUnavailable,
   type ConnectionStatus,
   type ConsultsState,
+  type CountedPointer,
   cacheActionCard,
   cacheAgentProposal,
   cacheApproval,
   cacheCardDelegate,
+  cacheCodeSuggestion,
   cacheDmRead,
   cacheMessage,
   cacheMessageActions,
@@ -49,11 +53,13 @@ import {
   cacheMessageWork,
   cachePinned,
   cacheReceipts,
+  cacheResolved,
   cacheTask,
   cacheTeamCard,
   catchUpChannel,
   consultSeeds,
   createBrowserLiveConnection,
+  desktopPointerOf,
   dismissRun,
   dropLocalVoice,
   dropProvisional,
@@ -65,6 +71,7 @@ import {
   isNotificationEvent,
   keys,
   markStopping,
+  nextPointer,
   type OpenConsult,
   openConversation,
   RealtimeConnection,
@@ -83,7 +90,7 @@ import {
   seedReceipt,
   staleProvisional,
   startThreadCache,
-  stopTyping,
+  type TypingKind,
   type TypingState,
   touchRun,
   typingThrottle,
@@ -96,8 +103,10 @@ import { newerBlockState } from "@agenteschat/client/lib/blocks";
 import { deviceWaitEventOf } from "@agenteschat/client/lib/devices";
 import { knownErrorText } from "@agenteschat/client/lib/errors";
 import { formatPercent } from "@agenteschat/client/lib/format";
+import { isReturnLine } from "@agenteschat/client/lib/notices";
 import { nextMonthIso, usageWhen } from "@agenteschat/client/lib/plan-usage";
-import { playSound, soundForNotification } from "@agenteschat/client/lib/sounds";
+import { useSeat } from "@agenteschat/client/lib/seat-context";
+import { playSound, soundForEvent } from "@agenteschat/client/lib/sounds";
 import { playAgentReaction } from "@agenteschat/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
@@ -232,9 +241,7 @@ export function createStreamsStore(
   return {
     get: () => state,
     apply: (event: ChannelEvent) => {
-      let typing = state.typing;
-      if (event.type === "user.typing")
-        typing = applyTyping(typing, event.channelId, event.userId, now(), event.ttlMs, event.threadId);
+      const typing = applyTypingEvent(state.typing, event, now());
       const memory =
         event.type === "memory.updated"
           ? {
@@ -254,9 +261,6 @@ export function createStreamsStore(
           : event.type === "message.created" && event.message
             ? dropMemoryCards(state.memory, event.channelId, event.message)
             : state.memory;
-      if (event.type === "message.created" && event.message?.author?.type === "person" && event.message.author.id) {
-        typing = stopTyping(typing, event.channelId, event.message.author.id);
-      }
       const questions =
         event.type === "question.asked" || event.type === "question.answered"
           ? { ...state.questions, [event.question.id]: event.question }
@@ -447,11 +451,25 @@ export function RealtimeProvider({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: one socket per org; toast and language are read live
   useEffect(() => {
-    const conn = new RealtimeConnection({ url: realtimeUrl(window.location, orgId), createSocket });
-    // Catch up over HTTP after a reconnect: events sent while offline are gone.
-    const offReconnect = conn.onReconnect(() => {
-      // A reconnect is often a deploy: is this tab still on the app the server serves?
-      void checkAppVersion();
+    const conn = new RealtimeConnection({
+      url: realtimeUrl(window.location, orgId),
+      createSocket,
+      // A background tab's lost socket comes back slowly (`checkAlive` on showing times it again): the old tabs a
+      // restart dropped don't all dial at once, and they still get their notifications within a minute.
+      hidden: () => document.visibilityState === "hidden",
+      // Spread out in a browser; in React's act() environment (tests), like the frames, at once: catch-ups, and
+      // reconnects within half a second.
+      ...(batchFrames() ? {} : { catchUpSpreadMs: 0, backoffMs: [500] }),
+    });
+    // A reconnect is often a deploy: is this tab still on the app the server serves?
+    const offReconnect = conn.onReconnect(() => void checkAppVersion());
+    // Catch up over HTTP after a reconnect or a server's resync: events sent meanwhile are gone.
+    const offCatchUp = conn.onCatchUp((full) => {
+      if (!full) {
+        void qc.refetchQueries({ queryKey: keys.org(orgId), type: "active" });
+        void qc.refetchQueries({ queryKey: keys.me, type: "active" });
+        return;
+      }
       // Reactions heard live may be stale now: the refetched message lists carry them again.
       qc.removeQueries({ queryKey: ["org", orgId, "reactions"] });
       // Nothing sent while the socket was down reached this tab, so everything the workspace holds may be old: what
@@ -484,6 +502,8 @@ export function RealtimeProvider({
       }
       // A proposal I may decide: the sidebar's count and Aprovações' tab.
       if (event.type === "proposal.created") void refreshProposals(qc, orgId);
+      // A code session I'm in changed (ADR 0215): its worktree, name or pull request.
+      applyCodeSessionEvent(qc, orgId, event);
       // Unread marks: a message where I am, and my reads and mutes from any device.
       applyUnreadEvent(qc, orgId, event);
       // My inbox: new or merged items, auto-resolved ones, and the badge's numbers.
@@ -493,7 +513,7 @@ export function RealtimeProvider({
       // Its sound (ADR 0070): in one tab only, and in the background only what matters.
       if (isNotificationEvent(event) && event.type === "notification.upserted") {
         const { mine, background } = notificationAudience();
-        const sound = mine ? soundForNotification(event.notification, background) : null;
+        const sound = mine ? soundForEvent(event, background) : null;
         if (sound) playSound(sound);
       }
       // Notifications in this browser (ADR 0071): what was read, done or snoozed closes there too; a drop in
@@ -572,7 +592,8 @@ export function RealtimeProvider({
     });
     conn.start();
     setConnection(conn);
-    // Back from a sleep or a network change, the socket may be dead while it still says open: check it now.
+    // Back from a sleep or a network change, the socket may be dead while it still says open: check it now (and a
+    // reconnect still waiting dials within the first step).
     const wake = () => {
       if (document.visibilityState === "visible") conn.checkAlive();
     };
@@ -584,6 +605,7 @@ export function RealtimeProvider({
       document.removeEventListener("visibilitychange", wake);
       window.removeEventListener("online", wake);
       offReconnect();
+      offCatchUp();
       offOpen();
       offUser();
       offError();
@@ -806,6 +828,8 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       }
       // A file's cards and viewer, an agent's memory list.
       applyConversationEvent(qc, orgId, event);
+      // Who is in one of the conversation's live files changed (ADR 0196 §5): its cards ask again.
+      applyLiveEvent(qc, orgId, event);
       if (event.type === "poll.updated") qc.setQueryData(keys.poll(orgId, event.poll.id), event.poll);
       if (event.type === "block.state") {
         const { block } = event;
@@ -828,10 +852,10 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       // An agent's event proposal was confirmed or dismissed: its card says so.
       if (event.type === "calendar.proposal.updated")
         cacheMessageMeta(qc, orgId, event.channelId, event.messageId, () => ({ calendarProposal: event.proposal }));
-      // A PO's card proposal was decided, or its spec moved on (ADR 0185): its card, whole.
+      // A PO's card proposal was decided, or its spec moved on (ADR 0229): its card, whole.
       if (event.type === "card.proposal.updated")
         cacheMessageMeta(qc, orgId, event.channelId, event.messageId, () => ({ cardProposal: event.proposal }));
-      // ...and the PO chat's progress panel reads again (ADR 0185 addendum).
+      // ...and the PO chat's progress panel reads again (ADR 0229 addendum).
       applyPoProposalEvent(qc, orgId, event);
       if (event.type === "card.delegate") cacheCardDelegate(qc, orgId, event, event.delegate);
       // A right hand's card of a workspace change was applied, dismissed or sent on: the whole card.
@@ -861,6 +885,14 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
         cachePinned(qc, orgId, channelId, event.messageId, event.type === "message.pinned");
         void qc.invalidateQueries({ queryKey: keys.pins(orgId, channelId) });
       }
+      // A comment on a picture, a video or a PDF was resolved or opened again (ADR 0208): its pin and line follow.
+      if (event.type === "message.resolved") {
+        cacheResolved(qc, orgId, event.channelId, event.messageId, event.resolved);
+      }
+      // A suggested code session was opened, kept here, or waits again (ADR 0215 §11): its card under the reply.
+      if (event.type === "code.suggestion") {
+        cacheCodeSuggestion(qc, orgId, event.channelId, event.messageId, event.suggestion);
+      }
       // Act with undo: an agent message's receipts changed (made, undone, redone): replace the list.
       // A long work moved, updated or ended (ADR 0121): its anchor's line redraws; its card on the board too.
       if (event.type === "agent.work") {
@@ -875,7 +907,10 @@ export function useChannelRealtime(orgId: string, channelId: string, enabled: bo
       }
       if (event.type === "message.created") {
         if (event.message) cacheMessage(qc, orgId, event.message);
-        else {
+        // A return set, canceled or come: the bar's list reads again.
+        if (event.message && isReturnLine(event.message.meta))
+          void qc.invalidateQueries({ queryKey: keys.followUps(orgId, channelId) });
+        if (!event.message) {
           // Too big for its event: the open lists read it (its live block holds until it lands); a closed one, when
           // it opens again.
           void qc.invalidateQueries({ queryKey: ["org", orgId, "channel", channelId], refetchType: "none" });
@@ -987,12 +1022,15 @@ export function useLiveStore() {
   return useRealtime().streams;
 }
 
-/** Throttled "I'm typing" for a channel, or for one of its threads. */
+/**
+ * Throttled "I'm typing" for a channel, or for one of its threads; `voice` while recording a voice message, with
+ * `keepAlive` while it uploads (`typingThrottle`).
+ */
 export function useTypingSender(channelId: string, threadId?: string) {
   const { connection } = useRealtime();
   const throttle = useMemo(() => typingThrottle(), []);
-  return (text?: string) => {
-    if (connection && throttle(Date.now(), text)) connection.sendTyping(channelId, threadId);
+  return (text?: string, kind?: TypingKind, keepAlive?: boolean) => {
+    if (connection && throttle(Date.now(), text, kind, keepAlive)) connection.sendTyping(channelId, threadId, kind);
   };
 }
 
@@ -1013,6 +1051,8 @@ export interface BrowserLiveState {
   error: string | null;
   /** How many came, for what says each one: the same refusal again leaves `error` as it was. */
   errors: number;
+  /** Where the agent's pointer last went on the page; `n` counts its gestures (two clicks on one point are two). */
+  pointer: CountedPointer | null;
 }
 
 const EMPTY_LIVE: BrowserLiveState = {
@@ -1023,6 +1063,7 @@ const EMPTY_LIVE: BrowserLiveState = {
   endedBy: null,
   error: null,
   errors: 0,
+  pointer: null,
 };
 
 /**
@@ -1053,6 +1094,7 @@ export function useBrowserLive(agentId: string, enabled = true, maxFps?: number)
         setState((s) => ({ ...s, frame, unavailable: null, ended: false, endedBy: null, error: null })),
       onStatus: (status) =>
         setState((s) => ({ ...s, status, unavailable: null, ended: false, endedBy: null, error: null })),
+      onPointer: (pointer) => setState((s) => ({ ...s, pointer: nextPointer(s.pointer, pointer) })),
       onUnavailable: (reason, message) =>
         setState((s) => ({ ...s, unavailable: { reason, ...(message ? { message } : {}) } })),
       onEnded: (reason, _message, by) =>
@@ -1088,6 +1130,25 @@ export function useBrowserLive(agentId: string, enabled = true, maxFps?: number)
   const sendInput = useCallback((events: BrowserInputEvent[]) => liveRef.current?.sendInput(events) ?? false, []);
   const retry = useCallback(() => liveRef.current?.retry(), []);
   return { ...state, sendInput, retry };
+}
+
+/**
+ * Where the agent's pointer last went on its desktop (ADR 0062), while this view shows that screen: the server
+ * sends it to whoever has the screen open. `n` counts its gestures.
+ */
+export function useDesktopPointer(agentId: string, enabled = true) {
+  const { connection } = useRealtime();
+  const shared = useSeat(agentId) !== undefined;
+  const [pointer, setPointer] = useState<BrowserLiveState["pointer"]>(null);
+  useEffect(() => {
+    setPointer(null);
+    if (!connection || !enabled) return;
+    return connection.onUserEvent((event) => {
+      const to = desktopPointerOf(event, agentId, shared);
+      if (to) setPointer((was) => nextPointer(was, to));
+    });
+  }, [connection, agentId, enabled, shared]);
+  return pointer;
 }
 
 export function useConnectionStatus(): ConnectionStatus {

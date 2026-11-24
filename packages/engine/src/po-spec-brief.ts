@@ -9,7 +9,7 @@ const { issueColumns, issueProjects, issueSpaces, issues, users } = schema;
 type IssueRow = typeof issues.$inferSelect;
 
 /**
- * The wiki folder a company's specs live in (ADR 0185 addendum): `<company>/Specs`, the place the company's wiki
+ * The wiki folder a company's specs live in (ADR 0229 addendum): `<company>/Specs`, the place the company's wiki
  * already keeps them, one folder `<number>` per card under it. A `/` in the name would make a folder level of its own,
  * so it becomes `-`. The wiki tools of a PO chat keep to this folder among the companies' `Specs` folders.
  */
@@ -19,7 +19,7 @@ export const specFolder = (company: string) => cleanFolder(`${company.replace(/\
 export const cardSpecFolder = (companyFolder: string, number: number) => cleanFolder(`${companyFolder}/${number}`);
 
 /**
- * The folder of one company (ADR 0185): `specFolder` of its name, and two companies whose names make the same folder
+ * The folder of one company (ADR 0229): `specFolder` of its name, and two companies whose names make the same folder
  * ("A/B" and "A-B", or the same name in other capitals) must not share it, or each reads and writes the other's specs.
  * The earliest company keeps the plain folder, so pages already written stay where they are; each later one gets
  * its id's last six characters in brackets after the name ("A-B [1f3a9c]/Specs"), the same on every call.
@@ -49,7 +49,7 @@ export function otherCompanysSpecs(folder: string, own: string) {
 }
 
 /**
- * A PO chat's search hits kept to its company (ADR 0185): an issue hit only when its board is the company's (a card
+ * A PO chat's search hits kept to its company (ADR 0229): an issue hit only when its board is the company's (a card
  * on no board is not), a wiki hit unless the page sits under another company's `Specs/` folder. Other kinds stay.
  */
 export async function keepHitsToCompany<T extends { kind: string; sourceId: string }>(
@@ -85,7 +85,7 @@ export async function keepHitsToCompany<T extends { kind: string; sourceId: stri
 }
 
 /**
- * The wiki page's title for a card (ADR 0185): the card's title without the characters a wiki title cannot hold
+ * The wiki page's title for a card (ADR 0229): the card's title without the characters a wiki title cannot hold
  * (`[ ] | #`), on one line, at most 200 characters (`cleanTitle`'s own rule in `wiki.ts`).
  */
 export const specPageTitle = (title: string) =>
@@ -100,7 +100,7 @@ export const specPageTitle = (title: string) =>
 const BRIEF_NEIGHBOURS = 30;
 
 /**
- * What a spec run reads (ADR 0185), in place of the generic task block: the card, the company, where and under which
+ * What a spec run reads (ADR 0229), in place of the generic task block: the card, the company, where and under which
  * name to save the spec, the form the spec takes and what to do afterwards. The person's visible start message is the
  * request the wiki's write rule needs; the brief says so again. The card's title, summary and criteria, and the
  * neighbours' titles, are typed by anyone, so they sit inside the untrusted envelope and the rules outside it.

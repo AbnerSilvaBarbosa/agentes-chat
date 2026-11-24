@@ -1,6 +1,6 @@
 import { STORAGE_KEYS, storage } from "./storage";
 
-/** Where the person's PO view opened last, per person and workspace (a convenience of this browser, ADR 0185). */
+/** Where the person's PO view opened last, per person and workspace (a convenience of this browser, ADR 0229). */
 const keyOf = (userId: string, orgId: string) => `${STORAGE_KEYS.poCompany}.${userId}.${orgId}`;
 
 /** The company the person's PO view opened last in this workspace, or null (nothing kept, or storage blocked). */

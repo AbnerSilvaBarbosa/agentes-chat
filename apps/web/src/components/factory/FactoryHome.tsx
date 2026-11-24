@@ -6,7 +6,7 @@ import { FactoryWaiting } from "./FactoryWaiting";
 import "./factory.css";
 
 /**
- * The "Fábrica" block on top of Início (ADR 0184): the tasks waiting for a person over one panel per company, from
+ * The "Fábrica" block on top of Início (ADR 0228): the tasks waiting for a person over one panel per company, from
  * one read. It draws nothing while loading, on an error or with no company that has a task: Início stays as it was.
  */
 export function FactoryHome() {

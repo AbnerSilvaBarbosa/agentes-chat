@@ -45,6 +45,8 @@ export interface CalItem {
    * the item with their face.
    */
   owner?: Actor;
+  /** A task due that several have: all of them, `owner` being the first. */
+  owners?: Actor[];
   eventId?: string;
   seriesId?: string | null;
   occurrenceStart?: string | null;
@@ -227,12 +229,16 @@ export function toItems(range: CalendarRange | undefined): CalItem[] {
         recurring: false,
         issueId: d.issueId,
         issueNumber: d.number,
-        owner: d.assignee ?? undefined,
+        owner: d.assignees?.[0],
+        owners: d.assignees?.length ? d.assignees : undefined,
         people: [],
       };
     }),
   ];
 }
+
+/** Everyone an item counts for: a due task's assignees, else its one owner. */
+export const itemOwners = (it: Pick<CalItem, "owner" | "owners">): Actor[] => it.owners ?? (it.owner ? [it.owner] : []);
 
 /** All-day, or crossing midnight: drawn as a bar above the hour grid. */
 export const isBarItem = (it: CalItem) =>
@@ -332,6 +338,25 @@ export interface Placed {
 /** Pixels in the day/week grid → minutes, and back. */
 const toPx = (minutes: number) => (minutes / 60) * HOUR_PX;
 const toMinutes = (px: number) => (px / HOUR_PX) * 60;
+
+/**
+ * The grid's measured heights (px, by key) after a new measure: each only grows, by more than half a pixel; the same
+ * map when none did. The layout follows these heights and they follow the layout (`layoutDay`, `runStacks`), and it
+ * isn't monotonic: a stack that takes in the next run can show fewer rows and so be drawn shorter, which lets that run
+ * go again. With heights allowed to shrink, such a layout flips back and forth on every render, forever.
+ */
+export function grownHeights(
+  heights: ReadonlyMap<string, number>,
+  drawn: ReadonlyMap<string, number>,
+): ReadonlyMap<string, number> {
+  let grown: Map<string, number> | null = null;
+  for (const [key, height] of drawn)
+    if (height > (heights.get(key) ?? 0) + 0.5) {
+      grown ??= new Map(heights);
+      grown.set(key, height);
+    }
+  return grown ?? heights;
+}
 
 /**
  * Timed items of one day, and its stacks of routine runs, laid out side by

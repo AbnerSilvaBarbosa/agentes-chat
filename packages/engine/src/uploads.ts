@@ -13,6 +13,7 @@ import {
 import { recordAudit } from "./audit";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "./errors";
 import { formatBytes } from "./format";
+import { pictureSize } from "./image-size";
 import type { MachineCaller } from "./machine-hub";
 import { replyThreadOf } from "./runs";
 import { type ComputerHandle, withConnectedMachine } from "./sandbox";
@@ -288,12 +289,26 @@ export async function waitForUpload(
 export async function uploadedFile(db: Database, row: UploadRow) {
   if (row.status !== "done" || !row.artifactId || row.version === null) return null;
   const [found] = await db
-    .select({ title: artifacts.title, name: artifactVersions.fileName, size: artifactVersions.size })
+    .select({
+      title: artifacts.title,
+      name: artifactVersions.fileName,
+      size: artifactVersions.size,
+      width: artifactVersions.width,
+      height: artifactVersions.height,
+    })
     .from(artifactVersions)
     .innerJoin(artifacts, eq(artifacts.id, artifactVersions.artifactId))
     .where(and(eq(artifactVersions.artifactId, row.artifactId), eq(artifactVersions.version, row.version)));
   if (!found) return null;
-  return { id: row.artifactId, version: row.version, title: found.title, name: found.name ?? "file", size: found.size };
+  return {
+    id: row.artifactId,
+    version: row.version,
+    title: found.title,
+    name: found.name ?? "file",
+    size: found.size,
+    // A picture's size: its card in the conversation has its box before it loads.
+    ...pictureSize(found),
+  };
 }
 
 /** How long `upload_file` waits for the bytes. */
@@ -364,6 +379,12 @@ export async function shareSavedFile(
   path: string,
   saved: ToolOutput,
 ): Promise<ToolOutput> {
+  // A code session's conversation (ADR 0215): the person sees the agent's screen beside it, in the session's panel.
+  if (ctx.codeSession)
+    return {
+      ...saved,
+      content: `${saved.content} It isn't shown in this conversation: in a code session the person sees your screen beside it.`,
+    };
   const access = toolAccess(await freshGrantedKeys(ctx.db, ctx.orgId, ctx.agentId), DRIVE_FILE);
   if (!isAllowed(access)) {
     const why =
@@ -398,7 +419,10 @@ export async function shareSavedFile(
         landed?.channelId === ctx.channelId
           ? `${saved.content} It is shown in this conversation: its card goes with your reply ("${done.title}" in the Drive, ${formatBytes(done.size)}, artifact ${done.id}).`
           : `${saved.content} Saved as "${done.title}" (${formatBytes(done.size)}), artifact ${done.id}. ${await fileReach(ctx.db, ctx.orgId, done.id)}`,
-      data: { ...saved.data, artifact: { id: done.id, version: done.version, title: done.title } },
+      data: {
+        ...saved.data,
+        artifact: { id: done.id, version: done.version, title: done.title, ...pictureSize(done) },
+      },
     };
   } catch (error) {
     return {

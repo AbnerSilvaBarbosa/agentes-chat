@@ -35,14 +35,14 @@ export interface EditorColumn {
   id: string;
   name: string;
   stage: IssueStatus;
-  /** A task sitting here waits for a person (ADR 0184). */
+  /** A task sitting here waits for a person (ADR 0228). */
   waits?: boolean;
 }
 
 /**
  * The columns of a board or of a status set, by stage: each renamed, moved up or down inside its stage, moved to
  * another stage, deleted, and one added at the end of any stage. It holds no data of its own: the board's dialog sends
- * each gesture to the server, the settings screen edits a set's list (ADR 0179).
+ * each gesture to the server, the settings screen edits a set's list (ADR 0223).
  */
 export function ColumnEditor({
   columns,
@@ -73,7 +73,7 @@ export function ColumnEditor({
   /** `moveTo`: another column of its stage, for the board to send its tasks to. */
   onDelete: (id: string, moveTo: string | null) => void;
   /**
-   * The switch "Espera uma pessoa" on each column (ADR 0184). Without it, or read only, the rows show no switch.
+   * The switch "Espera uma pessoa" on each column (ADR 0228). Without it, or read only, the rows show no switch.
    */
   onWaits?: (id: string, on: boolean) => void;
 }) {
@@ -207,7 +207,7 @@ export function ColumnEditor({
 const ANY_STATUS = "any";
 
 /**
- * "Avisos" (ADR 0175 addendum): the board's rules, each "from a status to a status, alert this agent", and the form
+ * "Avisos" (ADR 0220 addendum): the board's rules, each "from a status to a status, alert this agent", and the form
  * that adds one. A rule is a routine on `issue.moved`, so the list shows the ones people and agents made elsewhere too.
  */
 function BoardAlerts({ projectId, columns }: { projectId: string; columns: IssueColumn[] }) {
@@ -329,7 +329,7 @@ function BoardAlerts({ projectId, columns }: { projectId: string; columns: Issue
 }
 
 /**
- * "Colunas do board" (ADR 0179): every column of a board, in its stage, where a column is renamed, moved up or down
+ * "Colunas do board" (ADR 0223): every column of a board, in its stage, where a column is renamed, moved up or down
  * inside its stage, moved to another stage (its tasks follow), added and deleted — and where a template is applied to
  * the board or saved from it. Before this, changing where a column sat meant deleting it and making another.
  */

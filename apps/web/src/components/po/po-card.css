@@ -1,4 +1,4 @@
-/* The PO's card proposal (ADR 0185) inside the request pill's lines: the criteria as a plain list, and the edit form
+/* The PO's card proposal (ADR 0229) inside the request pill's lines: the criteria as a plain list, and the edit form
    in the pill's width, every control the kit's own height and its fields `--form-gap` apart. */
 .po-card__criteria {
   margin: 0;

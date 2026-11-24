@@ -2,6 +2,7 @@ import type {
   Agent,
   AgentGroup,
   AgentSort,
+  ApiClient,
   Availability,
   Channel,
   ChannelCategory,
@@ -18,6 +19,7 @@ import {
   useAgentStatuses,
   useAiAccounts,
   useArchivedChannels,
+  useAuthConfig,
   useChannelCategories,
   useChannels,
   useConnections,
@@ -39,17 +41,35 @@ import {
   useUnreadThreads,
 } from "@agenteschat/client";
 import { agentSections, groupOf } from "@agenteschat/client/lib/agent-groups";
-import { audienceChip, audienceNames, audienceNotice, canTalk, hiddenAgentIds } from "@agenteschat/client/lib/audience";
+import { ownsAgentAs } from "@agenteschat/client/lib/agent-owner";
+import { WORK_TICK_MS, workLine } from "@agenteschat/client/lib/agent-work";
+import {
+  audienceChip,
+  audienceNames,
+  audienceNotice,
+  canTalk,
+  hiddenAgentIds,
+  listsAllAgents,
+  managesAgent,
+  opensDm,
+} from "@agenteschat/client/lib/audience";
 import { workspaceNotes } from "@agenteschat/client/lib/deletion";
 import { ErrorBoundary } from "@agenteschat/client/lib/error-boundary";
 import { errorText } from "@agenteschat/client/lib/errors";
-import { formatTime } from "@agenteschat/client/lib/format";
+import { formatTime, upperFirst } from "@agenteschat/client/lib/format";
 import { waitingAgents } from "@agenteschat/client/lib/outages";
 import { can, makesAgents, managesChannel } from "@agenteschat/client/lib/permissions";
-import { AVAILABILITIES, isOutOfOffice, presenceOfAvailability, statusEndNote } from "@agenteschat/client/lib/presence";
+import {
+  AVAILABILITIES,
+  agentFaceWord,
+  isOutOfOffice,
+  presenceOfAvailability,
+  statusEndNote,
+} from "@agenteschat/client/lib/presence";
 import { recentDms } from "@agenteschat/client/lib/recent";
 import { isRightHand, rightHandSeenKey } from "@agenteschat/client/lib/right-hand";
-import { inSidebarList, sidebarItemOrder, sidebarPlace } from "@agenteschat/client/lib/sidebar-items";
+import { SERVER_PLACE_ICON } from "@agenteschat/client/lib/server";
+import { inSidebarList, offeredTools, sidebarItemOrder, sidebarPlace } from "@agenteschat/client/lib/sidebar-items";
 import { AGENT_SORTS, sortAgents, splitPinned } from "@agenteschat/client/lib/sidebar-view";
 import { badgeCount, looksUnread } from "@agenteschat/client/lib/unread";
 import { isPersonal, modeKey } from "@agenteschat/client/lib/workspace-mode";
@@ -77,6 +97,7 @@ import {
   MenuSeparator,
   MenuSub,
   modKey,
+  OPEN_LAYER,
   PixelSpinner,
   Popover,
   PresenceBadge,
@@ -86,44 +107,51 @@ import {
   SkeletonGroup,
   selectionSkyUrl,
 } from "@agenteschat/ui";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import type { TFunction } from "i18next";
 import {
   type CSSProperties,
   type DragEvent,
   Fragment,
   type HTMLAttributes,
   type ReactNode,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "@/api/context";
-import { useAuth } from "@/auth/context";
+import { useNewAgent } from "@/components/new-agent/new-agent-context";
 import { useDirectory } from "@/hooks/useDirectory";
+import { useEverTrue } from "@/hooks/useEverTrue";
+import { useInboxWaiting } from "@/hooks/useInboxWaiting";
 import { agentLine, availabilityOf, personLine, useAgentPresence, usePersonPresence } from "@/hooks/usePresence";
+import { useServerPlace } from "@/hooks/useServerPlace";
 import { useSidebarPins } from "@/hooks/useSidebarPins";
+import { useSignOut } from "@/hooks/useSignOut";
 import { useUnreadTitle } from "@/hooks/useUnreadTitle";
 import { useWorkspaceGroups } from "@/hooks/useWorkspaceGroups";
+import { switchAccount } from "@/lib/accounts";
 import { requestAgentPanel } from "@/lib/agent-panel-ask";
 import { requestChannelDetails } from "@/lib/channel-details";
 import type { MenuEntry } from "@/lib/context-menu";
 import { onPhoneAsk, takePhoneAsk, thisMac } from "@/lib/desktop";
 import { entityMenu } from "@/lib/entity-menu";
+import { lazyDialog } from "@/lib/lazy-dialog";
+import { navigateAway } from "@/lib/navigate";
 import { useOpenParam } from "@/lib/open-param";
 import { markOpen } from "@/lib/perf";
 import { ownPlanLines, planNearLimit, planWord } from "@/lib/plan-usage";
 import { useScrollEdges } from "@/lib/scroll-edges";
 import { rightHandSeen, STORAGE_KEYS, sessionStore, storage, storedStrings } from "@/lib/storage";
 import { useToast } from "@/lib/toast";
+import { offersNewWorkspace, type WorkspaceGroup } from "@/lib/workspaces";
 import type { SettingsSection } from "@/pages/settings-sections";
 import { useStreams } from "@/realtime/context";
-import { ProfileDialog } from "./AccountSettings";
-import { AddPasswordDialog } from "./AddPassword";
 import { AgentAvatar } from "./AgentAvatar";
 import {
   DeleteGroupDialog,
@@ -134,27 +162,35 @@ import {
   useGroupEntries,
   useMoveAgent,
 } from "./AgentGroups";
+import { AgentWorkLine } from "./AgentWorkLine";
+import { AgoraButton } from "./Agora";
 import { ArchivedChannelsDialog } from "./ArchivedChannelsDialog";
-import { ChangeAvatarDialog } from "./AvatarBuilder";
 import { FeedbackMark } from "./arrival/FeedbackDialog";
 import { MoveChannelDialog, NewCategoryDialog, RenameCategoryDialog } from "./ChannelCategoryDialogs";
-import { openPalette } from "./CommandMenu";
-import { DeleteAccountDialog } from "./DeleteAccount";
 import { MenuEntries } from "./DesktopMenus";
 import { useAgentMenu, useChannelMenu, usePersonMenu } from "./entity-menus";
 import { useInviteDialog } from "./invite/InviteDialog";
 import { useNow } from "./missions/MissionBits";
 import { COMPACT_QUERY, useMediaQuery, useNavDrawer } from "./NavDrawer";
 import { NewChannelDialog } from "./NewChannelDialog";
-import { useNewAgent } from "./new-agent/NewAgentDialog";
-import { OpenOnPhoneDialog } from "./OpenOnPhone";
 import { useOrg } from "./org-context";
 import { StatusLine } from "./Presence";
 import { MyFace, OrgMark } from "./ProfilePhoto";
+import { openPalette } from "./palette";
 import { sectionName, useSectionOrder } from "./SidebarOrder";
 import { SIDEBAR_TOOLS, SidebarSetupDialog, ToolList } from "./SidebarSetup";
 import { AgentGlow, AgentTrail, colorOf, MenuHorizon, SidebarHorizon, WorkspaceSky } from "./Sky";
 import { SetStatusDialog, useSaveStatus } from "./StatusDialog";
+import { closeTabletSidebar, NEW_CHANNEL_EVENT, TABLET_QUERY, useSidebarCollapsed } from "./sidebar-state";
+
+// The account's dialogs come when one first opens: every workspace page holds the sidebar, and these bring the profile
+// and avatar editors, the look of the chat and the sign-in pages.
+const ProfileDialog = lazyDialog(() => import("./AccountSettings").then((m) => m.ProfileDialog));
+const EmailDialog = lazyDialog(() => import("./AccountSettings").then((m) => m.EmailDialog));
+const AddPasswordDialog = lazyDialog(() => import("./AddPassword").then((m) => m.AddPasswordDialog));
+const ChangeAvatarDialog = lazyDialog(() => import("./AvatarBuilder").then((m) => m.ChangeAvatarDialog));
+const DeleteAccountDialog = lazyDialog(() => import("./DeleteAccount").then((m) => m.DeleteAccountDialog));
+const OpenOnPhoneDialog = lazyDialog(() => import("./OpenOnPhone").then((m) => m.OpenOnPhoneDialog));
 
 /** An agent's sky for its busy chip (`.sidebar__busy`): both themes, the CSS picks one. */
 const selectionSky = (color: AgentColor) =>
@@ -187,36 +223,6 @@ function UnshownRow() {
 }
 export const unshownRow = () => <UnshownRow />;
 
-/** Tablet widths: the sidebar is always an icon rail (NavDrawer.tsx has the other breakpoints). */
-export const TABLET_QUERY = "(min-width: 761px) and (max-width: 1199px)";
-
-/**
- * The sidebar shrunk to its icon rail at desktop widths (remembered), shared with the Mac app's title bar,
- * which carries the toggle there (DesktopTitleBar.tsx). In memory too, for when storage is blocked.
- */
-const SIDEBAR_EVENT = "agentes:sidebar";
-let sidebarCollapsed = storage.get(STORAGE_KEYS.sidebarCollapsed) === "1";
-const onSidebarChange = (cb: () => void) => {
-  window.addEventListener(SIDEBAR_EVENT, cb);
-  return () => window.removeEventListener(SIDEBAR_EVENT, cb);
-};
-export const toggleSidebar = () => {
-  sidebarCollapsed = !sidebarCollapsed;
-  storage.set(STORAGE_KEYS.sidebarCollapsed, sidebarCollapsed ? "1" : "0");
-  window.dispatchEvent(new Event(SIDEBAR_EVENT));
-};
-export function useSidebarCollapsed(): [boolean, () => void] {
-  const collapsed = useSyncExternalStore(
-    onSidebarChange,
-    () => sidebarCollapsed,
-    () => false,
-  );
-  return [collapsed, toggleSidebar];
-}
-
-/** File → Novo canal in the desktop app's menu bar (DesktopMenus.tsx): the sidebar opens its dialog. */
-export const NEW_CHANNEL_EVENT = "agentes:new-channel";
-
 /**
  * On the icon rail every channel would be the same "#": its initials instead ("eng-backend" → "Eb",
  * "general" → "Ge"), so the rail still reads which is which.
@@ -244,7 +250,7 @@ export function Sidebar() {
   const alone = !dir.members.some((m) => m.userId !== me.user.id);
   const channels = useChannels(orgId);
   const overview = useOverview(orgId);
-  // The workspace's PO, if it has one (ADR 0185): its row sits under Início and opens its chat.
+  // The workspace's PO, if it has one (ADR 0229): its row sits under Início and opens its chat.
   const poOverview = usePoOverview(orgId).data;
   const poAgentId = poOverview?.agentId ?? null;
   const hasPo = !!poAgentId;
@@ -257,24 +263,17 @@ export function Sidebar() {
   const [showArchived, setShowArchived] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const navigate = useNavigate();
-  const onProposals = useRouterState({ select: (r) => r.location.pathname.endsWith("/proposals") });
   useEffect(() => {
     const open = () => setCreatingChannel(true);
     window.addEventListener(NEW_CHANNEL_EVENT, open);
     return () => window.removeEventListener(NEW_CHANNEL_EVENT, open);
   }, []);
   const proposalsWaiting = overview.data?.proposalsWaitingForMe ?? 0;
-  // The bell: unread notifications (live through `notification.counts`); the badge bumps when one arrives.
+  // The inbox's row: bold while something in it is unread (live through `notification.counts`).
   const notificationCount = useNotificationCount(orgId).data;
   const unreadNotifications = notificationCount?.unread ?? 0;
-  // "Esperando você": everything that waits on me, the same live count (ADR 0172).
-  const waitingOnMe = notificationCount?.waiting ?? 0;
-  const lastUnread = useRef(unreadNotifications);
-  const [bumps, setBumps] = useState(0);
-  useEffect(() => {
-    if (unreadNotifications > lastUnread.current) setBumps((b) => b + 1);
-    lastUnread.current = unreadNotifications;
-  }, [unreadNotifications]);
+  // The inbox's count: everything that waits on me, proposals I may decide among it (ADR 0218).
+  const waitingOnMe = useInboxWaiting(orgId);
   // Threads: how many open missions wait for me (the server counts: a decision, a review, a suggestion…).
   const missionList = useMissionList(orgId, MISSIONS_WAITING_COUNT);
   const missionsWaiting = missionList.data?.counts.waitingYou ?? 0;
@@ -285,18 +284,15 @@ export function Sidebar() {
   // The tools on top, each where I put it (the rest in More); one there "when there's something" while its count is.
   const sidebarItems = useSidebarItems(orgId).data;
   // An unread reply counts as "something" for a Threads set to show "when there's something": it comes into the list
-  // lit, and leaves once read, as Approvals does once nothing waits.
-  // Proposals are a tab of Aprovações and count there, unless the person gave them a row of their own.
-  const proposalsRow = inSidebarList(sidebarPlace(sidebarItems, "proposals", personal), proposalsWaiting);
-  const pending = (overview.data?.approvalsWaitingForMe ?? 0) + (proposalsRow ? 0 : proposalsWaiting);
+  // lit, and leaves once read, as Proposals does once nothing waits.
   const counts: Partial<Record<SidebarItem, number>> = {
     waiting: waitingOnMe,
-    approvals: pending,
     proposals: proposalsWaiting,
     threads: missionsWaiting + unreadThreads,
   };
   // The mode's defaults and order (ADR 0159): in a personal workspace, Routines and Drive in sight, the rest in More.
-  const toolOrder = sidebarItemOrder(personal);
+  // Code only where it has anything for me (ADR 0215 §12).
+  const toolOrder = offeredTools(sidebarItemOrder(personal), overview.data?.code, sidebarItems);
   const listed = toolOrder.filter((id) => inSidebarList(sidebarPlace(sidebarItems, id, personal), counts[id] ?? 0));
   const inMore = toolOrder.filter((id) => !listed.includes(id));
   const countOf = (id: SidebarItem) =>
@@ -304,8 +300,6 @@ export function Sidebar() {
       <CountBadge aria-label={t("notifications.summaryWaiting", { count: waitingOnMe })}>
         {badgeCount(waitingOnMe)}
       </CountBadge>
-    ) : id === "approvals" && pending > 0 ? (
-      <CountBadge aria-label={t("shell.pendingApprovals", { count: pending })}>{pending}</CountBadge>
     ) : id === "proposals" && proposalsWaiting > 0 ? (
       <CountBadge aria-label={t("shell.pendingProposals", { count: proposalsWaiting })}>{proposalsWaiting}</CountBadge>
     ) : id === "threads" && missionsWaiting > 0 ? (
@@ -329,8 +323,11 @@ export function Sidebar() {
       params={{ orgId }}
       className="sidebar__item"
       title={id === "threads" && unreadThreads > 0 ? t("shell.unreadThreads", { count: unreadThreads }) : railTip(id)}
-      data-unread={(id === "threads" && unreadThreads > 0) || (id === "issues" && unreadTasks > 0)}
-      inactiveProps={id === "approvals" && onProposals && !proposalsRow ? { "data-status": "active" } : undefined}
+      data-unread={
+        (id === "waiting" && unreadNotifications > 0) ||
+        (id === "threads" && unreadThreads > 0) ||
+        (id === "issues" && unreadTasks > 0)
+      }
     >
       <Icon name={SIDEBAR_TOOLS[id].icon} />
       <span className="sidebar__item-label">{t(`shell.${id}`)}</span>
@@ -340,8 +337,13 @@ export function Sidebar() {
   // Agents waiting for an offline computer: "esperando" instead of anything "working".
   const outages = useMachineOutages(orgId);
   const waitingFor = useMemo(() => waitingAgents(outages.data), [outages.data]);
-  // The agents' presence and lines (ADR 0084): the one place that polls them; every face reads the same list.
-  useAgentStatuses(orgId);
+  // The agents' presence and lines (ADR 0084): the one place that polls them; every face reads the same list. Their
+  // work for me, workspace-wide (the addendum of 2026-11-13): who works and who waits, wherever it runs.
+  const agentStatuses = useAgentStatuses(orgId).data;
+  const workKey = (agentStatuses ?? [])
+    .flatMap((s) => (s.work ? [`${s.agentId}:${s.work.state}`] : []))
+    .sort()
+    .join();
   // The tab's title: "(3) agentes.chat", what the sidebar's numbers add up to (agents it doesn't list left out).
   const hiddenAgents = useMemo(() => hiddenAgentIds(org, dir.agents), [org, dir.agents]);
   useUnreadTitle(orgId, hiddenAgents);
@@ -355,7 +357,7 @@ export function Sidebar() {
   const rightHand = dir.agents.find((a) => isRightHand(a) && a.canTalk !== false);
   const dmOf = new Map((dms.data ?? []).map((d) => [d.with.id, d]));
   const rightHandDm = rightHand ? dmOf.get(rightHand.id) : undefined;
-  // The PO row lights with its chats, where its routines write (ADR 0185 addendum): each company's, and the plain DM's.
+  // The PO row lights with its chats, where its routines write (ADR 0229 addendum): each company's, and the plain DM's.
   const poUnread = poAgentId
     ? (dmOf.get(poAgentId)?.unread ?? 0) + (poOverview?.companies ?? []).reduce((n, c) => n + c.unread, 0)
     : 0;
@@ -380,27 +382,38 @@ export function Sidebar() {
     0,
   );
 
+  // Who works now: a run this tab hears, or the agents' list (work handed off in two agents' DM too). Who waits on
+  // someone or is in line: a closed group still shows them.
+  const busyKey = useStreams((st) => [...runningAgents(st)].sort().join());
+  const { busy, waits } = useMemo(() => {
+    const work = workKey ? workKey.split(",").map((w) => w.split(":") as [string, string]) : [];
+    return {
+      busy: new Set([
+        ...(busyKey ? busyKey.split(",") : []),
+        ...work.flatMap(([id, s]) => (s === "working" ? [id] : [])),
+      ]),
+      waits: new Set(work.flatMap(([id, s]) => (s === "working" ? [] : [id]))),
+    };
+  }, [busyKey, workKey]);
   // How many of the workspace's agents are working now: the sky at the bottom rises with it.
-  const agentIds = dir.agents.map((a) => a.id).join();
-  const working = useStreams((st) => {
-    const busy = runningAgents(st);
-    return agentIds ? agentIds.split(",").filter((id) => busy.has(id)).length : 0;
-  });
+  const working = dir.agents.filter((a) => busy.has(a.id)).length;
   // Narrow screens: the sidebar is a drawer (id, open state, close on link / swipe).
   const drawer = useNavDrawer();
-  // Desktop: the person can shrink the sidebar to an icon rail (remembered). Tablets always get the rail.
+  // Desktop: the person can shrink the sidebar to an icon rail (remembered). Tablets start as the rail and open over
+  // the page (`float`).
   const compact = useMediaQuery(COMPACT_QUERY);
   const tablet = useMediaQuery(TABLET_QUERY);
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
-  const rail = !compact && (tablet || collapsed);
+  const rail = !compact && collapsed;
+  const float = tablet && !collapsed;
 
   // AGENTES (ADR 0083 and its addendum): the agents that talk to me (who manages agents may list the rest), the ones in
-  // no group, then each group of agents, each with my pinned ones on top and the rest in my order.
+  // no group, then each group of agents, each with my pinned ones on top and the rest in my order. A row opens its DM,
+  // so "the rest" are the agents whose DM opens for me (`opensDm`): the ones I manage, never someone's private agent
+  // the key doesn't reach (ADR 0085 addendum of 2026-11-17), which Team still lists.
   const manages = can(org, "manage_agents");
   const team = dir.agents.filter((a) => !isRightHand(a));
-  const shownAgents = team.filter((a) => (manages && view.showAllAgents) || canTalk(a));
-  const busyKey = useStreams((st) => [...runningAgents(st)].sort().join());
-  const busy = useMemo(() => new Set(busyKey ? busyKey.split(",") : []), [busyKey]);
+  const shownAgents = team.filter((a) => canTalk(a) || (manages && view.showAllAgents && opensDm(a)));
   const groups = useAgentGroups(orgId).data ?? [];
   const byGroup = agentSections(shownAgents, groups, (a) => a.id);
   const ordered = (items: Agent[]) => {
@@ -427,6 +440,7 @@ export function Sidebar() {
     onDelete: () => setDeletingGroup(group),
   });
   const agentsUnread = shownAgents.reduce((n, a) => n + (dmOf.get(a.id)?.unread ?? 0), 0);
+  const workingAgents = shownAgents.filter((a) => busy.has(a.id)).length;
   // "Mudar de grupo" in an agent's right click: the keyboard's way to what dragging does.
   const groupEntries = (a: Agent): MenuEntry[] => {
     const current = groupOf(groups, a.id)?.id ?? null;
@@ -457,6 +471,9 @@ export function Sidebar() {
   const agentRow = (a: Agent) => {
     const dm = dmOf.get(a.id);
     const unread = dm?.unread ?? 0;
+    // Groups are made by who holds "Edit agents"; an agent moves in or out of one only for who manages it (ADR 0085
+    // addendum of 2026-11-17): the key alone doesn't reach someone's private agent.
+    const arranges = managesAgent(a);
     return (
       <ErrorBoundary
         key={a.id}
@@ -472,12 +489,12 @@ export function Sidebar() {
           agent={a}
           unread={unread}
           waitingFor={waitingFor.get(a.id)}
-          live={busy.has(a.id) || waitingFor.has(a.id) || unread > 0}
+          live={busy.has(a.id) || waits.has(a.id) || waitingFor.has(a.id) || unread > 0}
           pinned={pins.agents.includes(a.id)}
           onPrefetch={() => dm && prefetch(dm.channelId)}
           onOpen={() => markOpen(dm?.channelId ?? a.id)}
-          drag={organize ? drag.row(a.id) : undefined}
-          menuExtra={manages ? groupEntries(a) : undefined}
+          drag={organize && arranges ? drag.row(a.id) : undefined}
+          menuExtra={arranges ? groupEntries(a) : undefined}
         />
       </ErrorBoundary>
     );
@@ -488,6 +505,39 @@ export function Sidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // The list fades out at an edge only while there is more to scroll past it (no hard cut); re-checked as lists load.
   useScrollEdges(navRef, [channels.data, directs.length, shownAgents.length, groups.length, rail]);
+
+  // A tablet's open sidebar folds back on a new page, a width change, Esc (before the page sees it: Esc in a channel
+  // would stop an agent; an open menu closes first), a press outside it and focus leaving it (Tab past its end would
+  // land on the page under it).
+  const sideRef = useRef<HTMLElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new page or width closes it
+  useEffect(() => closeTabletSidebar(), [pathname, tablet]);
+  useEffect(() => {
+    if (!float) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || document.querySelector(OPEN_LAYER)) return;
+      e.preventDefault();
+      // Focus on a row the rail hides would be lost: back to the toggle (the title bar's, in the Mac app).
+      if (sideRef.current?.contains(document.activeElement)) {
+        document.querySelector<HTMLElement>("[data-sidebar-toggle]")?.focus();
+      }
+      closeTabletSidebar();
+    };
+    // Not the title bar's toggle: its click closes it after the press.
+    const onOutside = (e: Event) => {
+      const t = e.target;
+      if (!(t instanceof Element) || sideRef.current?.contains(t) || t.closest("[data-sidebar-toggle]")) return;
+      if (!document.querySelector(OPEN_LAYER)) closeTabletSidebar();
+    };
+    window.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("focusin", onOutside, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("focusin", onOutside, true);
+    };
+  }, [float]);
 
   // The open conversation stays in sight: once per navigation (as soon as its row exists), a row
   // hidden past the list's edge is brought to the middle. Later scrolling is the person's.
@@ -629,7 +679,13 @@ export function Sidebar() {
             sections={sections}
             className="sidebar__section--part"
             headProps={sectionMenu("agents")}
-            // Closed, the part hides its groups too: their unread count with its own.
+            // Who works, workspace-wide, at a glance (ADR 0084 addendum); closed, the part hides its groups too: their
+            // unread count with its own.
+            status={
+              workingAgents > 0 && (
+                <span className="sidebar__section-working">{t("sidebarAgents.working", { count: workingAgents })}</span>
+              )
+            }
             summary={agentsUnread > 0 && <UnreadCount count={agentsUnread} />}
             action={
               <>
@@ -746,7 +802,7 @@ export function Sidebar() {
             </SidebarSection>
           );
         })}
-        {team.length > shownAgents.length && (
+        {listsAllAgents(org) && team.length > shownAgents.length && (
           <Link to="/org/$orgId/team" params={{ orgId }} className="sidebar__item sidebar__see-all">
             <Icon name="agent" />
             <span className="sidebar__item-label">
@@ -820,29 +876,19 @@ export function Sidebar() {
     ),
   };
 
-  // The inbox: at the end of my row in the foot, or beside me on top in a personal workspace.
-  const bell = (
-    <Link
-      to="/org/$orgId/notifications"
-      params={{ orgId }}
-      className="sidebar__bell"
-      title={t("shell.notifications")}
-      aria-label={
-        unreadNotifications > 0
-          ? t("shell.unreadNotifications", { count: unreadNotifications })
-          : t("shell.notifications")
-      }
-    >
-      <Icon name="bell" />
-      {unreadNotifications > 0 && (
-        <CountBadge key={bumps} className={cx("sidebar__unread", bumps > 0 && "sidebar__bump")}>
-          {badgeCount(unreadNotifications)}
-        </CountBadge>
-      )}
-    </Link>
-  );
-  // The collapse shows at desktop widths only: tablets always have the rail, a phone the drawer.
-  const collapseLabel = collapsed ? t("shell.expandNav") : t("shell.collapseNav");
+  // The sidebar's toggle, in one place at every width: beside ⌘K (beside the bell in a personal workspace), under them
+  // in the rail. In a phone's drawer it closes the drawer.
+  const collapseLabel = compact ? t("shell.closeNav") : collapsed ? t("shell.expandNav") : t("shell.collapseNav");
+  const collapseProps = {
+    variant: "ghost",
+    iconOnly: true,
+    icon: "sidebar",
+    "data-sidebar-toggle": "",
+    "aria-label": collapseLabel,
+    title: collapseLabel,
+    "aria-expanded": compact || !collapsed,
+    onClick: compact ? () => drawer?.close({ restoreFocus: true }) : toggleCollapsed,
+  } as const;
   // The workspace header's line. Each count with its own plural: one summary string followed the people's, so
   // "1 agentes".
   const summary = overview.data
@@ -857,6 +903,8 @@ export function Sidebar() {
       className="sidebar"
       aria-label={t("shell.nav")}
       data-rail={rail}
+      data-float={float || undefined}
+      ref={sideRef}
       // Its faces' sizes follow the mode (the agents' and New agent's, ADR 0164).
       data-personal={personal || undefined}
       {...drawer?.navProps}
@@ -865,23 +913,12 @@ export function Sidebar() {
         <WorkspaceSky part="side" rail={rail} />
         {personal ? (
           // A personal workspace (ADR 0159): the person on top (their account, settings and workspaces in one menu),
-          // the bell and the collapse beside them. The desktop app's title bar has its own collapse (desktop.css).
+          // Agora, the bell and the collapse beside them. The desktop app's title bar has its own Agora and collapse
+          // (desktop.css).
           <div className="sidebar__org sidebar__org--person">
             <AccountMenu personal />
-            {bell}
-            {!compact && !tablet && (
-              <Button
-                variant="ghost"
-                size="sm"
-                iconOnly
-                icon="sidebar"
-                className="sidebar__head-collapse"
-                aria-label={collapseLabel}
-                title={collapseLabel}
-                aria-expanded={!collapsed}
-                onClick={toggleCollapsed}
-              />
-            )}
+            <AgoraButton below={compact} className="sidebar__agora" />
+            <Button {...collapseProps} size="sm" className="sidebar__head-collapse" />
           </div>
         ) : (
           <>
@@ -896,18 +933,8 @@ export function Sidebar() {
                 <Kbd>{modKey()}</Kbd>
                 <Kbd>K</Kbd>
               </button>
-              {!compact && !tablet && (
-                <Button
-                  variant="ghost"
-                  iconOnly
-                  icon="sidebar"
-                  className="sidebar__collapse"
-                  aria-label={collapseLabel}
-                  title={collapseLabel}
-                  aria-expanded={!collapsed}
-                  onClick={toggleCollapsed}
-                />
-              )}
+              <AgoraButton below={compact} className="sidebar__agora" />
+              <Button {...collapseProps} className="sidebar__collapse" />
             </div>
           </>
         )}
@@ -960,7 +987,6 @@ export function Sidebar() {
           {rail && createAgentItem.length > 0 && <CreateAgentTile onOpen={newAgent} />}
           <div className="sidebar__me">
             <AccountMenu />
-            {bell}
           </div>
         </div>
       )}
@@ -1047,6 +1073,7 @@ function SidebarSection({
   sections,
   defaultOpen = true,
   summary,
+  status,
   action,
   drop,
   className,
@@ -1062,6 +1089,8 @@ function SidebarSection({
   /** Open until the person closes it (a long team's groups start closed). */
   defaultOpen?: boolean;
   summary?: ReactNode;
+  /** Open or closed, at the head's end: how many of its agents work ("1 trabalhando"). */
+  status?: ReactNode;
   action?: ReactNode;
   /** It takes a drop: dragged agents (`useAgentDrag`), or channels taken out of their category. */
   drop?: HTMLAttributes<HTMLDivElement> & { "data-drop"?: string | boolean };
@@ -1086,6 +1115,7 @@ function SidebarSection({
           {mark}
           <span className="sidebar__label">{label}</span>
         </button>
+        {status}
         {!open && summary}
         {action}
       </div>
@@ -1702,8 +1732,7 @@ function MoreTools({
           <span className="ac-menu__label">{t("shell.customizeSidebar")}</span>
         </button>
       </Popover>
-      {/* Proposals in More are a tab of Aprovações: its row lights up for them. */}
-      <div className="sidebar__more-active">{items.filter((id) => id !== "proposals").map(row)}</div>
+      <div className="sidebar__more-active">{items.map(row)}</div>
     </>
   );
 }
@@ -1720,8 +1749,9 @@ function PinnedMark() {
 
 /**
  * An agent in AGENTES (its row is its DM); while it works, a light sweep in its color runs behind the row (a pulse in
- * the rail) and the line under its name says where. For who manages agents it drags to another group (`drag`) and its
- * right click has Mudar de grupo (`menuExtra`). `live`: it works, waits or wrote to me, so a closed group still shows it.
+ * the rail) and the line under its name says for whom or where and how long, workspace-wide (its work for me, ADR 0084
+ * addendum of 2026-11-13). For who manages agents it drags to another group (`drag`) and its right click has Mudar de
+ * grupo (`menuExtra`). `live`: it works, waits or wrote to me, so a closed group still shows it.
  */
 function AgentRow({
   agent: a,
@@ -1749,30 +1779,40 @@ function AgentRow({
   const { org, me } = useOrg();
   const state = useStreams((st) => agentStateIn(st, a.id));
   const workingIn = useStreams((st) => agentWorkingIn(st, a.id));
-  const busy = state !== "idle" && !waitingFor;
-  const color = colorOf(a);
-  const chip = audienceChip(t, a);
   // Its presence from its work and its line (ADR 0084): the badge on its face, both in the row's title (no emoji in
   // the list: the line shows where the agent is opened).
   const shown = useAgentPresence(a.id);
-  // Background work's minutes move with the anchor's line, every half minute.
-  useNow(shown?.line?.kind === "work", 30_000);
-  const word = shown ? t(`presence.${shown.presence}`) : null;
+  const work = shown?.work ?? null;
+  // At work: a run this tab hears, or its work for me anywhere (work handed off in two agents' DM too).
+  const busy = (state !== "idle" && !waitingFor) || work?.state === "working";
+  const color = colorOf(a);
+  const chip = audienceChip(t, a);
+  // Background work's minutes move with the anchor's line, every half minute; its work's every minute.
+  const clock = useNow(shown?.line?.kind === "work" || work !== null, work ? WORK_TICK_MS : 30_000);
+  const word = shown ? agentFaceWord(t, shown.presence) : null;
   const line = agentLine(t, shown?.line ?? null, i18n.language);
   const dir = useDirectory(org.id);
   const channelList = useChannels(org.id).data;
   const here = workingIn ? channelList?.find((c) => c.id === workingIn)?.name : undefined;
+  const channelName = (id: string) => channelList?.find((c) => c.id === id)?.name;
+  const out = shown?.presence === "out" && line ? line.text : null;
+  // Under its name: for whom or where it works, what it waits on, and for how long; a return it set comes after why it
+  // is out.
+  const doing =
+    work?.state === "later" && out
+      ? null
+      : workLine(t, i18n.language, work, { agentName: (id) => dir.agentById.get(id)?.name, channelName }, clock);
   const navigate = useNavigate();
-  // The workspace's PO opens its chat about a company, the same view as the PO row (ADR 0185); any other agent its DM.
+  // The workspace's PO opens its chat about a company, the same view as the PO row (ADR 0229); any other agent its DM.
   const isPo = usePoOverview(org.id).data?.agentId === a.id;
   const opens = isPo
     ? ({ to: "/org/$orgId/po", params: { orgId: org.id } } as const)
     : ({ to: "/org/$orgId/dm/agent/$agentId", params: { orgId: org.id, agentId: a.id } } as const);
   const agentEntries = useAgentMenu();
   const rowMenu = entityMenu(() => agentEntries(a, menuExtra));
-  // Its owner and the admins: its settings on hover, like a channel's.
-  const edits = can(org, "manage_agents") || a.ownerUserId === me.user.id;
-  // Listed for who manages agents though it doesn't talk to them: the line says who it talks to.
+  // Its owner and who manages it (ADR 0085 addendum of 2026-11-17): its settings on hover, like a channel's.
+  const edits = managesAgent(a) || ownsAgentAs(a, me.user.id, dir.rolesOf(me.user.id));
+  // Listed for who manages it though it doesn't talk to them (its DM opens, `opensDm`): the line says who it talks to.
   const locked = !canTalk(a);
   const names = locked ? audienceNames(a, (id) => dir.memberById.get(id)?.name, dir.roleName) : [];
   // Working: the pixel orbit in its color beside its name (what it is on in its label and the row's title), so the
@@ -1781,27 +1821,42 @@ function AgentRow({
   const now = busy
     ? here
       ? t("sidebarAgents.workingIn", { channel: here })
-      : t(`sky.busy.${state}`)
+      : state !== "idle"
+        ? t(`sky.busy.${state}`)
+        : agentFaceWord(t, "working")
     : working
       ? line?.text
       : undefined;
-  // Under the name, one line of one height: who it talks to when that is limited, why it is out, else its role (the
-  // agent's fixed label) as a tag.
-  const out = shown?.presence === "out" && line ? line.text : null;
-  const under = locked
-    ? names.length > 1
-      ? t("sidebarAgents.talksOnlyMore", { name: names[0], count: names.length - 1 })
-      : names[0]
-        ? t("sidebarAgents.talksOnly", { name: names[0] })
-        : chip
-    : (out ?? a.role);
+  // Under the name, one line of one height: its work (waiting on me, working, a wait, in line), why it is out, a return
+  // it set, who it talks to when that is limited, else its role (the agent's fixed label) as a tag.
+  const under =
+    out ??
+    (locked
+      ? names.length > 1
+        ? t("sidebarAgents.talksOnlyMore", { name: names[0], count: names.length - 1 })
+        : names[0]
+          ? t("sidebarAgents.talksOnly", { name: names[0] })
+          : chip
+      : a.role);
+  // Its title: who it is over what it does, whole ("Ajudando a Ada · #vendas · 22 min", "Retorno às 00:32 · #vendas").
+  const place =
+    (work?.forAgentId || work?.state === "later") && work.channelId
+      ? (work.channelName ?? channelName(work.channelId))
+      : undefined;
+  const doingTitle = doing
+    ? [upperFirst(doing.text, i18n.language), place && `#${place}`, doing.time].filter(Boolean).join(" · ")
+    : null;
+  const title = doingTitle
+    ? `${[a.name, a.role].filter(Boolean).join(" · ")}\n${doingTitle}`
+    : [a.name, a.role, now ?? word, line?.text].filter(Boolean).join(" · ");
+  const roleTag = !locked && !out;
   return (
     <div className="sidebar__row" data-agent-row={a.id} data-live={live || undefined} data-acts={edits ? 1 : undefined}>
       <Link
         {...rowMenu}
         {...opens}
         className="sidebar__item"
-        title={[a.name, a.role, now ?? word, line?.text].filter(Boolean).join(" · ")}
+        title={title}
         onMouseEnter={onPrefetch}
         onFocus={onPrefetch}
         onClick={onOpen}
@@ -1823,15 +1878,26 @@ function AgentRow({
           {...(waitingFor ? { state: "idle" as const, expression: "closed" as const } : {})}
         />
         <span className="sidebar__item-text">
-          <span className={under ? "sidebar__item-label ac-captop" : "sidebar__item-label"}>
+          <span className={doing || under ? "sidebar__item-label ac-captop" : "sidebar__item-label"}>
             {a.name}
-            {working && <PixelSpinner size={14} color={color} label={now} className="sidebar__item-spin" />}
+            {working && (
+              <PixelSpinner
+                size={14}
+                color={color}
+                label={state === "idle" && doingTitle ? doingTitle : now}
+                className="sidebar__item-spin"
+              />
+            )}
           </span>
-          {under && <span className={cx("sidebar__item-role", !locked && !out && "ac-tag")}>{under}</span>}
+          {doing ? (
+            <AgentWorkLine line={doing} className="sidebar__item-role" />
+          ) : (
+            under && <span className={cx("sidebar__item-role", roleTag && "ac-tag")}>{under}</span>
+          )}
         </span>
         {unread > 0 ? (
           <UnreadCount count={unread} />
-        ) : waitingFor ? (
+        ) : waitingFor && !doing ? (
           <span className="sidebar__item-meta sidebar__waiting" title={t("outage.sidebar.tip", { name: waitingFor })}>
             <Icon name="waiting" size={14} />
             {t("outage.sidebar.waiting")}
@@ -2008,12 +2074,24 @@ function UnreadCount({
  * opening down, also holds what the workspace menu held for one person: Your account, Settings and the person's
  * workspaces. Mounted once either way: the dialogs live here.
  */
+/** Mints the person's link to the referral service and leaves for it (ADR 0192), as `useOpenBilling` does. */
+function useOpenReferrals() {
+  const { t } = useTranslation();
+  const api = useApi();
+  const toast = useToast();
+  const here = useRouterState({ select: (s) => s.location.pathname });
+  return useMutation({
+    mutationFn: () => api.account.referralsLink(here),
+    onSuccess: ({ url }) => navigateAway(url),
+    onError: () => toast.show(t("referrals.failed"), "error"),
+    meta: { silent: true },
+  });
+}
+
 function AccountMenu({ personal = false }: { personal?: boolean }) {
   const { t, i18n } = useTranslation();
   const { org, me } = useOrg();
   const dir = useDirectory(org.id);
-  const auth = useAuth();
-  const qc = useQueryClient();
   const navigate = useNavigate();
   const compact = useMediaQuery(COMPACT_QUERY);
   const saveStatus = useSaveStatus();
@@ -2022,6 +2100,14 @@ function AccountMenu({ personal = false }: { personal?: boolean }) {
   const [phone, setPhone] = useState(false);
   const [account, setAccount] = useOpenParam("account");
   const [statusOpen, setStatusOpen] = useState(false);
+  const mounted = {
+    profile: useEverTrue(profile),
+    photo: useEverTrue(photo),
+    phone: useEverTrue(phone),
+    email: useEverTrue(account === "email"),
+    password: useEverTrue(account === "password"),
+    delete: useEverTrue(account === "delete"),
+  };
   // The app's "Show QR code" for this server (Preferences › Servers).
   useEffect(() => {
     if (takePhoneAsk()) setPhone(true);
@@ -2049,12 +2135,9 @@ function AccountMenu({ personal = false }: { personal?: boolean }) {
   const who = [me.user.name, line?.text ?? presenceWord].filter(Boolean).join(" · ");
   const under = Boolean(line || presenceWord);
 
-  const signOut = async () => {
-    await auth.signOut();
-    storage.set(STORAGE_KEYS.signedOut, "1");
-    qc.clear();
-    await navigate({ to: "/login" });
-  };
+  const { signOut } = useSignOut();
+  const referrals = useAuthConfig().data?.referralsUrl;
+  const openReferrals = useOpenReferrals();
   const openSettings = (section?: SettingsSection) =>
     void (section
       ? navigate({ to: "/org/$orgId/settings/$section", params: { orgId: org.id, section } })
@@ -2175,6 +2258,11 @@ function AccountMenu({ personal = false }: { personal?: boolean }) {
         <MenuItem icon="settings" onSelect={() => openSettings(personal ? undefined : "account")}>
           {t("shell.settings")}
         </MenuItem>
+        {referrals && (
+          <MenuItem icon="coin" disabled={openReferrals.isPending} onSelect={() => openReferrals.mutate()}>
+            {t("referrals.open")}
+          </MenuItem>
+        )}
         {import.meta.env.DEV && (
           <MenuItem icon="grid" onSelect={() => void navigate({ to: "/dev/gallery" })}>
             {t("shell.gallery")}
@@ -2191,12 +2279,15 @@ function AccountMenu({ personal = false }: { personal?: boolean }) {
           {t("auth.signOut")}
         </MenuItem>
       </Menu>
-      <ProfileDialog focus={profile ? "name" : null} onClose={() => setProfile(false)} />
-      <ChangeAvatarDialog open={photo} onClose={() => setPhoto(false)} />
       <SetStatusDialog open={statusOpen} onClose={() => setStatusOpen(false)} />
-      <OpenOnPhoneDialog open={phone} onClose={() => setPhone(false)} />
-      <AddPasswordDialog open={account === "password"} onClose={() => setAccount(null)} />
-      <DeleteAccountDialog open={account === "delete"} onClose={() => setAccount(null)} />
+      <Suspense fallback={null}>
+        {mounted.profile && <ProfileDialog focus={profile ? "name" : null} onClose={() => setProfile(false)} />}
+        {mounted.photo && <ChangeAvatarDialog open={photo} onClose={() => setPhoto(false)} />}
+        {mounted.phone && <OpenOnPhoneDialog open={phone} onClose={() => setPhone(false)} />}
+        {mounted.email && <EmailDialog open={account === "email"} onClose={() => setAccount(null)} />}
+        {mounted.password && <AddPasswordDialog open={account === "password"} onClose={() => setAccount(null)} />}
+        {mounted.delete && <DeleteAccountDialog open={account === "delete"} onClose={() => setAccount(null)} />}
+      </Suspense>
     </>
   );
 }
@@ -2214,7 +2305,11 @@ function useWorkspaceLook() {
     return o !== undefined && isPersonal(o) && o.role === "owner";
   };
   const several = me.organizations.filter((o) => mine(o.id)).length > 1;
-  return (o: { id: string; name: string; logo?: string | null }, face: "sm" | "md", mark: number) =>
+  return (
+    o: { id: string; name: string; logo?: string | null; accent?: string | null },
+    face: "sm" | "md",
+    mark: number,
+  ) =>
     mine(o.id)
       ? {
           leading: <Avatar kind="person" name={me.user.name} imageUrl={me.user.image} size={face} />,
@@ -2222,13 +2317,21 @@ function useWorkspaceLook() {
           sub: null,
           personal: true,
         }
-      : { leading: <OrgMark logo={o.logo} size={mark} />, name: o.name, sub: null, personal: false };
+      : {
+          // Each workspace in its own accent: the engine's `sky` is the active one's.
+          leading: <OrgMark logo={o.logo} accent={o.accent ?? null} size={mark} />,
+          name: o.name,
+          sub: null,
+          personal: false,
+        };
 }
 
 /**
- * Your workspaces in the account menu of a personal workspace (ADR 0159): the workspace menu's list (by server in the
- * desktop app, ADR 0154), then New workspace or Add workspace. Mounted only while the menu is open: the counts load
- * then. No role beside each: one person's own workspaces.
+ * Your workspaces in the account menu of a personal workspace (ADR 0159): the workspace menu's list, then New
+ * workspace when the person may make one. In the desktop app (ADR 0154) by server, then Add workspace; New workspace
+ * (it makes one here) sits under this server's workspaces only on a server of one's own, since on agentes.chat Add
+ * workspace makes one (`offersNewWorkspace`). Mounted only while the menu is open: the counts load then. No role beside
+ * each: one person's own workspaces.
  */
 function MenuWorkspaces() {
   const { t, i18n } = useTranslation();
@@ -2236,16 +2339,37 @@ function MenuWorkspaces() {
   const look = useWorkspaceLook();
   const notes = workspaceNotes(t, i18n.language, me.organizations);
   const groups = useWorkspaceGroups({ orgs: me.organizations, currentOrgId: org.id });
+  const api = useApi();
   const navigate = useNavigate();
   const go = (orgId: string) => void navigate({ to: "/org/$orgId", params: { orgId } });
+  const newWorkspace = offersNewWorkspace(me.user.canCreateWorkspace, groups) && (
+    <MenuItem icon="plus" onSelect={() => void navigate({ to: "/onboarding" })}>
+      {t("shell.newWorkspace")}
+    </MenuItem>
+  );
+  const addAccount = (
+    <MenuItem
+      icon="plus"
+      description={t("shell.addAccountHint")}
+      onSelect={() => void navigate({ to: "/login", search: { add: true } })}
+    >
+      {t("shell.addAccount")}
+    </MenuItem>
+  );
   if (groups)
     return (
       <>
         <MenuHeading>{t("shell.yourWorkspaces")}</MenuHeading>
         {groups.map((g) => (
-          <Fragment key={g.server}>
-            {groups.length > 1 && (
-              <MenuHeading>{g.cloud ? g.name : `${g.name} · ${t("shell.yourServer")}`}</MenuHeading>
+          <Fragment key={groupKey(g)}>
+            {groups.length > 1 && <MenuHeading>{groupTitle(t, g)}</MenuHeading>}
+            {accountAlone(g) && (
+              <MenuItem
+                leading={<Avatar kind="person" name={g.account.name} size="sm" />}
+                onSelect={() => void switchAccount(api, g.account.userId).catch(() => {})}
+              >
+                {g.account.name}
+              </MenuItem>
             )}
             {g.rows.map((o) => {
               const shown = g.here ? look(o, "sm", 20) : look({ ...o, id: "" }, "sm", 20);
@@ -2258,23 +2382,28 @@ function MenuWorkspaces() {
                     o.current ? t("shell.youAreHere") : o.unread > 0 ? <CountChip>{o.unread}</CountChip> : undefined
                   }
                   onSelect={() => {
-                    if (!g.here) void thisMac.openWorkspace(g.server, o.id).catch(() => {});
-                    else if (!o.current) go(o.id);
+                    if (g.here) {
+                      if (!o.current) go(o.id);
+                    } else openElsewhere(api, g, o.id);
                   }}
                 >
                   {shown.name}
                 </MenuItem>
               );
             })}
+            {g.here && newWorkspace}
           </Fragment>
         ))}
-        <MenuItem
-          icon="plus"
-          description={t("shell.addWorkspaceHint")}
-          onSelect={() => void thisMac.addWorkspace().catch(() => {})}
-        >
-          {t("shell.addWorkspace")}
-        </MenuItem>
+        {groups.some((g) => g.desktop) && (
+          <MenuItem
+            icon="plus"
+            description={t("shell.addWorkspaceHint")}
+            onSelect={() => void thisMac.addWorkspace().catch(() => {})}
+          >
+            {t("shell.addWorkspace")}
+          </MenuItem>
+        )}
+        {addAccount}
       </>
     );
   return (
@@ -2294,14 +2423,36 @@ function MenuWorkspaces() {
           </MenuItem>
         );
       })}
-      {/* On agentes.chat Cloud, while sign-up is by invitation, only an invitation makes a workspace (ADR 0078). */}
-      {me.user.canCreateWorkspace !== false && (
-        <MenuItem icon="plus" onSelect={() => void navigate({ to: "/onboarding" })}>
-          {t("shell.newWorkspace")}
-        </MenuItem>
-      )}
+      {newWorkspace}
+      {addAccount}
     </>
   );
+}
+
+/** A group's key in "Your workspaces": a server has one group per account (ADR 0183). */
+const groupKey = (g: WorkspaceGroup) => `${g.server} ${g.account?.userId ?? ""}`;
+
+/**
+ * A group's line in "Your workspaces" as words: its server in the desktop app (ADR 0154), and whose account it is
+ * where a server has several (ADR 0183); outside the app there is one server, so the account alone.
+ */
+function groupTitle(t: TFunction, g: WorkspaceGroup): string {
+  if (!g.desktop) return g.account?.email ?? g.name;
+  const server = g.cloud ? g.name : `${g.name} · ${t("shell.yourServer")}`;
+  return g.several && g.account ? `${server} · ${g.account.email}` : server;
+}
+
+/** Another account of this browser with no workspace yet: its own row is the way to it. */
+const accountAlone = (g: WorkspaceGroup): g is WorkspaceGroup & { account: NonNullable<WorkspaceGroup["account"]> } =>
+  g.sameServer && !g.here && g.account !== null && g.rows.length === 0;
+
+/**
+ * Opens a workspace that isn't the open account's: another account of this browser on this server (the browser moves
+ * to it, ADR 0183), or another server of the desktop app (the window goes there, as the account it belongs to).
+ */
+function openElsewhere(api: ApiClient, g: WorkspaceGroup, orgId: string) {
+  if (g.sameServer && g.account) void switchAccount(api, g.account.userId, `/org/${orgId}`).catch(() => {});
+  else void thisMac.openWorkspace(g.server, orgId, g.account?.userId).catch(() => {});
 }
 
 /**
@@ -2343,6 +2494,7 @@ function WorkspaceMenu({ summary }: { summary: string | null }) {
   const { t } = useTranslation();
   const { org } = useOrg();
   const dir = useDirectory(org.id);
+  const place = useServerPlace();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   return (
@@ -2358,7 +2510,18 @@ function WorkspaceMenu({ summary }: { summary: string | null }) {
         <OrgMark logo={org.logo} className="sidebar__org-mark" />
         <span className="sidebar__org-text">
           <span className="sidebar__org-name">{org.name}</span>
-          {summary && <span className="sidebar__org-meta">{summary}</span>}
+          {(place || summary) && (
+            <span className="sidebar__org-line">
+              {/* Where it lives, before its counts: the Cloud, this computer or one's own server. */}
+              {place && (
+                <span className="sidebar__org-where">
+                  <Icon name={SERVER_PLACE_ICON[place]} size={14} />
+                  {t(`hosting.badge.${place}`)}
+                </span>
+              )}
+              {summary && <span className="sidebar__org-meta">{summary}</span>}
+            </span>
+          )}
         </span>
         <Icon name="chevronDown" size={16} />
       </button>
@@ -2400,11 +2563,12 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
   const look = useWorkspaceLook();
   const notes = workspaceNotes(t, i18n.language, me.organizations);
   const groups = useWorkspaceGroups({ orgs: me.organizations, currentOrgId: org.id });
+  const api = useApi();
   const navigate = useNavigate();
   const overview = useOverview(org.id);
   const managesAgents = can(org, "manage_agents");
   const connections = useConnections(org.id);
-  const skills = useSkills(org.id, managesAgents);
+  const skills = useSkills(org.id);
   const invite = useInviteDialog();
   const go = (section?: SettingsSection) => () => {
     onDone();
@@ -2419,6 +2583,29 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
       invite.open();
     } else go("members")();
   };
+  const newWorkspace = offersNewWorkspace(me.user.canCreateWorkspace, groups) && (
+    <MenuOverlayItem
+      icon="plus"
+      onSelect={() => {
+        onDone();
+        void navigate({ to: "/onboarding" });
+      }}
+    >
+      {t("shell.newWorkspace")}
+    </MenuOverlayItem>
+  );
+  const addAccount = (
+    <MenuOverlayItem
+      icon="plus"
+      description={t("shell.addAccountHint")}
+      onSelect={() => {
+        onDone();
+        void navigate({ to: "/login", search: { add: true } });
+      }}
+    >
+      {t("shell.addAccount")}
+    </MenuOverlayItem>
+  );
   let key = 0;
   const next = () => String(++key);
   return (
@@ -2445,16 +2632,9 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
             {t("settings.section.access")}
           </MenuOverlayItem>
         )}
-        {managesAgents && (
-          <MenuOverlayItem
-            icon="book"
-            shortcut={next()}
-            count={skills.data?.length || undefined}
-            onSelect={go("skills")}
-          >
-            {t("settings.section.skills")}
-          </MenuOverlayItem>
-        )}
+        <MenuOverlayItem icon="book" shortcut={next()} count={skills.data?.length || undefined} onSelect={go("skills")}>
+          {t("settings.section.skills")}
+        </MenuOverlayItem>
         <MenuOverlayItem icon="settings" shortcut={next()} onSelect={go()}>
           {t("shell.workspaceSettings")}
         </MenuOverlayItem>
@@ -2464,11 +2644,16 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
           <>
             {/* The desktop app (ADR 0154): every server's workspaces, by server, each with its unread count. */}
             {groups.map((g) => (
-              <Fragment key={g.server}>
-                {groups.length > 1 && (
+              <Fragment key={groupKey(g)}>
+                {groups.length > 1 && !g.desktop && (
+                  // Outside the app there is one server: each group is one of the browser's accounts (ADR 0183).
+                  <span className="sidebar__menu-server">{g.account?.email ?? g.name}</span>
+                )}
+                {groups.length > 1 && g.desktop && (
                   <span className="sidebar__menu-server" data-state={g.state}>
                     <Icon name={g.cloud ? "cloud" : g.thisComputer ? "computer" : "globe"} size={14} />
                     {g.thisComputer ? t("shell.serverHere") : g.name}
+                    {g.several && g.account && <em>· {g.account.email}</em>}
                     {/* Its state as words in the line, never a pill (ADR 0158): stopped, offline since, signed out. */}
                     {g.state === "offline" ? (
                       <em className="sidebar__menu-server-state">
@@ -2498,6 +2683,17 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
                     )}
                   </span>
                 )}
+                {accountAlone(g) && (
+                  <MenuOverlayItem
+                    leading={<Avatar kind="person" name={g.account.name} size="md" />}
+                    onSelect={() => {
+                      onDone();
+                      void switchAccount(api, g.account.userId).catch(() => {});
+                    }}
+                  >
+                    {g.account.name}
+                  </MenuOverlayItem>
+                )}
                 {g.rows.map((o) => {
                   const here = g.here ? me.organizations.find((m) => m.id === o.id) : undefined;
                   const shown = look(here ? o : { ...o, id: "" }, "md", 32);
@@ -2521,7 +2717,7 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
                       }
                       onSelect={() => {
                         onDone();
-                        if (!g.here) void thisMac.openWorkspace(g.server, o.id).catch(() => {});
+                        if (!g.here) openElsewhere(api, g, o.id);
                         else if (!o.current) void navigate({ to: "/org/$orgId", params: { orgId: o.id } });
                       }}
                     >
@@ -2529,19 +2725,23 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
                     </MenuOverlayItem>
                   );
                 })}
+                {g.here && newWorkspace}
               </Fragment>
             ))}
             <MenuOverlaySeparator />
-            <MenuOverlayItem
-              icon="plus"
-              description={t("shell.addWorkspaceHint")}
-              onSelect={() => {
-                onDone();
-                void thisMac.addWorkspace().catch(() => {});
-              }}
-            >
-              {t("shell.addWorkspace")}
-            </MenuOverlayItem>
+            {groups.some((g) => g.desktop) && (
+              <MenuOverlayItem
+                icon="plus"
+                description={t("shell.addWorkspaceHint")}
+                onSelect={() => {
+                  onDone();
+                  void thisMac.addWorkspace().catch(() => {});
+                }}
+              >
+                {t("shell.addWorkspace")}
+              </MenuOverlayItem>
+            )}
+            {addAccount}
           </>
         ) : (
           <>
@@ -2566,21 +2766,9 @@ function WorkspaceMenuOptions({ onDone }: { onDone: () => void }) {
                 </MenuOverlayItem>
               );
             })}
-            {/* On agentes.chat Cloud, while sign-up is by invitation, only an invitation makes a workspace (ADR 0078). */}
-            {me.user.canCreateWorkspace !== false && (
-              <>
-                <MenuOverlaySeparator />
-                <MenuOverlayItem
-                  icon="plus"
-                  onSelect={() => {
-                    onDone();
-                    void navigate({ to: "/onboarding" });
-                  }}
-                >
-                  {t("shell.newWorkspace")}
-                </MenuOverlayItem>
-              </>
-            )}
+            <MenuOverlaySeparator />
+            {newWorkspace}
+            {addAccount}
           </>
         )}
       </MenuOverlayGroup>

@@ -1,6 +1,8 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { GROK_ACCOUNT_HOMES } from "@agenteschat/adapters/command-policy";
+import { type KnownLabel, scrubLogLine } from "@agenteschat/adapters/error-scrub";
 import {
   cgroupCounters,
   diskFigures,
@@ -22,13 +24,17 @@ import {
   type MachineOs,
   type MachineReplies,
   type MachineRequest,
+  type MachineSize,
   OWN_USAGE_ID,
+  REPORT_LOG_LINES,
   type RunnerAccess,
   type RunnerFrame,
   type RunnerInfo,
   type RunnerPause,
+  type RunnerReportParts,
   type RunnerToolchains,
   type RunnerTools,
+  TASK_LIMIT_BOUNDS,
 } from "@agenteschat/adapters/machine-protocol";
 import { redactCommon } from "@agenteschat/adapters/redact";
 import {
@@ -61,7 +67,7 @@ import {
 } from "./access";
 import { AccountBrains } from "./account-brains";
 import { accountSelfCheck, SELF_CHECK_EVERY_MS, SELF_CHECK_RETRY_MS } from "./account-check";
-import { AccountManager, lchownTree, SYSTEM_ACCOUNTS_ROOT } from "./accounts";
+import { AccountManager, grokSandboxFails, lchownTree, SYSTEM_ACCOUNTS_ROOT } from "./accounts";
 import { ActivityLog } from "./activity";
 import {
   AccountUsers,
@@ -80,11 +86,13 @@ import {
   systemLauncher,
   trustedNetworkLauncher,
 } from "./agent-users";
-import { BrainManager } from "./brain";
+import { AgyCopy, type AgyCopyOptions } from "./agy-copy";
+import { BrainManager, readyRoom } from "./brain";
 import { CodexAppServers } from "./brain-codex-app";
 import { BrowserManager } from "./browser";
 import { ensureBrowserBindPolicy, prepareAgents } from "./browser-bind-policy";
 import { BrowserViews } from "./browser-views";
+import { CliInstaller, type CliInstallerOptions, gitBashPath } from "./cli-install";
 import {
   accessToStore,
   configPath,
@@ -107,12 +115,14 @@ import { DesktopManager } from "./desktop";
 import { DesktopSessions, type DesktopUser, runnerUser, systemDesktopUser } from "./desktop-session";
 import { EgressObservation, probeEgress } from "./egress";
 import { NetworkChangingError, RUNNER_VERSION, RunnerError } from "./errors";
-import { cachedExecutors, EXECUTORS_TTL_MS, type ExecutorRun } from "./executors";
+import { cachedExecutors, EXECUTORS_TTL_MS, type ExecutorRun, inHomeDirs } from "./executors";
 import { systemGitCache } from "./git";
-import type { HandlerContext, RequestObserver, RequestOutcome } from "./handlers";
+import { closeIdleUnderPressure, type HandlerContext, type RequestObserver, type RequestOutcome } from "./handlers";
+import { Holds } from "./holds";
 import { IphoneSetup, type IphoneSetupOptions } from "./iphone-setup";
 import { currentProcess, isCompiled, selfCommand } from "./launch";
 import { tailLines } from "./logfile";
+import { addUsualDirs, adoptLoginPath } from "./login-path";
 import { LoopbackGuard, loopbackEndpoints, runnerEndpoints } from "./loopback-guard";
 import { McpBridge, type McpTaskInfo, mcpSocketPath } from "./mcp";
 import {
@@ -131,19 +141,23 @@ import {
 } from "./network-state";
 import { type CachedLogo, logoDataUrl, readCachedLogo, removeCachedLogo, syncOrgLogo } from "./org-logo";
 import { type DeviceGrant, devicePair, type FetchFn, LINK_CODE, PairingError, uniqueWorkspace } from "./pairing";
+import { ackPark, takePark } from "./park";
 import { agentId8, agentWorkspace } from "./paths";
 import { iphonesWifiFileOf, PhoneManager, type PhoneManagerOptions } from "./phones";
 import { agentSecrets, dropStoredSiteSecrets, secretValue } from "./secrets";
-import { AGENTS_CGROUP } from "./service";
+import { AGENTS_CGROUP, systemdBooted } from "./service";
 import {
   ensureSingleShared,
   ensureSystemShared,
+  SHARED_FIX_MS,
   SHARED_SIZE_MS,
   type SharedSpec,
+  shareAgentFiles,
   sharedSizeGb,
   systemShared,
   withShared,
 } from "./shared-folder";
+import { ackStandby, readStandby, STANDBY_POLL_MS, standbyOn, watchStandby } from "./standby";
 import { prepareSystemStartPage } from "./start-page";
 import { DataSockets, RELAYED_FILE, RelayCount } from "./streams";
 import {
@@ -156,7 +170,8 @@ import {
 } from "./supervisor";
 import { type SettledTask, TaskManager } from "./tasks";
 import { runnerTerminalUser, systemTerminalUser, Terminals, type TerminalUser } from "./terminal";
-import { appleToolchains, cachedToolchains, TOOLCHAINS_FILE } from "./toolchains";
+import { appleToolchains, cachedToolchains, TOOLCHAINS_FILE, xcodeBlocked } from "./toolchains";
+import { XcodeFixer, type XcodeFixOptions } from "./xcode-fix";
 
 /**
  * The runner's long-lived core, shared by `agentes-runner start` (terminal,
@@ -174,16 +189,47 @@ import { appleToolchains, cachedToolchains, TOOLCHAINS_FILE } from "./toolchains
  *   activity log (secrets masked).
  */
 
+/**
+ * Where the runner reads free memory (Linux), an idle Claude Code closes when memory runs short (a turn that needs its
+ * room, `reclaim`, or `closeIdleUnderPressure`), so keeping it warm costs no admission: follow-ups skip a cold start
+ * and keep the prompt cache. The idle limit there is only a backstop, as long as a session is picked up again
+ * (`SESSION_IDLE_MS` on the server). Elsewhere a count of turns decides room, so idle CLIs close soon.
+ */
+const MEMORY_READ = process.platform === "linux";
+
+/**
+ * Background tasks at once, sized to the computer's memory: one per 1.5 GiB left after 4 GiB for the system and the
+ * person's own apps (a task is a coding CLI with its tools, 0.5 to 1 GB), at least 3 (the fixed default before: it
+ * fits a small laptop) and at most the bound. CPUs don't count: a task mostly waits on its model. A container's or
+ * slice's limit counts, not the host's.
+ */
+export function sizedTaskLimit(size: Pick<MachineSize, "memoryGb" | "limit">): number {
+  const { memoryGb } = size.limit ?? size;
+  // memoryGb is in halves, so (memoryGb - 4) * 2 is whole and the division by 3 floors exactly.
+  return Math.min(TASK_LIMIT_BOUNDS[1], Math.max(3, Math.floor(((memoryGb - 4) * 2) / 3)));
+}
+
 export const DEFAULT_LIMITS = {
-  maxConcurrentTasks: 3,
+  maxConcurrentTasks: sizedTaskLimit(machineSize(os.homedir())),
   taskMaxSeconds: 4 * 3600,
-  brainIdleMinutes: 3,
-  brainMaxProcesses: 1,
+  brainIdleMinutes: MEMORY_READ ? 60 : 3,
+  brainMaxProcesses: MEMORY_READ ? 8 : 1,
 } as const;
+
+/** Codex app-servers aren't closed for memory (`reclaimIdle` is Claude Code's): they keep the shorter limits. */
+const CODEX_DEFAULT_LIMITS = {
+  brainIdleMinutes: MEMORY_READ ? 20 : 3,
+  brainMaxProcesses: MEMORY_READ ? 2 : 1,
+} as const;
+
+const codexLimits = (c: Pick<StoredConfig, "brainIdleMinutes" | "brainMaxProcesses"> | null | undefined) => ({
+  idleMs: (c?.brainIdleMinutes ?? CODEX_DEFAULT_LIMITS.brainIdleMinutes) * 60_000,
+  maxProcesses: c?.brainMaxProcesses ?? CODEX_DEFAULT_LIMITS.brainMaxProcesses,
+});
 
 /** Bounds for `config.set` (the app's Preferences). */
 const LIMIT_BOUNDS: Record<keyof typeof DEFAULT_LIMITS, [number, number]> = {
-  maxConcurrentTasks: [1, 20],
+  maxConcurrentTasks: [...TASK_LIMIT_BOUNDS],
   taskMaxSeconds: [60, 24 * 3600],
   brainIdleMinutes: [1, 24 * 60],
   brainMaxProcesses: [1, 10],
@@ -364,11 +410,12 @@ export interface DaemonOptions {
   /** Tests (system mode): how agents' users are found and their workers started. */
   workers?: Pick<SupervisorOptions, "user" | "start">;
   /**
-   * Tests (system mode): where the account folders are, how one is handed to an agent's user, and what goes before
-   * root's Claude CLIs (none when left out).
+   * Tests (system mode): where the account folders are (Grok Build's under `root` too unless `grokRoot`), how one is
+   * handed to an agent's user, and what goes before root's Claude CLIs (none when left out).
    */
   systemAccounts?: {
     root: string;
+    grokRoot?: string;
     chown: (file: string, uid: number, gid: number) => Promise<void>;
     authEgress?: () => string[] | null;
   };
@@ -386,6 +433,15 @@ export interface DaemonOptions {
   phones?: Partial<PhoneManagerOptions> | false;
   /** Tests: the iPhone setup's tools and folders. */
   iphone?: Partial<IphoneSetupOptions>;
+  /** Tests: the Xcode fix's tools and timings. */
+  xcodeFix?: Partial<XcodeFixOptions>;
+  /** Tests: how `cli.install` installs. */
+  cliInstall?: Partial<CliInstallerOptions>;
+  /**
+   * The runner brings its own Antigravity CLI where the person's is older than `AGY_PIN` (`AgyCopy`, ADR 0143): on for
+   * the runner people run (`main.ts`), off in tests unless they ask.
+   */
+  agyCopy?: boolean | Partial<AgyCopyOptions>;
 }
 
 /** What a task is in its activity words: a shell task's command, or the CLI that works it (the app names it). */
@@ -423,6 +479,7 @@ export class RunnerDaemon implements RequestObserver {
   private readonly requests: AccessRequests;
   private pairing: AbortController | null = null;
   private stopWatch: (() => void) | null = null;
+  private stopStandbyWatch: (() => void) | null = null;
   private readonly timers: ReturnType<typeof setInterval>[] = [];
   /** Protocol 22: how busy this computer got over the last day (rides on `pong`). */
   private readonly load = new LoadWindow();
@@ -431,6 +488,10 @@ export class RunnerDaemon implements RequestObserver {
   /** The computer's shared folder (ADR 0115) once the session made it, and its last measured size. */
   private shared: string | null = null;
   private sharedGb: number | undefined;
+  /** System mode's folder (real path) and group, for `shareFiles`; null elsewhere. */
+  private sharedGroup: Required<SharedSpec> | null = null;
+  private sharing = false;
+  private sharingProblem = "";
   /** System mode: what this process relayed to the server, per stream (`relayed.json`). */
   private readonly relayed = new RelayCount();
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -476,9 +537,28 @@ export class RunnerDaemon implements RequestObserver {
   /** The phones the last `hello` carried (JSON). */
   private toldPhones = "[]";
   /** What this computer builds with, cached (`hello.toolchains`); looked at from the first session on. */
-  private toolchains: { get(): RunnerToolchains | undefined; stop(): void } | null = null;
+  private toolchains: { get(): RunnerToolchains | undefined; stop(): void; lookApple?(): Promise<void> } | null = null;
   /** The Mac's side of an iPhone's setup (the desktop app asks), made on its first request. */
   private iphone: IphoneSetup | null = null;
+  /** System mode under systemd: the agents' holds (ADR 0176), which outlive sessions and this process. */
+  private holds: Holds | null = null;
+  /** An operator's standby is in force (ADR 0176): no link to the server, everything else runs. */
+  private standby = false;
+  /** The last standby ask answered (`standby-ack.json`). */
+  private standbyAsk: string | null = null;
+  /** A park (`park.ts`) under way: the next ask waits for it. */
+  private parking = false;
+  /** A fix of the Mac's own Xcode (`xcode.fix`, the desktop app's iPhone window), made on its first request. */
+  private fixer: XcodeFixer | null = null;
+  /** An install of a coding CLI (`cli.install`), made on its first request. */
+  private installer: CliInstaller | null = null;
+  /** The Antigravity CLI the runner brings, outside system mode on macOS and Linux; null elsewhere. */
+  private readonly agy: AgyCopy | null;
+  /**
+   * The PATH read again (app mode's `refreshPath`). On Windows before every look too: an app keeps the PATH it started
+   * with, so a CLI installed since is found only through the registry.
+   */
+  private readonly refreshPath: (() => void) | undefined;
 
   constructor(private readonly opts: DaemonOptions) {
     this.uidNetworks = new AgentNetworks({}, readNetworkPins(opts.home));
@@ -488,16 +568,7 @@ export class RunnerDaemon implements RequestObserver {
     this.requests = new AccessRequests(opts.home, this.now);
     const proc = currentProcess();
     this.self = opts.self ?? { command: selfCommand(proc), compiled: isCompiled(proc) };
-    const exec =
-      opts.executors ??
-      cachedExecutors({
-        file: path.join(opts.home, "executors.json"),
-        ...(opts.executorRun ? { run: opts.executorRun } : {}),
-        onChange: () => this.executorsChanged(),
-      });
-    this.executors = () => exec() ?? {};
-    this.executorsKnown = () => !("known" in exec) || exec.known === true;
-    this.executorsFresh = (exec as { fresh?: () => Promise<unknown> }).fresh ?? (async () => this.executors());
+    this.refreshPath = opts.refreshPath ?? (process.platform === "win32" ? () => adoptLoginPath() : undefined);
     // System mode is set at install and kept through pairings: account folders are lent to agents' users.
     let system = false;
     try {
@@ -505,14 +576,64 @@ export class RunnerDaemon implements RequestObserver {
     } catch {
       // an unreadable config starts unpaired
     }
+    const exec =
+      opts.executors ??
+      cachedExecutors({
+        file: path.join(opts.home, "executors.json"),
+        ...(opts.executorRun ? { run: opts.executorRun } : {}),
+        onChange: () => this.executorsChanged(),
+        ...(process.platform === "win32"
+          ? { before: () => this.refreshPath?.(), gitMissing: () => gitBashPath() === null }
+          : system
+            ? { homeOnly: (bin: string) => inHomeDirs(bin) !== null }
+            : { before: () => addUsualDirs() }),
+      });
+    // Grok Build's and Antigravity's models as the accounts signed in here list them: the computer's own
+    // `grok models` and `agy models` are signed out.
+    this.executors = () => {
+      const found: NonNullable<RunnerInfo["executors"]> = { ...exec() };
+      const grok = this.accounts?.listedModels("grok");
+      if (found.grok && grok) found.grok = { ...found.grok, models: grok };
+      const agy = this.accounts?.listedModels("antigravity");
+      if (found.antigravity && agy) found.antigravity = { ...found.antigravity, models: agy };
+      return found;
+    };
+    this.executorsKnown = () => !("known" in exec) || exec.known === true;
+    this.executorsFresh = (exec as { fresh?: () => Promise<unknown> }).fresh ?? (async () => this.executors());
     const lent = system
-      ? (opts.systemAccounts ?? { root: SYSTEM_ACCOUNTS_ROOT, chown: lchownTree, authEgress: () => authEgressPrefix() })
+      ? (opts.systemAccounts ?? {
+          root: SYSTEM_ACCOUNTS_ROOT,
+          grokRoot: GROK_ACCOUNT_HOMES,
+          chown: lchownTree,
+          authEgress: () => authEgressPrefix(),
+        })
       : null;
+    // Outside system mode, where the person's own CLI runs: the root's are the computer's setup's (the Cloud's image).
+    this.agy =
+      opts.agyCopy && !system && (process.platform === "darwin" || process.platform === "linux")
+        ? new AgyCopy({
+            home: opts.home,
+            log: opts.log,
+            inUse: () => this.accounts.snapshot()?.some((a) => a.kind === "antigravity") ?? false,
+            onChange: () => {
+              void this.clisLook().then(() => this.accounts.refresh(true).catch(() => undefined));
+            },
+            ...(typeof opts.agyCopy === "object" ? opts.agyCopy : {}),
+          })
+        : null;
     const accountUsers = system ? (opts.accountUsers ?? new AccountUsers({ home: opts.home, log: opts.log })) : null;
     this.accountUsers = accountUsers;
     this.accounts = new AccountManager({
       root: lent?.root ?? path.join(opts.home, "accounts"),
+      // A Gemini sign-in on a computer with no Antigravity CLI new enough: the runner brings its own first.
+      prepare: async (kind) => {
+        if (kind === "antigravity") await this.agy?.ensure();
+      },
       ...(lent ? { lending: { chown: lent.chown } } : {}),
+      ...(lent?.grokRoot ? { grokRoot: lent.grokRoot } : {}),
+      ...(lent && !opts.systemAccounts && process.platform === "linux"
+        ? { grokSandbox: (dir: string) => grokSandboxFails(dir) }
+        : {}),
       ...(lent?.authEgress ? { authEgress: lent.authEgress } : {}),
       ...(accountUsers
         ? {
@@ -531,6 +652,8 @@ export class RunnerDaemon implements RequestObserver {
         // The server learns at once (a sign-in or removal from the desktop app, a status or usage that changed).
         const accounts = this.accounts.snapshot();
         if (accounts) this.send({ type: "accounts.changed", accounts, ...this.ownUsage() });
+        // Grok Build's models come from its accounts' looks.
+        this.executorsChanged();
         // One removed: its agents' workers close what still runs with it.
         this.session?.supervisor?.stateChanged();
       },
@@ -552,7 +675,7 @@ export class RunnerDaemon implements RequestObserver {
     });
     this.terminals = new Terminals({
       log: opts.log,
-      user: (agent) => this.terminalUser(agent),
+      user: (agent, cwd) => this.terminalUser(agent, cwd),
       get agentUsers() {
         return daemon.session?.agentUser != null;
       },
@@ -672,13 +795,26 @@ export class RunnerDaemon implements RequestObserver {
     return session.browser.show(agent, await this.agentFolder(agent), installing);
   }
 
-  /** As whom a terminal on the agent's computer runs, like its desktop. */
-  private async terminalUser(agent: AgentScope): Promise<TerminalUser> {
+  /**
+   * As whom a terminal on the agent's computer runs, like its desktop; `cwd`: a folder inside the agent's (ADR 0215).
+   * Its shell knows the sign-in the agent thinks with.
+   */
+  private async terminalUser(agent: AgentScope, cwd?: string): Promise<TerminalUser> {
     const agentUser = this.session?.agentUser;
-    if (!agentUser) return runnerTerminalUser(await this.agentFolder(agent));
-    const u = agentUser(agent);
-    this.startContainers(u);
-    return systemTerminalUser(systemLauncher(u), agent);
+    const u = agentUser?.(agent);
+    if (u) this.startContainers(u);
+    const user = u
+      ? systemTerminalUser(systemLauncher(u), agent, cwd)
+      : await runnerTerminalUser(await this.agentFolder(agent), cwd, this.shared);
+    // The agent's own sign-in, so its CLI typed there starts signed in (`AccountManager.terminalEnv`).
+    const account = this.agentAccount(String(agent.id));
+    const signIn = account
+      ? await this.accounts.terminalEnv(account, u?.uid).catch((err: unknown) => {
+          this.opts.log(`terminal: couldn't hand it its account (${err instanceof Error ? err.message : String(err)})`);
+          return {};
+        })
+      : {};
+    return { ...user, env: { ...user.env, ...signIn } };
   }
 
   /** The agent's folder in the connected workspace. */
@@ -729,8 +865,13 @@ export class RunnerDaemon implements RequestObserver {
     const browsers = setInterval(() => this.browsersChanged(), BROWSER_STATE_POLL_MS);
     browsers.unref?.();
     this.timers.push(browsers);
-    // A CLI installed while the runner stays up: with no app asking for the status, nothing else looks again.
-    const clis = setInterval(() => this.executors(), EXECUTORS_TTL_MS);
+    // A CLI installed while the runner stays up: with no app asking for the status, nothing else looks again. The
+    // runner's own Antigravity CLI is checked as often (a download is due only when Gemini thinks here).
+    void this.agy?.check();
+    const clis = setInterval(() => {
+      this.executors();
+      void this.agy?.check();
+    }, EXECUTORS_TTL_MS);
     clis.unref?.();
     this.timers.push(clis);
     const sample = () => {
@@ -766,7 +907,18 @@ export class RunnerDaemon implements RequestObserver {
     const sizes = setInterval(() => this.measureShared(), SHARED_SIZE_MS);
     sizes.unref?.();
     this.timers.push(sizes);
+    const sharing = setInterval(() => this.shareFiles(), SHARED_FIX_MS);
+    sharing.unref?.();
+    this.timers.push(sharing);
     // System mode: for an operator's network guard, at most once a minute.
+    this.checkStandby();
+    if (this.opts.watch !== false) this.stopStandbyWatch = watchStandby(this.opts.home, () => this.checkStandby());
+    const standby = setInterval(() => {
+      this.checkStandby();
+      this.checkPark();
+    }, STANDBY_POLL_MS);
+    standby.unref?.();
+    this.timers.push(standby);
     const relayed = setInterval(() => {
       if (!this.session?.supervisor) return;
       try {
@@ -777,7 +929,16 @@ export class RunnerDaemon implements RequestObserver {
     }, 60_000);
     relayed.unref?.();
     this.timers.push(relayed);
+    if (MEMORY_READ) this.timers.push(closeIdleUnderPressure(() => this.reclaimIdleBrains()));
     this.expireRequests();
+  }
+
+  /** One idle Claude Code closes, the least recently used on this computer (any agent's in system mode). */
+  private reclaimIdleBrains(): Promise<boolean> {
+    const s = this.session;
+    if (!s) return Promise.resolve(false);
+    if (s.supervisor) return s.accountBrains?.reclaim("") ?? s.supervisor.reclaimBrains();
+    return s.brains.reclaimIdle();
   }
 
   /**
@@ -799,6 +960,7 @@ export class RunnerDaemon implements RequestObserver {
     if (this.stopped) return;
     this.stopped = true;
     this.stopWatch?.();
+    this.stopStandbyWatch?.();
     for (const t of this.timers) clearInterval(t);
     if (this.sharedLoginRetry) clearTimeout(this.sharedLoginRetry);
     this.desktops.close();
@@ -808,8 +970,11 @@ export class RunnerDaemon implements RequestObserver {
     const s = this.session;
     this.session = null;
     if (s) await this.closeSession(s);
+    this.holds?.close();
     await this.phones?.stop();
     this.iphone?.stop();
+    this.fixer?.stop();
+    this.installer?.stop();
     this.toolchains?.stop();
     await this.accounts.close().catch(() => undefined);
     await this.chain.catch(() => undefined);
@@ -898,6 +1063,10 @@ export class RunnerDaemon implements RequestObserver {
         result: "ok",
       });
     }
+    // Changed on the computer (its app, config.json) or from the apps (`limits.set`): the server shows the new one.
+    if (!initial && this.taskLimit(prev) !== this.taskLimit(next)) {
+      this.send({ type: "runner.state", paused: nextPause, maxTasks: this.taskLimit(next) });
+    }
     this.armResume();
     // The switch goes with its route, so a CLI left running would go out directly.
     if (!initial && prev?.claudeSharedLogin && !next?.claudeSharedLogin) {
@@ -937,7 +1106,7 @@ export class RunnerDaemon implements RequestObserver {
 
     if (this.session && paired) {
       this.session.tasks.setLimits({
-        maxConcurrent: paired.maxConcurrentTasks ?? DEFAULT_LIMITS.maxConcurrentTasks,
+        maxConcurrent: this.taskLimit(paired),
         defaultMaxSeconds: paired.taskMaxSeconds ?? DEFAULT_LIMITS.taskMaxSeconds,
       });
       const brainLimits = {
@@ -946,7 +1115,7 @@ export class RunnerDaemon implements RequestObserver {
       };
       this.session.brains.setLimits(brainLimits);
       this.session.accountBrains?.brains.setLimits(brainLimits);
-      this.session.codexApp.setLimits(brainLimits);
+      this.session.codexApp.setLimits(codexLimits(paired));
       this.session.supervisor?.stateChanged();
     }
     this.queueStatus();
@@ -957,6 +1126,10 @@ export class RunnerDaemon implements RequestObserver {
   private stopHosted(why: string) {
     this.session?.accountBrains?.dropTurns(new RunnerError("dropped", why));
     for (const u of readAgentUsers(this.opts.home)) this.accountUsers?.stopScopes(u.uid);
+  }
+
+  private taskLimit(c: Pick<StoredConfig, "maxConcurrentTasks"> | null | undefined) {
+    return c?.maxConcurrentTasks ?? DEFAULT_LIMITS.maxConcurrentTasks;
   }
 
   /** System mode: what each agent's worker must know about this computer. */
@@ -970,10 +1143,12 @@ export class RunnerDaemon implements RequestObserver {
       ),
       ...(c ? { commitHost: new URL(c.server).hostname } : {}),
       limits: {
-        maxConcurrentTasks: c?.maxConcurrentTasks ?? DEFAULT_LIMITS.maxConcurrentTasks,
+        maxConcurrentTasks: this.taskLimit(c),
         taskMaxSeconds: c?.taskMaxSeconds ?? DEFAULT_LIMITS.taskMaxSeconds,
         brainIdleMinutes: c?.brainIdleMinutes ?? DEFAULT_LIMITS.brainIdleMinutes,
         brainMaxProcesses: c?.brainMaxProcesses ?? DEFAULT_LIMITS.brainMaxProcesses,
+        codexIdleMinutes: c?.brainIdleMinutes ?? CODEX_DEFAULT_LIMITS.brainIdleMinutes,
+        codexMaxProcesses: c?.brainMaxProcesses ?? CODEX_DEFAULT_LIMITS.brainMaxProcesses,
       },
     };
   }
@@ -1127,7 +1302,9 @@ export class RunnerDaemon implements RequestObserver {
           : systemShared(config.managedBy === "host" ? agentId8(config.machineId) : undefined)
         : null;
     this.shared = this.prepareShared(workspaceReal, sharedSpec);
+    this.sharedGroup = sharedSpec && this.shared ? { path: this.shared, group: sharedSpec.group } : null;
     this.measureShared();
+    this.shareFiles();
     const secretsDir = path.join(home, "secrets");
     // Site passwords live in memory now (ADR 0144): one an older runner kept on disk goes.
     void dropStoredSiteSecrets(secretsDir);
@@ -1137,7 +1314,7 @@ export class RunnerDaemon implements RequestObserver {
       mcp: mcpCommand,
       root: path.join(home, "tasks"),
       workspaceReal,
-      maxConcurrent: config.maxConcurrentTasks ?? DEFAULT_LIMITS.maxConcurrentTasks,
+      maxConcurrent: this.taskLimit(config),
       defaultMaxSeconds: config.taskMaxSeconds ?? DEFAULT_LIMITS.taskMaxSeconds,
       log,
       agentFolder: (agent) => agentWorkspace(workspaceReal, agent),
@@ -1156,14 +1333,17 @@ export class RunnerDaemon implements RequestObserver {
       idleMs: (config.brainIdleMinutes ?? DEFAULT_LIMITS.brainIdleMinutes) * 60_000,
       maxProcesses: config.brainMaxProcesses ?? DEFAULT_LIMITS.brainMaxProcesses,
       accounts: this.accounts,
+      claudeVersion: () => this.executors().claude?.version ?? null,
+      // Single-user mode only: in system mode each agent is its own user, and the shared bin/ stays off every PATH.
+      sharedFolder: () => (this.session?.agentUser != null ? null : this.shared),
+      readyRoom,
       log,
     });
     const codexRuns = new Map<string, McpTaskInfo>();
     // Codex turns on long-lived app-servers (live steering); `codex exec` where they can't run.
     const codexApp = new CodexAppServers({
       runs: codexRuns,
-      idleMs: (config.brainIdleMinutes ?? DEFAULT_LIMITS.brainIdleMinutes) * 60_000,
-      maxProcesses: config.brainMaxProcesses ?? DEFAULT_LIMITS.brainMaxProcesses,
+      ...codexLimits(config),
       onRateLimits: (account, rateLimits) =>
         this.accounts.noteCodexRateLimits(account ?? OWN_USAGE_ID.codex, rateLimits),
       log,
@@ -1171,6 +1351,7 @@ export class RunnerDaemon implements RequestObserver {
     const mcp = new McpBridge({
       socketPath,
       task: (taskId) => tasks.mcpTask(taskId) ?? brains.mcpTask(taskId) ?? codexRuns.get(taskId) ?? null,
+      onCall: (taskId, delta) => brains.bridgeCall(taskId, delta),
       log,
     });
     await mcp
@@ -1203,6 +1384,7 @@ export class RunnerDaemon implements RequestObserver {
         locale: this.agents.find((a) => a.id === agent.id)?.locale,
         egress: this.egress.current,
       }),
+      locale: (agent) => this.agents.find((a) => a.id === agent.id)?.locale,
     });
     // Browsers a previous run of this runner left open (a crash, a kill) close now.
     void browser.closeAll();
@@ -1348,10 +1530,13 @@ export class RunnerDaemon implements RequestObserver {
             ? this.accounts.noteCodexRateLimits(accountId, info)
             : this.accounts.noteRateLimit(accountId, info),
         codexAuth: (accountId, auth) => this.accounts.keepCodexAuth(accountId, auth),
+        grokAuth: (accountId, auth) => this.accounts.keepGrokAuth(accountId, auth),
         desktop: (agent, use) => this.workerDesktop(agent, use),
         desktopViewers: (agentId) => this.desktops.status({ id: agentId }).streams,
+        browserKept: (agentId) => this.holds?.kept(agentId) ?? false,
         account: (agentId) => this.agentAccount(agentId),
         accounts: (agentId) => this.agentAccounts(agentId),
+        locale: (agentId) => this.agents.find((a) => a.id === agentId)?.locale,
         ...(this.opts.workers ? { start: this.opts.workers.start } : { gitCache: rootGitCache() }),
         ...(guard ? { guard } : {}),
         token: config.token,
@@ -1362,6 +1547,21 @@ export class RunnerDaemon implements RequestObserver {
         relayed: this.relayed,
         log,
       });
+      // The locks need logind (systemd), and each agent its own user to take them as.
+      if (!this.opts.workers && systemdBooted()) {
+        this.holds ??= new Holds({
+          home,
+          log,
+          onEnded: (holdId, reason) => this.send({ type: "keep.ended", holdId, reason }),
+          onBrowser: () => this.session?.supervisor?.stateChanged(),
+          closeBrowser: (agent) =>
+            this.session?.supervisor?.run(
+              { op: "browser.stop", agent },
+              { signal: new AbortController().signal, output: () => {} },
+            ) ?? Promise.resolve(),
+        });
+        this.holds.watch();
+      }
       if (this.accountUsers) {
         accountBrains = new AccountBrains({
           root: path.join(home, "account-brains"),
@@ -1387,17 +1587,11 @@ export class RunnerDaemon implements RequestObserver {
     if (!supervisor && this.access().tools.browser === true) void browser.prepareInBackground();
     this.toolchains ??= this.opts.toolchains
       ? { get: this.opts.toolchains, stop: () => {} }
-      : cachedToolchains(
-          path.join(home, TOOLCHAINS_FILE),
-          undefined,
-          process.platform === "darwin"
-            ? {
-                look: () => appleToolchains(),
-                // An older server drops the frame: its next hello carries the same.
-                onChange: (toolchains) => this.send({ type: "toolchains.changed", toolchains }),
-              }
-            : null,
-        );
+      : cachedToolchains(path.join(home, TOOLCHAINS_FILE), undefined, {
+          ...(process.platform === "darwin" ? { look: () => appleToolchains() } : {}),
+          // An older server drops the frame: its next hello carries the same.
+          onChange: (toolchains) => this.send({ type: "toolchains.changed", toolchains }),
+        });
     // Phones are reached as the person (adb's key, the Mac's pairing with the iPhone): a system-mode runner has none.
     if (!this.phones && config.mode !== "system" && this.opts.phones !== false) {
       this.phones = new PhoneManager({
@@ -1427,15 +1621,18 @@ export class RunnerDaemon implements RequestObserver {
       brains,
       ...(accountBrains ? { accountBrains } : {}),
       // System mode: root runs only the CLIs of sign-ins several agents share; the others are their workers'.
+      // Idle CLIs first (they restart in seconds), then idle agents' browsers (their logins stay on disk).
       reclaimBrains: supervisor
-        ? (spare) => accountBrains?.reclaim(spare) ?? supervisor.reclaimBrains(spare)
-        : (spare) => brains.reclaimIdle(spare),
+        ? async (spare) =>
+            (await (accountBrains?.reclaim(spare) ?? supervisor.reclaimBrains(spare))) || supervisor.reclaimBrowsers()
+        : async (spare) => (await brains.reclaimIdle(spare)) || browser.reclaimIdle(),
       warmBrain: supervisor
         ? async (spare) => accountBrains?.warm(spare) || supervisor.warmBrain(spare)
         : async (spare) => brains.warm(spare),
       codex: { runnerHome: home, mcp: mcpCommand, runs: codexRuns, app: codexApp },
       paused: () => this.stopping || this.pauseState().paused,
       setPause: (paused, until, by) => (paused ? this.pause(until, by) : this.resume()),
+      setTaskLimit: (maxTasks) => this.configSet({ maxConcurrentTasks: maxTasks }).maxConcurrentTasks,
       // A config written later without the mode never turns a system session back into one that does agents' work.
       systemMode: () => config.mode === "system" || this.stored?.mode === "system",
       ...(supervisor ? { workers: supervisor } : {}),
@@ -1443,6 +1640,7 @@ export class RunnerDaemon implements RequestObserver {
       accessOps: {
         request: (agent, req) => this.accessRequest(agent, req),
         reduce: (req) => this.accessReduce(req),
+        allow: (req) => this.accessAllow(req),
       },
       browser,
       accounts: this.accounts,
@@ -1459,6 +1657,15 @@ export class RunnerDaemon implements RequestObserver {
         }
       },
       ...(this.phones ? { phones: this.phones } : {}),
+      ...(this.holds && agentUser ? { keep: this.keepOps(this.holds, agentUser) } : {}),
+      xcodeFix: (req) => this.xcodeFixer().handle(req),
+      clisCheck: async () => {
+        await this.clisLook();
+        return { executors: this.executors() };
+      },
+      cliInstall: (req) => this.cliInstaller().handle(req),
+      xcodeOpen: () => this.iphoneSetup().open("xcode"),
+      reportParts: () => this.reportParts(),
     };
     // `hello` lists the accounts it already knows; a fresh look (each runs its CLI) never delays connecting:
     // it lands in `hello` if it finishes first, else comes after as `accounts.changed`. Nothing reaches the
@@ -1488,6 +1695,7 @@ export class RunnerDaemon implements RequestObserver {
           ...usage,
           // Who may control a desktop or open a terminal follows it (ADR 0058 §4).
           ...(agentUser ? { mode: "system" as const } : {}),
+          ...(this.holds ? { holds: this.holds.report() } : {}),
         };
       },
       executors: () => this.helloExecutors(),
@@ -1565,12 +1773,68 @@ export class RunnerDaemon implements RequestObserver {
       agentUser,
     };
     this.session = session;
+    // Asked before this session started (a runner started again mid-standby): it stays off the server.
+    if (this.standby) connection.standby();
     supervisor?.boot();
     this.observeNetwork();
     log(
       `agentes-runner ${RUNNER_VERSION}: connecting to ${config.server} (workspace ${workspaceReal}${this.access().tools.commands ? "" : ", commands off"})`,
     );
     void connection.run().then((outcome) => this.sessionEnded(session, outcome));
+  }
+
+  /** `keep.*` (ADR 0176): each hold in the agent's slice, its program checked against the agent's user. */
+  private keepOps(holds: Holds, user: (agent: AgentScope) => AgentUser): NonNullable<HandlerContext["keep"]> {
+    return {
+      start: (agent, req) => holds.start(agent, user(agent), req),
+      end: (req) => holds.end(req),
+    };
+  }
+
+  /** An operator's standby (ADR 0176), asked in `standby.json`: while it is in force, no link to the server. */
+  private checkStandby() {
+    const ask = readStandby(this.opts.home);
+    const on = standbyOn(ask);
+    if (on !== this.standby) {
+      this.standby = on;
+      const s = this.session;
+      if (on) {
+        this.opts.log("standby: the link to the server is down; everything else runs on");
+        s?.connection.standby();
+        s?.streams.closeAll();
+      } else {
+        this.opts.log("standby is over: connecting");
+        s?.connection.resume();
+      }
+    }
+    if (ask && ask.id !== this.standbyAsk) {
+      this.standbyAsk = ask.id;
+      try {
+        ackStandby(this.opts.home, ask.id);
+      } catch (err) {
+        this.opts.log(`standby: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /** An operator's park (`park.ts`): idle desktops parked, idle browsers eased, then the answer with how many. */
+  private checkPark() {
+    if (this.parking) return;
+    const ask = takePark(this.opts.home);
+    if (!ask) return;
+    this.parking = true;
+    void (async () => {
+      const desktops = await this.desktops.parkIdle();
+      const browsers = (await this.session?.browser.easeIdle()) ?? 0;
+      this.opts.log(`park: ${desktops} idle desktops parked, ${browsers} idle browsers eased`);
+      ackPark(this.opts.home, { id: ask.id, desktops, browsers });
+    })()
+      .catch((err: unknown) => {
+        this.opts.log(`park: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        this.parking = false;
+      });
   }
 
   private networkScopesBusy(agentId: string): boolean {
@@ -1795,6 +2059,23 @@ export class RunnerDaemon implements RequestObserver {
     });
   }
 
+  /** System mode: what agents moved or copied into the shared folder becomes the others' to change too. */
+  private shareFiles() {
+    const spec = this.sharedGroup;
+    if (!spec || this.sharing) return;
+    this.sharing = true;
+    void shareAgentFiles(spec, readAgentUsers(this.opts.home))
+      .then((problems) => {
+        const said = problems.join("; ");
+        // Once per new problem, not every minute.
+        if (said && said !== this.sharingProblem) this.opts.log(`shared folder: ${said}`);
+        this.sharingProblem = said;
+      })
+      .finally(() => {
+        this.sharing = false;
+      });
+  }
+
   /**
    * The shared folder (ADR 0115), made where missing: system mode's (`spec`) or single-user mode's in the
    * workspace (`null`); `undefined`: none. Null when it couldn't be made: the agents work on in their own folders.
@@ -1824,7 +2105,7 @@ export class RunnerDaemon implements RequestObserver {
       exec: access.tools.commands,
       paused: this.pauseState(),
       access,
-      size: machineSize(workspaceReal),
+      size: { ...machineSize(workspaceReal), maxTasks: this.taskLimit(this.stored) },
       claudeLoginMethods: this.accounts.claudeLoginMethods(),
       ...(this.sharedLoginBlocked && this.stored?.claudeSharedLogin
         ? { claudeLoginBlocked: this.sharedLoginBlocked }
@@ -2041,9 +2322,27 @@ export class RunnerDaemon implements RequestObserver {
 
   /** The app's "Check again": the PATH and the coding CLIs looked up now, then the status with what was found. */
   async executorsCheck(): Promise<ControlStatus> {
-    this.opts.refreshPath?.();
-    await this.executorsFresh();
+    await this.clisLook();
     return this.status();
+  }
+
+  /** The PATH read again and the coding CLIs looked up now; a change reaches the server (`executors.changed`). */
+  private async clisLook() {
+    this.refreshPath?.();
+    await this.executorsFresh();
+  }
+
+  /** Installing a coding CLI from the apps; once installed, looked up again at once, so the apps move on by themselves. */
+  cliInstaller(): CliInstaller {
+    this.installer ??= new CliInstaller({
+      log: this.opts.log,
+      onDone: async (tool) => {
+        await this.clisLook();
+        return Boolean(this.executors()[tool]);
+      },
+      ...this.opts.cliInstall,
+    });
+    return this.installer;
   }
 
   status(): ControlStatus {
@@ -2125,10 +2424,37 @@ export class RunnerDaemon implements RequestObserver {
     return out;
   }
 
+  /** The desktop app's iPhone setup asking to look at the iPhone again now (`phone.look`). */
+  async iphoneLook(): Promise<{ looking: boolean }> {
+    return { looking: (await this.phones?.look()) ?? false };
+  }
+
+  /** The desktop app's iPhone setup repairing an iPhone's test helper (`phone.repair`). */
+  async iphoneRepair(serial: string): Promise<{ repairing: boolean }> {
+    if (!this.phones) throw new RunnerError("phone_missing", "This computer doesn't reach phones.");
+    return this.phones.repair({ serial });
+  }
+
   /** The desktop app's iPhone setup: what the Mac has, a download of the iOS platform, Xcode opened. */
   iphoneSetup(): IphoneSetup {
-    this.iphone ??= new IphoneSetup({ log: this.opts.log, ...this.opts.iphone });
+    this.iphone ??= new IphoneSetup({ log: this.opts.log, fixer: () => this.xcodeFixer(), ...this.opts.iphone });
     return this.iphone;
+  }
+
+  /**
+   * Fixing the Mac's Xcode: once done, Xcode is looked at again at once, so the setup moves on by itself, and asked
+   * once more why it is still blocked (the look may skip while another is under way).
+   */
+  xcodeFixer(): XcodeFixer {
+    this.fixer ??= new XcodeFixer({
+      log: this.opts.log,
+      onDone: async () => {
+        await this.toolchains?.lookApple?.();
+        return xcodeBlocked({});
+      },
+      ...this.opts.xcodeFix,
+    });
+    return this.fixer;
   }
 
   // ── Accounts (ADR 0041) ────────────────────────────────────────────────────
@@ -2195,11 +2521,12 @@ export class RunnerDaemon implements RequestObserver {
     const c = this.requirePaired();
     return {
       name: c.name,
-      maxConcurrentTasks: c.maxConcurrentTasks ?? DEFAULT_LIMITS.maxConcurrentTasks,
+      maxConcurrentTasks: this.taskLimit(c),
       taskMaxSeconds: c.taskMaxSeconds ?? DEFAULT_LIMITS.taskMaxSeconds,
       brainIdleMinutes: c.brainIdleMinutes ?? DEFAULT_LIMITS.brainIdleMinutes,
       brainMaxProcesses: c.brainMaxProcesses ?? DEFAULT_LIMITS.brainMaxProcesses,
       workspace: this.session?.workspaceReal ?? c.workspace,
+      defaultMaxConcurrentTasks: DEFAULT_LIMITS.maxConcurrentTasks,
       ...(c.managedBy === "desktop" ? { managedBy: c.managedBy } : {}),
     };
   }
@@ -2487,6 +2814,25 @@ export class RunnerDaemon implements RequestObserver {
     const before = this.access();
     const next = reduceAccess(before, req);
     if (JSON.stringify(next) !== JSON.stringify(before)) this.writeAccess(next);
+    return { access: this.access() };
+  }
+
+  /**
+   * `access.allow` from the apps (`ACCESS_ALLOW_PROTOCOL`): the computer's owner turned a tool on there. Applied as
+   * its own switch, and whoever is at the computer is told, with a way to turn it back off.
+   */
+  async accessAllow(req: Extract<MachineRequest, { op: "access.allow" }>): Promise<MachineReplies["access.allow"]> {
+    const tool = req.tool;
+    if (!TOOL_NAMES.includes(tool)) throw new RunnerError("bad_request", `Unknown tool ${String(tool).slice(0, 40)}`);
+    const before = this.access();
+    if (before.tools[tool] !== true) {
+      this.writeAccess(setTool(before, tool, true));
+      const byName = (typeof req.byName === "string" ? req.byName : "").slice(0, 80);
+      this.emit({ kind: "access.allowed", tool, byName });
+      this.opts.print?.(
+        `${byName || "Its owner"} turned on ${tool} from agentes.chat. To turn it off: agentes-runner tools disable ${tool}`,
+      );
+    }
     return { access: this.access() };
   }
 
@@ -2809,6 +3155,56 @@ export class RunnerDaemon implements RequestObserver {
     let text = lines.join("\n");
     if (c?.token) text = text.split(c.token).join("agm_***");
     return redactCommon(text);
+  }
+
+  /**
+   * What a problem report someone sends adds from this computer (`report.collect`, and the desktop app's `report`):
+   * facts and the end of the log, scrubbed here. Never the home, config or workspace paths, the computer's name, the
+   * organization's name or the server's address.
+   */
+  reportParts(): RunnerReportParts {
+    const c = this.config;
+    const access = this.access();
+    const ex = this.executors();
+    const bun = (process.versions as { bun?: string }).bun;
+    const server = (() => {
+      try {
+        return this.stored?.server ? new URL(this.stored.server).host : "";
+      } catch {
+        return "";
+      }
+    })();
+    const known: [string, KnownLabel][] = [
+      [this.opts.home, "computer"],
+      [os.homedir(), "computer"],
+      [os.hostname(), "computer"],
+      ...(c?.name ? ([[c.name, "computer"]] as [string, KnownLabel][]) : []),
+      ...(c?.orgName ? ([[c.orgName, "workspace"]] as [string, KnownLabel][]) : []),
+      ...(server ? ([[server, "server"]] as [string, KnownLabel][]) : []),
+    ];
+    const tail = this.opts.logFile ? tailLines(this.opts.logFile, REPORT_LOG_LINES) : [];
+    const logTail = tail.map((line) => scrubLogLine(c?.token ? line.split(c.token).join("agm_***") : line, known));
+    return {
+      runner: RUNNER_VERSION,
+      protocol: MACHINE_PROTOCOL_VERSION,
+      runtime: bun ? `bun ${bun}` : `node ${process.version}`,
+      os: `${process.platform} ${os.release()}`,
+      arch: os.arch(),
+      compiled: !!this.self.compiled,
+      managedBy: c?.managedBy ?? "terminal",
+      connection: c ? this.connState : "unpaired",
+      paused: this.pauseState().paused,
+      tools: Object.fromEntries(TOOL_NAMES.map((t) => [t, !!access.tools[t]])),
+      executors: {
+        ...(ex.claude ? { claude: ex.claude.version } : {}),
+        ...(ex.codex ? { codex: ex.codex.version } : {}),
+        ...(ex.claude?.loggedIn !== undefined ? { claudeLoggedIn: ex.claude.loggedIn } : {}),
+      },
+      agents: this.agents.length,
+      runningNow: this.jobList().length,
+      browser: { state: (this.session?.browser.states().length ?? 0) > 0 ? "open" : "closed" },
+      logTail,
+    };
   }
 }
 

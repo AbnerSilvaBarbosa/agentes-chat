@@ -302,8 +302,14 @@ describe("the panel follows the work", () => {
       ...state.poProgress,
       "s-acme": progress("s-acme", "Acme", layout({ ready: [card()] })),
     };
-    await push(app, { type: "issue.updated" });
-    await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+    // No random spread on the board's read, so the wait stays inside Bun's default timeout.
+    const random = spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await push(app, { type: "issue.updated" });
+      await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+    } finally {
+      random.mockRestore();
+    }
     await settle(8);
     const now = groups();
     expect(now[1]?.rows).toEqual([]);

@@ -117,7 +117,7 @@ describe("Pessoas", () => {
       expect(seen.className).toBe("members-person__seen ac-captail ac-captop");
       expect(menu.className).toBe("members-person__menu ac-captail ac-captop");
       // The only button of the row besides the face and the name is its menu.
-      expect(within(row).queryByRole("button", { name: /^(Papéis de|Mensagem para) / })).toBeNull();
+      expect(within(row).queryByRole("button", { name: /^(Cargos de|Mensagem para) / })).toBeNull();
       expect(menu.querySelectorAll("button")).toHaveLength(1);
     }
   });
@@ -126,19 +126,9 @@ describe("Pessoas", () => {
     await open();
     // This server sends no email, so its owner also makes a member's new-password link.
     const link = "Gerar link de senha novaPara quando a pessoa esqueceu a senha";
-    expect(await menuOf(personRow("Bia"))).toEqual([
-      "Mensagem direta",
-      "Adicionar papel",
-      link,
-      "Remover do workspace",
-    ]);
-    expect(await menuOf(personRow(LONG_NAME))).toEqual([
-      "Mensagem direta",
-      "Mudar papéis",
-      link,
-      "Remover do workspace",
-    ]);
-    expect(await menuOf(personRow("Walter"))).toEqual(["Mudar papéis"]);
+    expect(await menuOf(personRow("Bia"))).toEqual(["Mensagem direta", "Cargos", link, "Remover do workspace"]);
+    expect(await menuOf(personRow(LONG_NAME))).toEqual(["Mensagem direta", "Cargos", link, "Remover do workspace"]);
+    expect(await menuOf(personRow("Walter"))).toEqual(["Cargos"]);
   });
 
   test("giving a role from the menu", async () => {
@@ -148,7 +138,7 @@ describe("Pessoas", () => {
       fireEvent.pointerDown(within(bia).getByRole("button", { name: "Mais de Bia" }), { button: 0, ctrlKey: false }),
     );
     await settle(2);
-    const sub = screen().getByRole("menuitem", { name: "Adicionar papel" });
+    const sub = screen().getByRole("menuitem", { name: "Cargos" });
     expect(sub.getAttribute("aria-haspopup")).toBe("menu");
     await act(async () => fireEvent.keyDown(sub, { key: "Enter" }));
     await settle(2);
@@ -193,7 +183,9 @@ describe("Agentes", () => {
     expect(said("Apertado")).toEqual(["Quase no limite", "almost"]);
     expect(said("Quase")).toEqual(["Quase no limite", "critical"]);
     expect(said("Cheio")).toEqual(["No limite", "limited"]);
-    expect(agentRow("Sem dono").querySelector(".ac-foldrow__head")?.textContent).toBe("Sem donoSem responsável");
+    expect(agentRow("Sem dono").querySelector(".ac-foldrow__head")?.textContent).toBe(
+      "Sem donoResponsável: administradores",
+    );
     expect(agentRow("Quase").querySelector(".ac-foldrow__head")?.textContent).toBe(
       "Quase · SuporteResponsável: JoãoQuase no limite",
     );

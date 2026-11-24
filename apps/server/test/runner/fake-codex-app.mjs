@@ -240,6 +240,7 @@ function appServer() {
               };
           item("item/started", it);
           const turnId = active.id;
+          active.asking = true;
           return askRunner(
             file ? "item/fileChange/requestApproval" : "item/commandExecution/requestApproval",
             {
@@ -286,6 +287,22 @@ function appServer() {
             codexErrorInfo: "usageLimitExceeded",
             additionalDetails: null,
           });
+        }
+        if (/\bIMAGE\b/.test(prompt)) {
+          // Its own image tool: started, then done with the picture's bytes and a saved file this process can't read.
+          const ig = { type: "imageGeneration", id: "ig_1", status: "inProgress", revisedPrompt: null, result: "" };
+          item("item/started", ig);
+          item("item/completed", {
+            ...ig,
+            status: "completed",
+            revisedPrompt: "A lighthouse at dusk",
+            result: Buffer.from("png bytes").toString("base64"),
+            failure: null,
+            savedPath: "/nowhere/generated_images/ig_1.png",
+          });
+          message("m-img", "Here it is.", true);
+          usage(100, 0, 10);
+          return complete("completed");
         }
         if (/\bTOOLS\b/.test(prompt)) {
           message("m-1", "I’ll check the folder now.", false);
@@ -347,6 +364,8 @@ function appServer() {
         if (params.expectedTurnId !== active.id) {
           return fail(`expected active turn id \`${params.expectedTurnId}\` but found \`${active.id}\``);
         }
+        // Waiting on an approval's answer: kept for the model's next request (only the log says it came).
+        if (active.asking) return ok({ turnId: active.id });
         ok({ turnId: active.id });
         // Read at its next model request: the input as a user message with our id.
         setTimeout(() => {

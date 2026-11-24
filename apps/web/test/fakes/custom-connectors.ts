@@ -2,21 +2,31 @@
  * Test fake — custom MCP servers ("Outro servidor MCP" in "Adicionar conector").
  * Mirrors these endpoints:
  * - GET    /api/app/organizations/{orgId}/connectors/custom
- * - POST   /api/app/organizations/{orgId}/connectors/custom { serverUrl, apiKey?, label?, returnTo, connectionId? }
+ * - POST   /api/app/organizations/{orgId}/connectors/custom { serverUrl, apiKey?, label?, returnTo, connectionId?, headers? }
  *          → { status: "connected", server, outcome } | { status: "oauth", authorizeUrl } | { status: "needs_key" }
  *          (the same address again is another account, "Name 2", which no agent uses; `connectionId`
- *          reconnects that account in place)
+ *          reconnects that account in place; `headers` alone connect, are refused with a sign-in, and on a
+ *          reconnect stay when absent, go with `[]` and are replaced by a list)
  * - POST   /api/app/organizations/{orgId}/connectors/custom/{id}/refresh (re-list tools)
  * - PUT    /api/app/organizations/{orgId}/connectors/custom/{id}/tools { label, tools: [{ name, access, label, confirmed? }] }
  *          (`access`: read | write | approval | off; sensitive tools only approval | off)
  * - DELETE /api/app/organizations/{orgId}/connectors/custom/{id}
+ * - GET/PUT/DELETE /api/app/organizations/{orgId}/connector-oauth-clients (the workspace's own OAuth app, one per
+ *          issuer: here one per server's origin; the secret is never returned)
  * The mock never talks to the URL: it pretends the server offers a ticket
  * tool set, needs an API key unless the URL contains "oauth", and gains one
  * new tool on the first refresh. Tools come classified as the backend does
  * (annotations, the verb; `close_ticket` is ambiguous: the judge suggests
  * "write" and it waits for a decision; `delete_customer` is sensitive).
  */
-import type { ApiClient, CustomServer, CustomTool, ToolAccess } from "@agenteschat/client";
+import {
+  type ApiClient,
+  ApiError,
+  type CustomServer,
+  type CustomTool,
+  type OwnOAuthClient,
+  type ToolAccess,
+} from "@agenteschat/client";
 import { partsOf } from "@agenteschat/client/lib/tool-review";
 import { clone, type MockContext, MockNotFoundError, mockId } from "./context";
 
@@ -66,10 +76,19 @@ export function createMockCustomConnectors(
   log: (method: string, ...args: unknown[]) => void = () => {},
   /** An account connected (the backend gives it to every agent). */
   onConnected: (orgId: string, serverId: string) => Promise<void> = async () => {},
+  /** Who is asking: lists hold the team's servers and theirs, and everyone's with `others`, as the backend's do. */
+  meId: () => string | null = () => null,
 ): ApiClient["customConnectors"] & {
   rename(orgId: string, id: string, label: string): CustomServer | null;
 } {
   const byOrg = new Map<string, CustomServer[]>();
+  const ownClients = new Map<string, NonNullable<OwnOAuthClient["client"]>>();
+  const issuerOf = (serverUrl: string) => new URL(serverUrl).origin;
+  const ownView = (orgId: string, serverUrl: string): OwnOAuthClient => ({
+    redirectUri: "https://chat.example.com/api/app/connectors/oauth/callback",
+    issuer: issuerOf(serverUrl),
+    client: clone(ownClients.get(`${orgId}|${issuerOf(serverUrl)}`) ?? null),
+  });
   const refreshed = new Set<string>();
   const list = (orgId: string) => {
     let l = byOrg.get(orgId);
@@ -85,17 +104,28 @@ export function createMockCustomConnectors(
     return s;
   };
   return {
-    list: async (orgId) => clone(list(orgId)),
+    list: async (orgId, options) =>
+      clone(list(orgId).filter((s) => options?.others || !s.ownerUserId || s.ownerUserId === meId())),
     connect: async (orgId, input) => {
-      log("customConnectors.connect", orgId, { ...input, apiKey: input.apiKey ? "[redacted]" : undefined });
+      log("customConnectors.connect", orgId, {
+        ...input,
+        apiKey: input.apiKey ? "[redacted]" : undefined,
+        ...(input.headers ? { headers: input.headers.map((h) => ({ name: h.name, value: "[redacted]" })) } : {}),
+      });
       // Through Composio: its page signs in, back to the callback.
       if (input.serverUrl.startsWith("https://backend.composio.dev/")) {
         return { status: "oauth", authorizeUrl: "https://composio.example/connect/ca_1?state=s" };
       }
       const oauth = input.serverUrl.includes("oauth");
-      if (!oauth && !input.apiKey) return { status: "needs_key" };
-      if (input.connectionId) {
-        return { status: "connected", server: clone(find(orgId, input.connectionId)), outcome: "reconnected" };
+      const target = input.connectionId ? find(orgId, input.connectionId) : null;
+      const headerNames = input.headers?.map((h) => h.name) ?? target?.headerNames ?? [];
+      if (oauth && !input.apiKey && headerNames.length > 0) {
+        throw new ApiError(400, "connector.headers_with_sign_in", "This server asks for a sign-in");
+      }
+      if (!oauth && !input.apiKey && headerNames.length === 0) return { status: "needs_key" };
+      if (target) {
+        target.headerNames = headerNames;
+        return { status: "connected", server: clone(target), outcome: "reconnected" };
       }
       const now = ctx.now();
       const base = input.label?.trim() || new URL(input.serverUrl).hostname;
@@ -108,9 +138,11 @@ export function createMockCustomConnectors(
         label,
         accountLabel: null,
         authType: oauth ? "oauth" : "api_key",
+        headerNames,
         tools: TOOLS.map((t) => tool(t, now)),
         reviewedAt: null,
         createdAt: now.toISOString(),
+        ...(input.personal ? { ownerUserId: meId() } : {}),
       };
       list(orgId).push(server);
       await onConnected(orgId, server.id);
@@ -157,6 +189,29 @@ export function createMockCustomConnectors(
         orgId,
         list(orgId).filter((x) => x.id !== id),
       );
+    },
+    ownClient: async (orgId, serverUrl) => ownView(orgId, serverUrl),
+    setOwnClient: async (orgId, input) => {
+      log("customConnectors.setOwnClient", orgId, {
+        ...input,
+        clientSecret: input.clientSecret ? "[redacted]" : undefined,
+      });
+      const key = `${orgId}|${issuerOf(input.serverUrl)}`;
+      const before = ownClients.get(key);
+      ownClients.set(key, {
+        clientId: input.clientId,
+        hasSecret: Boolean(input.clientSecret) || (before?.clientId === input.clientId && before.hasSecret),
+        scopes:
+          input.scopes
+            ?.split(/[\s,]+/)
+            .filter(Boolean)
+            .join(" ") || null,
+      });
+      return ownView(orgId, input.serverUrl);
+    },
+    removeOwnClient: async (orgId, issuer) => {
+      log("customConnectors.removeOwnClient", orgId, issuer);
+      if (!ownClients.delete(`${orgId}|${issuer}`)) throw new MockNotFoundError("No client of yours for it");
     },
   };
 }

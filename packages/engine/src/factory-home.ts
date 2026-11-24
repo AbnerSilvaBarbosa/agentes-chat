@@ -6,7 +6,7 @@ import { requireActiveMembership } from "./organizations";
 import { taskSeenSql } from "./task-access";
 
 /**
- * The factory on Início (ADR 0184): one panel per company and the tasks that wait for a person, for one viewer. Read
+ * The factory on Início (ADR 0228): one panel per company and the tasks that wait for a person, for one viewer. Read
  * when Início opens, from rows that exist; nothing is stored. The stage, done and late definitions are the company
  * Painel's (`OPEN`, `CONCLUDED`, `workspaceTimezone`), so the two never drift.
  */

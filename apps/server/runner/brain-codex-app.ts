@@ -1,13 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { CommandProfile, CommandScope } from "@agenteschat/adapters/command-policy";
 import { type BrainSteerReply, type BrainSteerRequest, isBrainEffort } from "@agenteschat/adapters/machine-protocol";
 import { accountEnv, withoutContainers, yieldRoute } from "./accounts";
+import { awakeClock } from "./awake";
 import {
+  CODEX_DIRECT_MCP_CONFIG,
   CODEX_NO_NETWORK,
   type CodexAppRunner,
   type CodexBrainEvent,
@@ -65,7 +68,8 @@ import type { Spawn } from "./scope-gate";
  *   `item/fileChange/requestApproval`); the runner answers with the same
  *   decision Claude Code's permission prompt gets (`permissionPrompt`: deny
  *   list, secrets, plain reads, a `plan` turn's refusals, then the server's
- *   rules or a person), `accept` or `decline`.
+ *   rules or a person), `accept` or `decline`. A decline carries no reason in
+ *   the protocol: the reason is steered into the turn (`DECLINED_PREFIX`).
  * - Notifications → the same events exec gives: `item/agentMessage/delta`
  *   streamed as text deltas (batched), a completed `commandExecution` /
  *   `fileChange` as an executed `tool_call`, `thread/tokenUsage/updated`
@@ -102,7 +106,7 @@ import type { Spawn } from "./scope-gate";
  * checks them against a real CLI.
  */
 
-/** The first Codex whose app-server has `turn/steer` and the shapes below (the same as `CODEX_MIN_VERSION` today). */
+/** The first Codex whose app-server has `turn/steer` and the shapes below: older ones run their turns on `codex exec`. */
 export const CODEX_APP_MIN_VERSION = "0.163.0";
 export const CODEX_APP_IDLE_MS = 10 * 60_000;
 export const CODEX_APP_MAX_PROCESSES = 3;
@@ -195,7 +199,12 @@ export function codexAppServerArgs(input: {
     codexWritableRoots(input.writableRoots ?? []),
     ...(input.windows ? CODEX_WINDOWS_CONFIG.flatMap((c) => ["-c", c]) : []),
     ...codexContextOverride(input.contextTokens),
-    ...(input.mcp ? codexBridgeOverrides({ runId: input.processId, ...input.mcp }).flatMap((o) => ["-c", o]) : []),
+    ...(input.mcp
+      ? [CODEX_DIRECT_MCP_CONFIG, ...codexBridgeOverrides({ runId: input.processId, ...input.mcp })].flatMap((o) => [
+          "-c",
+          o,
+        ])
+      : []),
   ];
 }
 
@@ -406,6 +415,61 @@ export class CodexAppClient {
 
 // ── Notifications → brain events ─────────────────────────────────────────────
 
+/** Where an image Codex made is kept in the agent's folder, for the server to fetch. */
+export const CODEX_IMAGES_FOLDER = "generated-images";
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+
+/**
+ * An image Codex's own tool made (`imageGeneration`). Codex keeps it in its sign-in's folder, which the conversation
+ * never sees: a copy goes to the agent's folder and a `file` event tells the server to show it with the reply.
+ * Returns the copy's path relative to `folder`, or null when there is no image to keep.
+ */
+function keepCodexImage(item: Record<string, unknown>, id: string, folder: string): string | null {
+  try {
+    const saved = str(item.savedPath);
+    const fromFile = saved !== "" && existsSync(saved);
+    // No file it could reach (another user's folder, an older Codex): the item carries the image itself.
+    const bytes = fromFile ? null : Buffer.from(str(item.result), "base64");
+    if (bytes && bytes.byteLength === 0) return null;
+    const ext = IMAGE_EXTENSIONS.has(path.extname(saved).toLowerCase()) ? path.extname(saved).toLowerCase() : ".png";
+    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const name = `image-${stamp}-${id.replace(/[^a-zA-Z0-9]/g, "").slice(-6) || "codex"}${ext}`;
+    const dir = path.join(folder, CODEX_IMAGES_FOLDER);
+    mkdirSync(dir, { recursive: true });
+    if (bytes) writeFileSync(path.join(dir, name), bytes);
+    else copyFileSync(saved, path.join(dir, name));
+    return `${CODEX_IMAGES_FOLDER}/${name}`;
+  } catch {
+    return null;
+  }
+}
+
+/** `imageGeneration` as an executed `tool_call`, and the `file` event of the image it made. */
+export function codexImageEvents(
+  item: Record<string, unknown>,
+  id: string,
+  folder: string | undefined,
+  clean: (text: string) => string,
+): CodexBrainEvent[] {
+  const prompt = clean(str(item.revisedPrompt)).slice(0, 500);
+  const call = (content: string, isError = false): CodexBrainEvent => ({
+    type: "tool_call",
+    id,
+    name: "image_generation",
+    input: prompt ? { prompt } : {},
+    executed: { content, ...(isError ? { isError: true } : {}) },
+  });
+  if (isObj(item.failure)) {
+    // Seconds since the epoch, as Codex's other limits say theirs.
+    const resets = typeof item.failure.resetsAt === "number" ? new Date(item.failure.resetsAt * 1000) : null;
+    const until = resets && !Number.isNaN(resets.getTime()) ? ` until ${resets.toISOString()}` : "";
+    return [call(`The plan's image limit was reached${until}.`, true)];
+  }
+  const kept = folder ? keepCodexImage(item, id, folder) : null;
+  if (!kept) return [call("Codex made no image.", true)];
+  return [call(`Saved ${kept} in your folder.`), { type: "file", path: kept }];
+}
+
 const usageDiff = (a: TokenUsageBreakdown, b: TokenUsageBreakdown): TokenUsageBreakdown => ({
   totalTokens: Math.max(0, num(a.totalTokens) - num(b.totalTokens)),
   inputTokens: Math.max(0, num(a.inputTokens) - num(b.inputTokens)),
@@ -429,12 +493,24 @@ export class CodexAppMapper {
   /** The thread's totals before this `brain.turn`, and now. */
   private base?: TokenUsageBreakdown;
   private total?: TokenUsageBreakdown;
+  /** Model requests of this `brain.turn`, the most input one read, and what the last one read. */
+  private calls = 0;
+  private maxContext = 0;
+  private lastContext = 0;
   /** An `error` notification Codex won't retry (the turn's own error says more). */
   lastError?: string;
   /** The turn ran a command, changed a file or called our bridge: a cut now loses work the API couldn't see. */
   private worked = false;
 
-  constructor(private readonly opts: { cwd: string; model?: string; redact?: (text: string) => string }) {}
+  constructor(
+    private readonly opts: {
+      cwd: string;
+      /** The agent's folder: where an image Codex makes is kept. */
+      folder?: string;
+      model?: string;
+      redact?: (text: string) => string;
+    },
+  ) {}
 
   private clean(t: string) {
     return this.opts.redact ? this.opts.redact(t) : t;
@@ -466,7 +542,12 @@ export class CodexAppMapper {
   /** `item/completed`: executed tool calls, the answer, and the text of a message that wasn't streamed. */
   completed(item: Record<string, unknown>): { events: CodexBrainEvent[]; text?: string } {
     const id = str(item.id) || `codex-${randomUUID()}`;
-    if (item.type === "commandExecution" || item.type === "fileChange" || item.type === "mcpToolCall")
+    if (
+      item.type === "commandExecution" ||
+      item.type === "fileChange" ||
+      item.type === "mcpToolCall" ||
+      item.type === "imageGeneration"
+    )
       this.worked = true;
     switch (item.type) {
       case "agentMessage": {
@@ -501,6 +582,8 @@ export class CodexAppMapper {
         const status = str(item.status);
         return { events: [codexFileChangeCall({ id, changes, failed: status === "failed" || status === "declined" })] };
       }
+      case "imageGeneration":
+        return { events: codexImageEvents(item, id, this.opts.folder, (t) => this.clean(t)) };
       default:
         // Our bridge's calls (`mcpToolCall`) aren't repeated (the engine ran them); the rest isn't a tool call.
         return { events: [] };
@@ -514,6 +597,14 @@ export class CodexAppMapper {
     // The first one of this `brain.turn`: the thread's totals before its first model request.
     if (!this.base) this.base = isObj(u.last) ? usageDiff(u.total, u.last) : u.total;
     // Totals, not sums: Codex says the same usage again (rate-limit updates) without counting twice.
+    if (!this.total || num(u.total.totalTokens) > num(this.total.totalTokens)) {
+      this.calls++;
+      // Codex counts cached input inside `inputTokens`: the request's whole context.
+      if (isObj(u.last)) {
+        this.lastContext = num(u.last.inputTokens);
+        this.maxContext = Math.max(this.maxContext, this.lastContext);
+      }
+    }
     this.total = u.total;
   }
 
@@ -539,6 +630,9 @@ export class CodexAppMapper {
           // Codex counts cached input inside `inputTokens`.
           ...(u && u.cachedInputTokens > 0 ? { cacheRead: u.cachedInputTokens } : {}),
           ...(u && u.cacheWriteInputTokens > 0 ? { cacheWrite: u.cacheWriteInputTokens } : {}),
+          ...(this.calls > 0 ? { calls: this.calls } : {}),
+          ...(this.maxContext > 0 ? { maxContext: this.maxContext } : {}),
+          ...(this.lastContext > 0 ? { lastContext: this.lastContext } : {}),
         },
         { type: "done", text: answer, session: { id: sessionId } },
       ];
@@ -557,6 +651,9 @@ export class CodexAppMapper {
 }
 
 // ── Approvals (ADR 0053 §3) ──────────────────────────────────────────────────
+
+/** How the reason of a declined command or change starts, steered to Codex: from the computer, not a person. */
+export const DECLINED_PREFIX = "[agentes.chat, not the person] The computer declined that command or change: ";
 
 /** A call as the command policy reads it (Claude Code's permission prompt arguments). */
 export type PolicyCall = { tool_name: string; input: Record<string, unknown> };
@@ -600,11 +697,20 @@ export function approvalCalls(
   return null;
 }
 
-/** `accept` only when the policy allows every call of the approval (`permissionPrompt`, as Claude Code's prompt). */
+/**
+ * `accept` only when the policy allows every call of the approval (`permissionPrompt`, as Claude Code's prompt).
+ * `onDecline` gets why, the words Claude Code's prompt would have answered.
+ */
 export async function decideApproval(
   calls: PolicyCall[],
   ask: (tool: string, args: Record<string, unknown>) => Promise<IpcReply>,
-  opts: { scope: CommandScope; profile: CommandProfile; signal?: AbortSignal; asks?: "never" },
+  opts: {
+    scope: CommandScope;
+    profile: CommandProfile;
+    signal?: AbortSignal;
+    asks?: "never";
+    onDecline?: (message: string) => void;
+  },
 ): Promise<"accept" | "decline"> {
   if (calls.length === 0) return "decline";
   const sleep = (ms: number) =>
@@ -630,7 +736,10 @@ export async function decideApproval(
       sleep,
       ...(opts.asks ? { asks: opts.asks } : {}),
     });
-    if (answer.behavior !== "allow") return "decline";
+    if (answer.behavior !== "allow") {
+      opts.onDecline?.(answer.message);
+      return "decline";
+    }
   }
   return "accept";
 }
@@ -656,6 +765,8 @@ interface AppLive {
   tools: Set<string> | null;
   busy: boolean;
   lastUsed: number;
+  /** Awake time (`awakeClock`) its last turn ended at. */
+  idleSince: number;
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** The bridge entry between turns (no run: its calls are refused quietly). */
   bridge: McpTaskInfo | null;
@@ -939,6 +1050,11 @@ export class CodexAppServers implements CodexAppRunner {
       client.close(0);
       return null;
     }
+    // The runner began to stop during the handshake: `close` has run, and nothing would close this process.
+    if (this.closed) {
+      client.close(0);
+      return null;
+    }
     const bridge: McpTaskInfo = {
       token,
       missionId: "",
@@ -961,6 +1077,7 @@ export class CodexAppServers implements CodexAppRunner {
       tools: null,
       busy: false,
       lastUsed: Date.now(),
+      idleSince: awakeClock.read(),
       idleTimer: null,
       bridge,
       turn: null,
@@ -1067,6 +1184,7 @@ export class CodexAppServers implements CodexAppRunner {
     const deltaMs = this.opts.deltaMs ?? CODEX_APP_DELTA_MS;
     const mapper = new CodexAppMapper({
       cwd: input.cwd,
+      ...(input.folder ? { folder: input.folder } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(opts.redact ? { redact: opts.redact } : {}),
     });
@@ -1210,9 +1328,13 @@ export class CodexAppServers implements CodexAppRunner {
         if (turnId && turn.id !== turnId) return;
         flush();
         if (restart && turn.status !== "failed") {
-          // The next Codex turn starts with the urgent messages (and any that came while it stopped).
+          // The next Codex turn starts with the urgent messages (and any that came while it stopped). The answer of
+          // the one that ended is posted now when the server takes each answer as it comes, else it leads the last.
           const answer = mapper.nextTurn();
-          if (turn.status === "completed" && answer) held.push(answer);
+          if (turn.status === "completed" && answer) {
+            if (input.answers === "each") emit({ type: "answer", text: redact(answer) });
+            else held.push(answer);
+          }
           const batch = restart;
           restart = null;
           const clientId = (batch[0] as SteerMessage).uuid;
@@ -1256,6 +1378,11 @@ export class CodexAppServers implements CodexAppRunner {
               }
               return;
             }
+            // An image takes a while and says nothing until it is done: its call starts now (the chat shows its place).
+            if (method === "item/started" && item.type === "imageGeneration" && str(item.id)) {
+              emit({ type: "tool_started", id: str(item.id), name: "image_generation" });
+              return;
+            }
             if (method !== "item/completed") return;
             const out = mapper.completed(item);
             if (out.text) addText(out.text);
@@ -1288,6 +1415,23 @@ export class CodexAppServers implements CodexAppRunner {
         ...(opts.runnerHome ? { runnerHome: opts.runnerHome } : {}),
       };
       const windows = (opts.platform ?? process.platform) === "win32";
+      // A decline has no field for why (`v2/CommandExecutionApprovalDecision`), and Codex tells the model only that it
+      // was rejected: why reaches it as steered input, written before the decline so it is there at its next request.
+      const tellDeclined = (message: string) => {
+        if (settled || !turnId || !message) return;
+        void client
+          .request(
+            "turn/steer",
+            {
+              threadId,
+              expectedTurnId: turnId,
+              clientUserMessageId: randomUUID(),
+              input: [text(`${DECLINED_PREFIX}${redact(message)}`)],
+            },
+            STEER_RPC_MS,
+          )
+          .catch(() => undefined);
+      };
       client.onRequest((method, params) => {
         if (settled) return null;
         if (typeof params.threadId === "string" && params.threadId !== threadId) return null;
@@ -1303,6 +1447,7 @@ export class CodexAppServers implements CodexAppRunner {
           profile: input.profile ?? "work",
           signal: approvals.signal,
           ...(input.asks ? { asks: input.asks } : {}),
+          onDecline: tellDeclined,
         }).then((decision) => {
           if (decision === "decline")
             this.log(`codex approval declined: ${redact(JSON.stringify(calls)).slice(0, 300)}`);
@@ -1333,13 +1478,21 @@ export class CodexAppServers implements CodexAppRunner {
   }
 
   private armIdle(live: AppLive) {
+    live.idleSince = awakeClock.read();
+    this.checkIdle(live, this.opts.idleMs ?? CODEX_APP_IDLE_MS);
+  }
+
+  /** Idle time is awake time: a timer that fires after the computer slept finds less and waits on. */
+  private checkIdle(live: AppLive, waitMs: number) {
     if (live.idleTimer) clearTimeout(live.idleTimer);
     live.idleTimer = setTimeout(() => {
-      if (!live.busy) {
-        this.log(`codex app-server for ${live.sessionId.slice(0, 8)} idle; closing`);
-        this.drop(live);
-      }
-    }, this.opts.idleMs ?? CODEX_APP_IDLE_MS);
+      live.idleTimer = null;
+      if (live.busy) return;
+      const left = (this.opts.idleMs ?? CODEX_APP_IDLE_MS) - (awakeClock.read() - live.idleSince);
+      if (left > 0) return this.checkIdle(live, left);
+      this.log(`codex app-server for ${live.sessionId.slice(0, 8)} idle; closing`);
+      this.drop(live);
+    }, waitMs);
     live.idleTimer.unref?.();
   }
 

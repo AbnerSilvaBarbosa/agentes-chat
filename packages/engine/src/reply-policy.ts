@@ -1,6 +1,7 @@
 import { and, asc, type Executor, eq, gt, isNull, ne, schema, sql } from "@agenteschat/db";
 import { cutText } from "./format";
 import type { Message } from "./messages";
+import { runState } from "./run-state";
 import type { AgentRun } from "./runs";
 import type { ToolDefinition, ToolSource } from "./tools/types";
 
@@ -58,8 +59,26 @@ export const byEveryone = (
   trigger: Pick<Message, "meta"> | null | undefined,
 ) => {
   const ids = trigger?.meta?.everyoneAgentIds;
-  return run.trigger === "mention" && Array.isArray(ids) && ids.includes(run.agentId);
+  return (
+    run.trigger === "mention" && Array.isArray(ids) && ids.includes(run.agentId) && !answersForEveryone(run, trigger)
+  );
 };
+
+/**
+ * The one agent a person's mention of everyone was judged to need (`classifyEveryone`, `everyoneShape.by`): it owes
+ * the answer, for all the agents here.
+ */
+export const answersForEveryone = (
+  run: Pick<AgentRun, "agentId" | "trigger">,
+  trigger: Pick<Message, "meta"> | null | undefined,
+) => {
+  const shape = trigger?.meta?.everyoneShape as { answer?: unknown; by?: unknown } | undefined;
+  return run.trigger === "mention" && shape?.answer === "one" && shape.by === run.agentId;
+};
+
+/** The prompt block of the run that answers a mention of everyone for all the agents (`answersForEveryone`). */
+export const WHY_ANSWER_FOR_EVERYONE =
+  '# Why you were called\nA person mentioned everyone in this conversation (@everyone). One answer serves all of you, so you answer for all the agents here: the others read it and stay quiet. Answer once, for the team. A rule or anything to keep from it is the whole team\'s: save it once with `remember` and for: "team", and never ask the other agents to save copies.';
 
 export interface ReplyPolicy {
   /** Nobody called it by name: it may end without a message (`pass`, an empty or sentinel-only answer). */
@@ -71,7 +90,8 @@ export interface ReplyPolicy {
 /**
  * Notices that only inform the agent (ADR 0053 §10): another agent's note, the late result of a wait it
  * stopped waiting on, its own fast reply, its own follow-up coming due, what happened on GitHub (it answers there),
- * the asks its ended background work took on (the work may have done them). The run one of them wakes may stay quiet.
+ * a check that failed on its code session's branch (a push since may have fixed it, ADR 0215), the asks its ended
+ * background work took on (the work may have done them). The run one of them wakes may stay quiet.
  */
 const INFORMING_NOTICES: ReadonlySet<string> = new Set([
   "agent_note",
@@ -79,6 +99,7 @@ const INFORMING_NOTICES: ReadonlySet<string> = new Set([
   "talker_reply",
   "follow_up",
   "github_event",
+  "github_check",
   "work_follow_up",
 ]);
 
@@ -150,10 +171,10 @@ export async function loadReplyPolicy(
       hop: agentRuns.hop,
       trigger: agentRuns.trigger,
       background: agentRuns.background,
-      answerOwed: sql<boolean>`coalesce((${agentRuns.transcript} ->> 'answerOwed')::boolean, false)`,
-      passListed: sql<boolean>`coalesce((${agentRuns.transcript} ->> 'passListed')::boolean, false)`,
-      catchUp: sql<boolean>`coalesce((${agentRuns.transcript} -> 'catchUp' ->> 'mayPass')::boolean, false)`,
-      moot: sql<boolean>`coalesce((${agentRuns.transcript} ->> 'requestMoot')::boolean, false)`,
+      answerOwed: sql<boolean>`coalesce((${runState} ->> 'answerOwed')::boolean, false)`,
+      passListed: sql<boolean>`coalesce((${runState} ->> 'passListed')::boolean, false)`,
+      catchUp: sql<boolean>`coalesce((${runState} -> 'catchUp' ->> 'mayPass')::boolean, false)`,
+      moot: sql<boolean>`coalesce((${runState} ->> 'requestMoot')::boolean, false)`,
       authorType: messages.authorType,
       authorAgentId: messages.authorAgentId,
       meta: messages.meta,

@@ -65,7 +65,7 @@ const wikiEdit = (
       };
 
 /**
- * What a PO chat's wiki tools keep to (ADR 0185): the whole wiki is readable, but another company's `Specs/` pages are
+ * What a PO chat's wiki tools keep to (ADR 0229): the whole wiki is readable, but another company's `Specs/` pages are
  * not, and what the chat writes goes to its own company's folder. Null in any other conversation.
  */
 async function specsScope(ctx: ToolContext) {

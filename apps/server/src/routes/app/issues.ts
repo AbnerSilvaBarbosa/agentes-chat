@@ -63,6 +63,8 @@ import { AudienceChoice, WorkView } from "./schemas";
 
 const tags = ["Issues"];
 const Actor = z.object({ type: z.enum(["person", "agent"]), id: z.string() });
+/** Who has a task (ADR 0188): the whole list, in order. */
+const Assignees = z.array(Actor).max(20);
 const Status = z.enum(["todo", "in_progress", "in_review", "done", "canceled"]);
 const Priority = z.enum(["low", "normal", "high"]);
 const GithubUrl = z
@@ -212,11 +214,9 @@ const Issue = z
     boardRank: z.number().openapi({ description: "Order inside the column, lowest first." }),
     priority: Priority,
     project: ProjectRef.nullable(),
-    assignee: Actor.nullable().openapi({
-      description: "The principal: the card's agent when it has one, else its first person (ADR 0186).",
-    }),
-    alsoWith: z.array(Actor).openapi({
-      description: "The people also with the card, in order. Always people; at most 5. Empty when there are none.",
+    assignees: z.array(Actor).openapi({
+      description:
+        "Who has it, in order: people and agents; empty: nobody. The first agent answers what names nobody in its conversation.",
     }),
     labels: z.array(z.string()),
     dueDate: z.string().nullable(),
@@ -274,7 +274,7 @@ const Issue = z
     }),
     specPage: z.object({ id: z.uuid(), slug: z.string(), title: z.string().nullable() }).nullable().openapi({
       description:
-        "The wiki page holding its spec (ADR 0185); the title is null when the page is restricted, the field null when unset.",
+        "The wiki page holding its spec (ADR 0229); the title is null when the page is restricted, the field null when unset.",
     }),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -283,7 +283,7 @@ const Issue = z
 
 const IssueDetail = Issue.extend({
   subIssues: z.array(
-    z.object({ id: z.uuid(), number: z.number(), title: z.string(), status: Status, assignee: Actor.nullable() }),
+    z.object({ id: z.uuid(), number: z.number(), title: z.string(), status: Status, assignees: z.array(Actor) }),
   ),
 }).openapi("IssueDetail");
 
@@ -296,6 +296,9 @@ const Activity = z
     event: z.string().optional(),
     textCode: z.string().optional(),
     textParams: z.record(z.string(), z.string()).optional(),
+    assignee: Actor.optional().openapi({
+      description: "An `assigned` event: who was put on the task, or taken off it (`textCode` `unassigned`).",
+    }),
     auto: z.boolean().optional().openapi({ description: "The system moved it on its own (runs and PRs)." }),
     attachments: z.array(z.object({ id: z.uuid(), title: z.string() })).optional(),
     createdAt: z.string(),
@@ -357,7 +360,7 @@ export function issueRoutes(deps: AppDeps) {
   const issues: IssueDeps = { db, pubsub: adapters.pubsub };
   const blobDeps = { ...issues, blobs: adapters.platformBlobs };
   const person = (userId: string) => ({ type: "person" as const, userId });
-  // A board's alert rules are routines (ADR 0175 addendum): made and deleted as the routines page does.
+  // A board's alert rules are routines (ADR 0220 addendum): made and deleted as the routines page does.
   const routines: RoutineDeps = {
     db,
     pubsub: adapters.pubsub,
@@ -389,16 +392,15 @@ export function issueRoutes(deps: AppDeps) {
             .optional()
             .openapi({ description: "Only the tasks of that space's boards: a company's whole board." }),
           assignee: z.literal("me").optional().openapi({
-            description:
-              "Only the tasks you are on as a person, as their principal or also with them (ADR 0181, 0186).",
+            description: "Only the tasks you are on as a person, alone or with others (ADR 0181, 0188).",
           }),
           waiting: z
             .literal("person")
             .optional()
-            .openapi({ description: "Only the tasks in a column that waits for a person (ADR 0184)." }),
+            .openapi({ description: "Only the tasks in a column that waits for a person (ADR 0228)." }),
           columns: z.string().max(2000).optional().openapi({
             description:
-              "Only the tasks sitting in these columns, as keys joined by `|`: a column's name in lower case, or `stage:<stage>` for one with no name (ADR 0185 addendum).",
+              "Only the tasks sitting in these columns, as keys joined by `|`: a column's name in lower case, or `stage:<stage>` for one with no name (ADR 0229 addendum).",
           }),
         }),
       },
@@ -416,7 +418,7 @@ export function issueRoutes(deps: AppDeps) {
         assignee: query.assignee === "me" ? { type: "person", id: c.get("user").id } : undefined,
         waitingForPerson: query.waiting === "person" ? true : undefined,
         columnKeys: query.columns ? query.columns.split("|").filter(Boolean) : undefined,
-        // The member's own page leaves canceled tasks out, before the cap (ADR 0181).
+        // The member's own page leaves canceled tasks out, before the cap (ADR 0225).
         notStatus: query.assignee === "me" ? "canceled" : undefined,
       });
       return c.json({ issues: list }, 200);
@@ -485,11 +487,7 @@ export function issueRoutes(deps: AppDeps) {
             title: z.string().min(1).max(300),
             description: z.string().max(50_000).optional(),
             criteria: z.array(z.string().max(500)).max(50).optional(),
-            assignee: Actor.nullable().optional(),
-            assignees: z.array(Actor).max(6).optional().openapi({
-              description:
-                "Everyone responsible, in order: at most one agent (it is the principal), else the first person is. Left out: `assignee` alone.",
-            }),
+            assignees: Assignees.optional(),
             priority: Priority.optional(),
             dueDate: DueDate.optional(),
             labels: z.array(z.string().max(40)).max(20).optional(),
@@ -540,21 +538,8 @@ export function issueRoutes(deps: AppDeps) {
               .openapi({ description: "Move to a board column; the issue takes that column's stage." }),
             boardRank: z.number().optional().openapi({ description: "Its order inside the column (lowest first)." }),
             priority: Priority.optional(),
-            assignee: Actor.nullable().optional().openapi({
-              description:
-                "The hand-off: an agent replaces the card's agent and the people stay; a person is added beside an agent, or replaces the principal when there is none; `null` takes everyone off.",
-            }),
-            assignees: z.array(Actor).max(6).optional().openapi({
-              description: "Everyone responsible, in order, replacing the agent and the people.",
-            }),
-            addAssignees: z.array(Actor).max(5).optional().openapi({ description: "People to put on the card." }),
-            removeAssignees: z
-              .array(Actor)
-              .max(6)
-              .optional()
-              .openapi({ description: "People (or the agent) to take off." }),
-            principal: Actor.optional().openapi({
-              description: "A person on the card who becomes its principal. Refused while an agent is on it.",
+            assignees: Assignees.optional().openapi({
+              description: "The whole new list, in order: whoever is left out leaves the task.",
             }),
             dueDate: DueDate.optional(),
             labels: z.array(z.string().max(40)).max(20).optional(),
@@ -568,6 +553,11 @@ export function issueRoutes(deps: AppDeps) {
                 description:
                   "The whole list of acceptance criteria, in order: an `id` keeps that criterion (and its check), one without is new, one left out is removed.",
               }),
+            removeFiles: z
+              .array(z.uuid())
+              .max(50)
+              .optional()
+              .openapi({ description: "Files to take off the issue's attachments; they stay in the Drive." }),
           }),
         ),
       },
@@ -1044,7 +1034,7 @@ export function issueRoutes(deps: AppDeps) {
       tags,
       security,
       summary:
-        "A company's Painel: its tasks' numbers over the last 7, 30 or 90 days, for the tasks you see (ADR 0182)",
+        "A company's Painel: its tasks' numbers over the last 7, 30 or 90 days, for the tasks you see (ADR 0226)",
       request: { params: SpaceParams, query: z.object({ days: z.string().optional() }) },
       responses: { 200: json(CompanyDashboardBody), ...errors },
     }),
@@ -1275,7 +1265,8 @@ export function issueRoutes(deps: AppDeps) {
       path: "/organizations/{orgId}/issues/{issueId}/ask-agent",
       tags,
       security,
-      summary: '"Ask Ada to implement": assigns the agent and starts its work in the task\'s conversation',
+      summary:
+        '"Ask Ada to implement": puts the agent first among the assignees and starts its work in the task\'s conversation',
       request: { params: IssueParams, body: body(z.object({ agentId: z.uuid() })) },
       responses: { 200: json(Issue), ...errors },
     }),

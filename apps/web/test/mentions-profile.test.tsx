@@ -210,7 +210,7 @@ describe("profile card", () => {
     expect(c.textContent).toContain("Agente · Dev");
     expect(c.textContent).toContain("Responsável");
     expect(c.textContent).toContain("João");
-    expect(c.textContent).toContain("sonnet 5.5");
+    expect(c.textContent).toContain("Claude Sonnet 5.5");
     expect(c.textContent).not.toContain("Pode");
     expect(c.textContent).toContain("31% do orçamento usado este mês");
     expect(c.textContent).not.toContain("US$");
@@ -303,7 +303,7 @@ describe("profile card", () => {
     await go(`c/${ENG_ID}`, state);
     await click(screen().getAllByRole("button", { name: "Perfil de Ada" })[0] as HTMLElement);
     await settle(6);
-    expect(card().textContent).toContain("sem responsável");
+    expect(card().textContent).toContain("Administradores");
     expect(within(card()).queryByRole("meter")).toBeNull();
   });
 

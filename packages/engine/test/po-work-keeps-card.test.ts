@@ -26,7 +26,7 @@ describe("the PO's work on a card", () => {
     return createIssue(deps, { type: "person", userId: f.owner.id }, f.org.id, {
       title: "Especificar isto",
       projectId,
-      assignee: { type: "agent", id: f.agent.id },
+      assignees: [{ type: "agent", id: f.agent.id }],
       criteria: ["um critério"],
     });
   }

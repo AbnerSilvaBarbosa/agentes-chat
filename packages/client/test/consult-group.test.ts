@@ -5,12 +5,14 @@ import {
   asExchanges,
   consultAskedKey,
   consultBlocksNearEnd,
+  consultChoiceKey,
+  consultChoiceOf,
+  consultChoices,
   consultGroupSummary,
   consultLineKey,
   consultLineState,
   consultLineTarget,
   consultNoticeFolds,
-  consultOriginKey,
   consultPair,
   consultSeconds,
   consultsForLine,
@@ -86,13 +88,9 @@ describe("the words of a block, by what its run asked or handed off (ADR 0095)",
     expect(consultLineKey("failed", note())).toBe("chat.consultation.failedNote");
     expect(consultLineKey("failed", q())).toBe("chat.consultation.failed");
   });
-  test("what was asked or handed, and where it came from", () => {
+  test("what was asked or handed", () => {
     expect(consultAskedKey(note())).toBe("chat.consultation.wrote");
     expect(consultAskedKey(q())).toBe("chat.consultation.asked");
-    expect(consultOriginKey(note(), true)).toBe("chat.consultPanel.originNote");
-    expect(consultOriginKey(note(), false)).toBe("chat.consultPanel.originNoteDm");
-    expect(consultOriginKey(q(), true)).toBe("chat.consultPanel.origin");
-    expect(consultOriginKey(q(), false)).toBe("chat.consultPanel.originDm");
   });
 });
 
@@ -339,6 +337,48 @@ describe("consultsForLine", () => {
     ];
     expect(consultsForLine(live, new Set(["r1"]))).toEqual([{ runId: "r2", agentId: "dev" }]);
     expect(consultsForLine(live, new Set())).toBe(live);
+  });
+});
+
+describe("consultChoices (the dialog of a row of several)", () => {
+  const now = T0 + 60_000;
+  test("one choice per asked agent, in the order asked, the one still out first: every agent the row shows", () => {
+    const group = [
+      q({ status: "answered", answer: "Up 6 bp.", answeredAt: iso(30) }),
+      q({ id: "q2", consultedAgentId: "iris", consultedRunId: "r-iris" }),
+      q({ id: "q3", status: "answered", answer: "Done.", answeredAt: iso(40) }),
+      q({ id: "q4", status: "open", createdAt: iso(45) }),
+    ];
+    const choices = consultChoices(group, now, "lia");
+    expect(choices.map((c) => [c.agentId, c.opens, c.state])).toEqual([
+      ["theo", "q4", "working"],
+      ["iris", "q2", "working"],
+    ]);
+    expect(consultPair(group, now, "lia")?.faces.map((f) => f.agentId)).toEqual(choices.map((c) => c.agentId));
+  });
+
+  test("in an exchange the other agent asked back: it is still that agent's choice, not the asker's", () => {
+    const back = q({ id: "q2", agentId: "theo", consultedAgentId: "lia", createdAt: iso(10) });
+    expect(consultChoices([q(), back], now, "lia").map((c) => c.agentId)).toEqual(["theo"]);
+  });
+
+  test("it opens on a question the asker asked, even while the other agent's question back is still out", () => {
+    const asked = q({ status: "answered", answer: "Up 6 bp.", answeredAt: iso(30) });
+    const back = q({ id: "q2", agentId: "theo", consultedAgentId: "lia", createdAt: iso(10) });
+    const group = [back, asked];
+    const choices = consultChoices(group, now, "lia");
+    expect(choices.map((c) => [c.agentId, c.opens])).toEqual([["theo", "q1"]]);
+    // The row may open on the question back: it is still that agent's choice.
+    expect(consultChoiceOf(choices, group, "q2")?.agentId).toBe("theo");
+    expect(consultChoiceOf(choices, group, "nope")).toBeUndefined();
+  });
+
+  test("each says where it stands in a word: answered, at work, waiting, unanswered", () => {
+    expect(consultChoiceKey("answered", q())).toBe("chat.consultPair.answered");
+    expect(consultChoiceKey("working", q())).toBe("chat.consultPair.working");
+    expect(consultChoiceKey("waiting", q({ waiting: "approval" }))).toBe("chat.consultPair.waitingApproval");
+    expect(consultChoiceKey("expired", q())).toBe("chat.consultPair.noAnswer");
+    expect(consultChoiceKey("failed", q({ kind: "note" }))).toBe("chat.consultPair.notFinished");
   });
 });
 

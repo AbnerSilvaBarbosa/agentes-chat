@@ -61,6 +61,7 @@ import {
 import { PASSED_ON_NOTE, renderSteered } from "../src/live-steer";
 import { noticeText } from "../src/notices";
 import { takeInbox } from "../src/run-inbox";
+import { deliverNoticeToRun } from "../src/run-resume";
 import { addMember, answerSteering, type Fixture, setup } from "./fixtures";
 
 setDefaultTimeout(30_000);
@@ -185,7 +186,7 @@ test("work_in_background: the anchor in the timeline, updates in its thread, the
     title: "Migrar a cobrança",
     status: "done",
     channelId: f.general.id,
-    assignee: { type: "agent", id: f.agent.id },
+    assignees: [{ type: "agent", id: f.agent.id }],
     blocked: null,
   });
   expect(issues[0]?.backgroundWork?.plan.map((p) => p.state)).toEqual(["done", "doing", "todo"]);
@@ -524,6 +525,9 @@ test("the promise: a nudge when no update came, then exactly one update of the s
     new Date(later.getTime() + 61_000),
   );
   expect(agentUpdate.ok).toBe(true);
+  // The update answers the nudge it hadn't read yet: it no longer waits for the run's next step.
+  const [read] = await f.db.select().from(schema.agentRuns).where(eq(schema.agentRuns.id, run.id));
+  expect(read?.pendingMessageIds).not.toContain(nudge?.id as string);
   expect(
     await checkInWork(
       deps(),
@@ -537,13 +541,26 @@ test("the promise: a nudge when no update came, then exactly one update of the s
 test("updates: 5 minutes apart unless important (then a minute), the promise clamped to 5–20", async () => {
   f = await setup();
   const run = await working("@dev roda a migração");
-  await moved(run);
+  const { work } = await moved(run);
   const t0 = new Date();
   const first = await postWorkUpdate(deps(), run.id, { text: "Começando.", nextUpdateMin: 60 }, t0);
   expect(first.ok && first.work.nextUpdateAt?.getTime()).toBe(t0.getTime() + 20 * 60_000);
   const soon = await postWorkUpdate(deps(), run.id, { text: "Mais um." }, new Date(t0.getTime() + 2 * 60_000));
   expect(soon.ok).toBe(false);
-  expect(!soon.ok && soon.reason).toStartWith("Too soon; your last update was 2 min ago.");
+  expect(!soon.ok && soon.quiet && soon.reason).toStartWith("Not posted: your last update went out 2 min ago");
+  expect(!soon.ok && soon.reason).toEndWith("send it with important.");
+  // Too soon for a line, but the plan it carried still moves the card.
+  const posted = (await messages()).filter((m) => m.meta.workUpdate).length;
+  const plan = [{ id: "s1", text: "Migrar", state: "doing" as const }];
+  const planned = await postWorkUpdate(
+    deps(),
+    run.id,
+    { text: "Migrando.", plan },
+    new Date(t0.getTime() + 2 * 60_000),
+  );
+  expect(!planned.ok && planned.quiet && planned.reason).toStartWith("Plan saved; the line was not posted");
+  expect((await workView(f.db, f.org.id, work.id))?.plan).toEqual(plan);
+  expect((await messages()).filter((m) => m.meta.workUpdate)).toHaveLength(posted);
   const important = await postWorkUpdate(
     deps(),
     run.id,
@@ -639,7 +656,7 @@ test("cards: none for a quick run nor a short auto work; card: true makes one; a
   const existing = await createIssue(deps(), { type: "person", userId: f.owner.id }, f.org.id, {
     title: "Cobrança nova",
     criteria: ["Sem perda de dados"],
-    assignee: { type: "agent", id: f.agent.id },
+    assignees: [{ type: "agent", id: f.agent.id }],
     channelId: f.general.id,
   });
   const reuse = await working("@dev pega a #1");
@@ -678,6 +695,19 @@ test("cards: none for a quick run nor a short auto work; card: true makes one; a
   expect(end?.meta.workEnd).toMatchObject({ status: "canceled", byUserId: f.owner.id });
   // Stopped: by whom, in the person's words.
   expect(end?.meta.bodyParams).toMatchObject({ byName: f.owner.name });
+  expect(await workView(f.db, f.org.id, named.work.id)).toMatchObject({
+    canceledByUserId: f.owner.id,
+    canceledByAgentId: null,
+  });
+  // The right hand's stop at the person's word: the view names both, so its line names the right hand.
+  await f.db
+    .update(schema.agentRuns)
+    .set({ error: `canceled_by:${f.owner.id}|agent:agent-lodi` })
+    .where(eq(schema.agentRuns.id, reuse.id));
+  expect(await workView(f.db, f.org.id, named.work.id)).toMatchObject({
+    canceledByUserId: f.owner.id,
+    canceledByAgentId: "agent-lodi",
+  });
 });
 
 test("a work 15 minutes old gets its card at its check-in", async () => {
@@ -747,7 +777,7 @@ test("card_issue: only a card the asker reads, here or workspace-wide; elsewhere
   const elsewhere = await createIssue(deps(), { type: "person", userId: f.owner.id }, f.org.id, {
     title: "Fechamento",
     channelId: finance.id,
-    assignee: { type: "agent", id: f.agent.id },
+    assignees: [{ type: "agent", id: f.agent.id }],
   });
   const dm = await openDm(f.db, f.owner.id, f.org.id, { agentId: f.agent.id });
   const run = await working("pega a #1", undefined, dm.id);
@@ -1794,4 +1824,29 @@ test("a work sent on to a channel she isn't in: her follow-up comes where she as
   });
   // Its job again finds it there.
   expect(await followUpWork(deps(), f.org.id, await jobInput())).toEqual([]);
+});
+
+test("an answer that comes after the work reported is read and answered home, not in the work's thread", async () => {
+  f = await setup({ reply: () => ({ chunks: ["Chegou: aqui está o resultado."] }) });
+  const run = await working("@dev monta o relatório com a ajuda do time");
+  const { work, anchor } = await moved(run);
+  const answer = { kind: "consult_reply" as const, text: "Os números do mês.", from: "@dados" };
+
+  // While the work is on, what comes for it lands in its own thread.
+  const during = await f.db.transaction((tx) => deliverNoticeToRun(tx, { ...run, threadRootId: anchor.id }, answer));
+  expect(during.message.threadId).toBe(anchor.id);
+
+  // It reported and ended with a question still out: the answer wakes the agent in the conversation.
+  const ended = await finishRun(run.id);
+  await endWork(deps(), ended, "done");
+  expect((await works()).find((w) => w.id === work.id)?.status).toBe("done");
+  const after = await f.db.transaction((tx) => deliverNoticeToRun(tx, ended, answer));
+  expect(after.message.channelId).toBe(f.general.id);
+  expect(after.message.threadId).toBeNull();
+  await drainOutbox(f.db, f.handlers);
+  const woken = (await runs()).find((r) => r.triggerMessageId === after.message.id);
+  expect(woken?.status).toBe("done");
+  const said = (await messages()).find((m) => m.agentRunId === woken?.id);
+  expect(said?.body).toBe("Chegou: aqui está o resultado.");
+  expect(said?.threadId).toBeNull();
 });

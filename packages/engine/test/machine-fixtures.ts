@@ -115,6 +115,8 @@ export interface FakeRunnerOptions {
   execAllowed?: boolean;
   /** A socket whose close never reaches the hub (a runner killed behind a proxy: half-open). */
   dead?: boolean;
+  /** Answers each `ping` with a `pong` (on a later tick). */
+  pong?: boolean;
   /** Pause a staged secret before answering, for delivery/decline races. */
   onSecretStaged?: (requestId: string) => Promise<void>;
   /** Pause activation before checking the current value, for replacement races. */
@@ -123,6 +125,12 @@ export interface FakeRunnerOptions {
   onSecretActivated?: (requestId: string) => Promise<void>;
   /** Keeps a site's password for its browser alone, as runners do from then on (`keypair` says `sites`). */
   sites?: boolean;
+  /** `keep.start` / `keep.end` (ADR 0176): a refusal; otherwise each is held or ended. */
+  keep?: (
+    req: Extract<Request, { op: "keep.start" | "keep.end" }>,
+  ) => { fail: { code: string; message: string } } | null;
+  /** More of the first hello (`connectedComputer`): `mode: "system"`, its `holds`. */
+  hello?: Record<string, unknown>;
 }
 
 /**
@@ -249,6 +257,12 @@ export function fakeRunner(hub: MachineHub, options: FakeRunnerOptions = {}) {
           contentType: "",
         });
       }
+      case "keep.start":
+      case "keep.end": {
+        const refused = options.keep?.(req);
+        if (refused) return fail(refused.fail.code, refused.fail.message);
+        return ok(req.op === "keep.start" ? { held: true } : { ended: true });
+      }
       case "pull": {
         try {
           const data = (await options.pull?.(req)) ?? new Uint8Array();
@@ -265,6 +279,7 @@ export function fakeRunner(hub: MachineHub, options: FakeRunnerOptions = {}) {
       const frame = JSON.parse(text) as ServerFrame;
       sent.push(frame);
       if (frame.type === "request") setTimeout(() => void handle(frame), 1);
+      if (frame.type === "ping" && options.pong) setTimeout(() => void reply({ type: "pong", at: frame.at }), 1);
       if (frame.type === "cancel") {
         setTimeout(
           () =>
@@ -297,7 +312,7 @@ export function fakeRunner(hub: MachineHub, options: FakeRunnerOptions = {}) {
         conn,
         JSON.stringify({ type: "hello", token, ...RUNNER, exec: options.execAllowed !== false, ...extra }),
       ),
-    disconnect: () => hub.close(conn),
+    disconnect: (close?: { code: number; reason: string }) => hub.close(conn, close),
     /** Sends a frame as this runner. */
     frame: (frame: Record<string, unknown>) => reply(frame),
   };
@@ -320,6 +335,6 @@ export async function connectedComputer(f: Fixture, options: FakeRunnerOptions =
     },
     ...options,
   });
-  await runner.hello(paired.token, options.protocol ? { protocol: options.protocol } : {});
+  await runner.hello(paired.token, { ...(options.protocol ? { protocol: options.protocol } : {}), ...options.hello });
   return { paired, runner };
 }

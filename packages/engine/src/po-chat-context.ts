@@ -9,7 +9,7 @@ const { issueProjects, issues, poCardProposals, wikiPages } = schema;
 export const PO_BRIEF_CARDS = 80;
 
 /**
- * What a PO knows of its company at the start of every turn in a PO chat (ADR 0185): the company, its live boards with
+ * What a PO knows of its company at the start of every turn in a PO chat (ADR 0229): the company, its live boards with
  * their columns, the cards the person sees (open first, with their column and spec), the proposals still waiting, and
  * the rules of the chat. Read live each turn, so it never goes stale. Titles are typed by anyone, so the card list sits
  * inside the untrusted envelope; the rules sit outside it.

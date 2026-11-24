@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { setupDom } from "@agenteschat/ui/testing/dom";
 
 setupDom();
@@ -52,7 +52,7 @@ const nav = () => document.getElementById("app-nav") as HTMLElement;
 describe("Minhas tarefas: the page", () => {
   test("using the tool opens a page titled Minhas tarefas", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Fechar o mês", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Fechar o mês", assignees: [mine] });
     await renderApp(`/org/${ORG_ID}/c/${ENG_ID}`, { api: s.api });
     await settle(8);
     await click(within(nav()).getByRole("link", { name: "Minhas tarefas" }));
@@ -67,19 +67,19 @@ describe("Minhas tarefas: the page", () => {
     const bakery = await s.api.issues.createSpace(ORG_ID, { name: "Padaria Lia", color: "amber" });
     const site = await s.api.issues.createProject(ORG_ID, { name: "Site novo", color: "amber", spaceId: clinic.id });
     const menu = await s.api.issues.createProject(ORG_ID, { name: "Cardápio", color: "teal", spaceId: bakery.id });
-    await s.api.issues.create(ORG_ID, { title: "Revisar a home", projectId: site.id, assignee: mine });
-    await s.api.issues.create(ORG_ID, { title: "Fotografar os pães", projectId: menu.id, assignee: mine });
-    await s.api.issues.create(ORG_ID, { title: "Sem board nenhum", assignee: mine });
-    await s.api.issues.create(ORG_ID, { title: "Do João", projectId: site.id, assignee: joao });
-    await s.api.issues.create(ORG_ID, { title: "De ninguém", assignee: null });
+    await s.api.issues.create(ORG_ID, { title: "Revisar a home", projectId: site.id, assignees: [mine] });
+    await s.api.issues.create(ORG_ID, { title: "Fotografar os pães", projectId: menu.id, assignees: [mine] });
+    await s.api.issues.create(ORG_ID, { title: "Sem board nenhum", assignees: [mine] });
+    await s.api.issues.create(ORG_ID, { title: "Do João", projectId: site.id, assignees: [joao] });
+    await s.api.issues.create(ORG_ID, { title: "De ninguém", assignees: [] });
     await visit(s);
     expect([...titles()].sort()).toEqual(["Fotografar os pães", "Revisar a home", "Sem board nenhum"]);
   });
 
   test("does not show canceled tasks", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Segue valendo", assignee: mine });
-    const dropped = await s.api.issues.create(ORG_ID, { title: "Desistimos disso", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Segue valendo", assignees: [mine] });
+    const dropped = await s.api.issues.create(ORG_ID, { title: "Desistimos disso", assignees: [mine] });
     await s.api.issues.update(ORG_ID, dropped.id, { status: "canceled" });
     await visit(s);
     expect(titles()).toEqual(["Segue valendo"]);
@@ -89,7 +89,7 @@ describe("Minhas tarefas: the page", () => {
   test("shows a task of an archived board", async () => {
     const s = await setup();
     const old = await s.api.issues.createProject(ORG_ID, { name: "Site velho", color: "graphite" });
-    await s.api.issues.create(ORG_ID, { title: "Ainda é minha", projectId: old.id, assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Ainda é minha", projectId: old.id, assignees: [mine] });
     await s.api.issues.updateProject(ORG_ID, old.id, { archived: true });
     await visit(s);
     expect(titles()).toEqual(["Ainda é minha"]);
@@ -97,41 +97,52 @@ describe("Minhas tarefas: the page", () => {
 
   test("adds and removes a task when its assignee changes, without a reload", async () => {
     const s = await setup();
-    const kept = await s.api.issues.create(ORG_ID, { title: "Já era minha", assignee: mine });
-    const other = await s.api.issues.create(ORG_ID, { title: "Era do João", assignee: joao });
+    const kept = await s.api.issues.create(ORG_ID, { title: "Já era minha", assignees: [mine] });
+    const other = await s.api.issues.create(ORG_ID, { title: "Era do João", assignees: [joao] });
     const r = await visit(s);
     const socket = r.sockets.last();
     await act(async () => socket.open());
     await settle(3);
     expect(titles()).toEqual(["Já era minha"]);
     const heard = async () => {
-      await act(async () => socket.push({ type: "event", scope: "org", event: { type: "issue.updated" } }));
-      // The boards read again once per burst of events.
-      await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+      // No random spread on the boards' read, so the wait stays inside Bun's default timeout.
+      const random = spyOn(Math, "random").mockReturnValue(0);
+      try {
+        await act(async () => socket.push({ type: "event", scope: "org", event: { type: "issue.updated" } }));
+        // The boards read again once per burst of events.
+        await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+      } finally {
+        random.mockRestore();
+      }
       await settle(6);
     };
     // Assigned to me: it joins the page.
-    await s.api.issues.update(ORG_ID, other.id, { assignee: mine });
+    await s.api.issues.update(ORG_ID, other.id, { assignees: [mine] });
     await heard();
     expect([...titles()].sort()).toEqual(["Já era minha", "Era do João"].sort());
     // Taken from me: it leaves.
-    await s.api.issues.update(ORG_ID, kept.id, { assignee: joao });
+    await s.api.issues.update(ORG_ID, kept.id, { assignees: [joao] });
     await heard();
     expect(titles()).toEqual(["Era do João"]);
   });
 
   test("drops a deleted task", async () => {
     const s = await setup();
-    const gone = await s.api.issues.create(ORG_ID, { title: "Vai sumir", assignee: mine });
-    await s.api.issues.create(ORG_ID, { title: "Fica", assignee: mine });
+    const gone = await s.api.issues.create(ORG_ID, { title: "Vai sumir", assignees: [mine] });
+    await s.api.issues.create(ORG_ID, { title: "Fica", assignees: [mine] });
     const r = await visit(s);
     const socket = r.sockets.last();
     await act(async () => socket.open());
     await settle(3);
     expect([...titles()].sort()).toEqual(["Fica", "Vai sumir"]);
     await s.api.issues.delete(ORG_ID, gone.id);
-    await act(async () => socket.push({ type: "event", scope: "org", event: { type: "issue.deleted" } }));
-    await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+    const random = spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await act(async () => socket.push({ type: "event", scope: "org", event: { type: "issue.deleted" } }));
+      await act(() => new Promise((done) => setTimeout(done, UNREAD_REFRESH_MS + 100)));
+    } finally {
+      random.mockRestore();
+    }
     await settle(6);
     expect(titles()).toEqual(["Fica"]);
   });
@@ -140,14 +151,14 @@ describe("Minhas tarefas: the page", () => {
 describe("Minhas tarefas: the controls", () => {
   test("the header action is Nova tarefa, and nothing else", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await visit(s);
     expect(headerActions()).toEqual(["Nova tarefa"]);
   });
 
   test("a task made there is assigned to the member and shows in the list", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await visit(s);
     await click(within(document.querySelector(".ac-pagehead__actions") as HTMLElement).getByRole("button"));
     await settle(3);
@@ -158,26 +169,26 @@ describe("Minhas tarefas: the controls", () => {
     await click(within(dialog).getByRole("button", { name: "Criar tarefa" }));
     await settle(8);
     const made = (await s.api.issues.list(ORG_ID)).find((i) => i.title === "Pagar o contador");
-    expect(made?.assignee).toEqual(mine);
+    expect(made?.assignees).toEqual([mine]);
     expect([...titles()].sort()).toEqual(["Algo meu", "Pagar o contador"]);
   });
 
   test("the header counts the open tasks: the done and the canceled are not in it", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Uma", assignee: mine });
-    await s.api.issues.create(ORG_ID, { title: "Duas", assignee: mine });
-    const finished = await s.api.issues.create(ORG_ID, { title: "Feita", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Uma", assignees: [mine] });
+    await s.api.issues.create(ORG_ID, { title: "Duas", assignees: [mine] });
+    const finished = await s.api.issues.create(ORG_ID, { title: "Feita", assignees: [mine] });
     await s.api.issues.update(ORG_ID, finished.id, { status: "done" });
-    const dropped = await s.api.issues.create(ORG_ID, { title: "Cancelada", assignee: mine });
+    const dropped = await s.api.issues.create(ORG_ID, { title: "Cancelada", assignees: [mine] });
     await s.api.issues.update(ORG_ID, dropped.id, { status: "canceled" });
-    await s.api.issues.create(ORG_ID, { title: "Do João", assignee: joao });
+    await s.api.issues.create(ORG_ID, { title: "Do João", assignees: [joao] });
     await visit(s);
     expect(document.querySelector(".ac-pagehead")?.textContent).toContain("2 em aberto");
   });
 
   test("the page shows the Empresa and Board filters", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await visit(s);
     const triggers = [...document.querySelectorAll(".ac-toolbar .ac-filter__trigger")].map((t) => t.textContent);
     expect(triggers.some((t) => t?.startsWith("Empresa"))).toBe(true);
@@ -186,7 +197,7 @@ describe("Minhas tarefas: the controls", () => {
 
   test("a saved assignee filter from the other pages neither empties the page nor shows a chip", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await s.api.orgs.setIssuesView(ORG_ID, { ...(await s.api.orgs.issuesView(ORG_ID)), assignees: ["person:u-joao"] });
     await visit(s);
     expect(titles()).toEqual(["Algo meu"]);
@@ -195,7 +206,7 @@ describe("Minhas tarefas: the controls", () => {
 
   test("Filtro has no assignee choice, and the Empresa and Board selects are there", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await visit(s);
     const toolbar = document.querySelector(".ac-toolbar") as HTMLElement;
     const triggers = [...toolbar.querySelectorAll(".ac-filter__trigger")].map((t) => t.textContent);
@@ -211,7 +222,7 @@ describe("Minhas tarefas: the controls", () => {
 
   test("with no task the page says Nada com você agora and links to Todas as tarefas", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Do João", assignee: joao });
+    await s.api.issues.create(ORG_ID, { title: "Do João", assignees: [joao] });
     const r = await visit(s);
     expect(document.querySelector(".ac-empty__title")?.textContent).toBe("Nada com você agora");
     expect(titles()).toEqual([]);
@@ -225,7 +236,7 @@ describe("Minhas tarefas: the controls", () => {
 
   test("without the right to create tasks there is no Nova tarefa", async () => {
     const s = await setup(["read", "talk_to_agents"]);
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await visit(s);
     expect(titles()).toEqual(["Algo meu"]);
     expect(screen().queryByRole("button", { name: "Nova tarefa" })).toBeNull();
@@ -234,7 +245,7 @@ describe("Minhas tarefas: the controls", () => {
 
   test("a search with no hit says so instead of drawing nothing", async () => {
     const s = await setup();
-    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignee: mine });
+    await s.api.issues.create(ORG_ID, { title: "Algo meu", assignees: [mine] });
     await visit(s);
     await type(screen().getByRole("searchbox", { name: "Buscar tarefas" }), "zzzz");
     await settle(8);

@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, within } from "@testing-library/react";
 import { ADA_ID, createFakeApi, ENG_ID, type FakeState, ORG_ID, seedDm, seedState } from "./fake-api";
 import { renderApp, screen, settle } from "./render";
 
-/** The PO's plain DM, where its routines write, reached from the PO view (ADR 0185 addendum). */
+/** The PO's plain DM, where its routines write, reached from the PO view (ADR 0229 addendum). */
 
 afterEach(() => {
   cleanup();

@@ -39,7 +39,7 @@ export function groupHits(hits: SearchHit[]) {
   return [...groups.entries()].sort(([a], [b]) => rank(a) - rank(b));
 }
 
-/** Who a DM is with, and for a PO chat (ADR 0185) the company it is about. */
+/** Who a DM is with, and for a PO chat (ADR 0229) the company it is about. */
 export type HitDm = { type: "person" | "agent"; id: string; spaceId?: string };
 
 /**

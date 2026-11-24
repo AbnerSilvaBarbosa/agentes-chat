@@ -11,6 +11,7 @@ import {
   isNull,
   ne,
   or,
+  rowsOf,
   schema,
   sql,
 } from "@agenteschat/db";
@@ -27,7 +28,20 @@ import {
 import { recordAgentActions, UNDO_WINDOW_MS } from "../agent-actions";
 import { type AgentDeletionDeps, deleteAgent } from "../agent-deletion";
 import { type Agent, getAgent, updateAgent } from "../agents";
-import { audienceNotice, canTalkTo, seesAgentDetails, speakerFor } from "../audience";
+import {
+  agentEditorIds,
+  agentKeeperIds,
+  agentManagerIds,
+  agentOwnerIds,
+  audienceNotice,
+  canTalkTo,
+  editsAgent,
+  managesAgent,
+  OWNER_COLUMNS,
+  ownsAgent,
+  seesAgentDetails,
+  speakerFor,
+} from "../audience";
 import { recordAudit } from "../audit";
 import { caches, invalidateOrg } from "../cache";
 import { sha256 } from "../crypto";
@@ -53,6 +67,8 @@ import {
   type SettingLine,
   settingLines,
   settingsDeciders,
+  settingsGroup,
+  settingsHold,
   settingsRows,
   type WantedLine,
 } from "../settings-proposals";
@@ -90,12 +106,32 @@ export const ASKED_IN_CONVERSATION = "Asked in conversation.";
 /** The team week's reasons for a settings row. */
 export const OVER_BUDGET_REASON = "It stopped at its monthly budget this week.";
 export const NO_CHANNEL_REASON = "It is in no channel.";
+export const IDLE_REASON = "It has not worked in four weeks, has no routine and no open task.";
+/** The four weeks `IDLE_REASON` speaks of. */
+export const IDLE_MS = 28 * 24 * 3_600_000;
+/**
+ * What `IDLE_REASON` says, over `agents a`: no run since `since`, no active routine, no open task. The week's card
+ * offers to archive an agent only while this holds, and the offer is applied only while it still does.
+ */
+export const idleAgentSql = (since: Date) => sql`(
+  not exists (select 1 from agent_runs r where r.org_id = a.org_id and r.agent_id = a.id
+    and r.created_at >= ${since.toISOString()}::timestamptz)
+  and not exists (select 1 from routines ro where ro.org_id = a.org_id and ro.agent_id = a.id
+    and ro.active and ro.deleted_at is null)
+  and not exists (select 1 from issues i join issue_assignees ia on ia.issue_id = i.id
+    where ia.org_id = a.org_id and ia.assignee_type = 'agent' and ia.assignee_id = a.id::text
+      and i.status not in ('done', 'canceled')))`;
+export const LIGHT_WORK_REASON = "Its work is light enough for a smaller model.";
 /** The reasons the server writes itself: the agent reads them as they are, people through `whyCode`, in their language. */
-export const SERVER_REASONS: Record<string, "asked" | "budget" | "no_channel"> = {
+export const SERVER_REASONS: Record<string, "asked" | "budget" | "no_channel" | "idle" | "light_work"> = {
   [ASKED_IN_CONVERSATION]: "asked",
   [OVER_BUDGET_REASON]: "budget",
   [NO_CHANNEL_REASON]: "no_channel",
+  [IDLE_REASON]: "idle",
+  [LIGHT_WORK_REASON]: "light_work",
 };
+/** Reasons added after the first app builds: those builds have no words for the code, so they get the sentence too. */
+export const LATER_REASONS: ReadonlySet<string> = new Set(["idle", "light_work"]);
 
 /** When an item is strong enough to propose turning it into instructions or org context. */
 export const PROMOTION = { minRecurrence: 2, minConfidence: 0.8, minRelevance: 0.7 };
@@ -142,11 +178,15 @@ export function lineDiff(before: string, after: string): string {
 
 const LEARNED = "## Learned";
 
-/** Text with one more bullet, under a "Learned" heading (deterministic, no model). */
-export function withLearnedBullet(text: string, bullet: string) {
+/**
+ * Text with one more bullet (deterministic, no model): the org context's under a "Learned" heading; an agent's
+ * instructions at their end, as one more instruction (its lessons are memory: `moveLearnedSections`).
+ */
+export function withLearnedBullet(text: string, bullet: string, heading = true) {
   const line = `- ${bullet.replace(/\s+/g, " ").trim()}`;
   if (text.includes(line)) return text;
   const base = text.trimEnd();
+  if (!heading) return base ? `${base}${/(^|\n)[-*] [^\n]*$/.test(base) ? "\n" : "\n\n"}${line}` : line;
   return base.includes(LEARNED) ? `${base}\n${line}` : `${base}${base ? "\n\n" : ""}${LEARNED}\n${line}`;
 }
 
@@ -186,7 +226,7 @@ export async function proposeFromItem(
     target = "org_context";
     current = org.context;
   }
-  const proposedText = withLearnedBullet(current, itemWords(item).text);
+  const proposedText = withLearnedBullet(current, itemWords(item).text, target === "org_context");
   if (proposedText === current) return null;
   const diff = lineDiff(current, proposedText);
   const baseHash = sha256(current);
@@ -268,7 +308,10 @@ export async function proposalsWaitingFor(db: Database, actorId: string, orgId: 
   return (await listProposals(db, actorId, orgId, { status: "pending" })).filter((p) => p.canDecide).length;
 }
 
-/** Role and access are decided as on the agent's page: by who manages agents (its owner only takes access away). */
+/**
+ * Role and access are decided as on the agent's page (ADR 0085 addendum of 2026-11-17): its role by who edits it, its
+ * access by who manages it (its owner only takes access away); a team skill by who manages the team's skills.
+ */
 const isAgentSetting = (p: Pick<Proposal, "target">) =>
   p.target === "agent_role" || p.target === "agent_access" || p.target === "skill" || p.target === "agent_settings";
 
@@ -277,20 +320,42 @@ export const ownerDecides = (p: Pick<Proposal, "target" | "access">) =>
   p.target === "agent_instructions" || (p.target === "agent_access" && !p.access?.some((l) => l.on));
 
 /**
- * Who decides: who reviews memory (instructions), configures the workspace (org context) or manages agents
- * (role, access), plus the agent's owner when `ownerDecides`.
+ * Who edits the agent decides it (`editsAgent`, ADR 0085 addendum of 2026-11-17): its role, and a settings row of the
+ * `editor` group (which skills it has). Its owner always edits it, so they decide it too, as for `ownerDecides`.
+ */
+export const editorDecides = (p: Pick<Proposal, "target" | "settings">) =>
+  p.target === "agent_role" || (p.target === "agent_settings" && settingsGroup(p) === "editor");
+
+/**
+ * Who decides: who reviews memory (instructions), configures the workspace (org context) or manages the team's
+ * skills; for an agent's role who edits it (`agentEditorIds`), for its access who manages it (`agentManagerIds`), never
+ * who merely holds "Editar qualquer agente" over a private agent (ADR 0085 addendum of 2026-11-17). Plus who edits the
+ * agent for its instructions, and its owner when `ownerDecides`. An agent's instructions wait only on who looks after
+ * it (`agentKeeperIds`) while someone does (ADR 0085, addendum of 2026-11-24).
  */
 async function deciders(db: Database, p: Proposal) {
   if (p.target === "agent_settings") return settingsDeciders(db, p);
-  const key = isAgentSetting(p) ? "manage_agents" : p.target === "org_context" ? "configure" : "review_memory";
-  const admins = await db
-    .select({ userId: organizationMembers.userId })
-    .from(organizationMembers)
-    .where(and(eq(organizationMembers.orgId, p.orgId), maySql(p.orgId, organizationMembers.userId, key)));
-  const ids = new Set(admins.map((a) => a.userId));
-  if (p.agentId && ownerDecides(p)) {
-    const [agent] = await db.select({ owner: agents.ownerUserId }).from(agents).where(eq(agents.id, p.agentId));
-    if (agent?.owner) ids.add(agent.owner);
+  if (p.target === "agent_instructions" && p.agentId) {
+    const keepers = await agentKeeperIds(db, p.orgId, p.agentId);
+    if (keepers.length > 0) return keepers;
+  }
+  const ids = new Set<string>();
+  if (p.agentId && (p.target === "agent_role" || p.target === "agent_access")) {
+    const who = p.target === "agent_role" ? agentEditorIds : agentManagerIds;
+    for (const id of await who(db, p.orgId, p.agentId)) ids.add(id);
+  } else {
+    const key = isAgentSetting(p) ? "manage_agents" : p.target === "org_context" ? "configure" : "review_memory";
+    const admins = await db
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(and(eq(organizationMembers.orgId, p.orgId), maySql(p.orgId, organizationMembers.userId, key)));
+    for (const a of admins) ids.add(a.userId);
+  }
+  if (p.agentId && p.target === "agent_instructions") {
+    for (const id of await agentEditorIds(db, p.orgId, p.agentId)) ids.add(id);
+  } else if (p.agentId && ownerDecides(p)) {
+    const [agent] = await db.select(OWNER_COLUMNS).from(agents).where(eq(agents.id, p.agentId));
+    if (agent) for (const id of await agentOwnerIds(db, p.orgId, agent)) ids.add(id);
   }
   return [...ids];
 }
@@ -355,17 +420,34 @@ async function mayDecide(db: Database, actorId: string, p: Proposal, known?: Mem
   const membership = known ?? (await requirePermission(db, actorId, p.orgId, "read"));
   if (p.target === "agent_settings") return !(await unsentHidden(db, actorId, p)) && maySettle(db, actorId, p);
   if (isAgentSetting(p)) {
-    if (can(membership, "manage_agents")) return true;
-    return ownerDecides(p) && !!p.agentId && (await getAgent(db, p.orgId, p.agentId))?.ownerUserId === actorId;
+    // A team skill: who manages the team's skills. An agent's role: who edits it; its access: who manages it, its
+    // owner only taking access away (ADR 0085 addendum of 2026-11-17). With the agent gone, the workspace's key.
+    const agent = p.target !== "skill" && p.agentId ? await getAgent(db, p.orgId, p.agentId) : null;
+    if (!agent) return can(membership, "manage_agents");
+    if (managesAgent(agent, actorId, membership)) return true;
+    if (p.target === "agent_role") return editsAgent(agent, actorId, membership);
+    return ownerDecides(p) && ownsAgent(agent, actorId, membership.roleIds);
   }
   if (p.target === "org_context") return can(membership, "configure");
   // A file that runs on agents' computers is a skill change of its own: who manages skills, as an update from its
   // link that changes one (`approveSkillUpdate`).
   if (p.target === "skill" && p.skillPath && runsCode(p.skillPath)) return can(membership, "manage_agents");
+  // An agent's instructions come from what it was told, which only who looks after it knows: while its owner or a
+  // named editor is there, nobody else decides them, an admin included (ADR 0085, addendum of 2026-11-24). Who asked
+  // for the change in their own words still does, by the rule below.
+  if (p.target === "agent_instructions" && p.agentId && p.requestedByUserId !== actorId) {
+    const keepers = await agentKeeperIds(db, p.orgId, p.agentId);
+    if (keepers.length > 0 && !keepers.includes(actorId)) return false;
+  }
   if (can(membership, "review_memory")) return true;
+  // Its instructions are how it works: who edits it (`editsAgent`), as on its page.
   if (p.target === "agent_instructions" && p.agentId) {
     const agent = await getAgent(db, p.orgId, p.agentId);
-    return agent?.ownerUserId === actorId && (await proposalsVisible(db, actorId, p.orgId, [p])).length > 0;
+    return (
+      !!agent &&
+      editsAgent(agent, actorId, membership) &&
+      (await proposalsVisible(db, actorId, p.orgId, [p])).length > 0
+    );
   }
   return false;
 }
@@ -404,8 +486,9 @@ export async function listProposals(
 }
 
 /**
- * Open rows accepting can only fail: their text changed since, or their agent was archived (a settings row can still
- * delete it). They show as stale, and nobody is asked to decide.
+ * Open rows accepting can only fail: their text or a setting's value changed since, a budget would now stop the agent
+ * without the card saying so, or their agent was archived (a settings row can still delete it). They show as stale,
+ * and nobody is asked to decide.
  */
 async function outdatedIds(db: Database, orgId: string, rows: Proposal[]) {
   const open = rows.filter((r) => r.status === "pending");
@@ -426,7 +509,7 @@ async function outdatedIds(db: Database, orgId: string, rows: Proposal[]) {
     if (r.target === "agent_role") return byId.get(r.agentId ?? "")?.role;
     return undefined;
   };
-  return new Set(
+  const out = new Set(
     open
       .filter((r) => {
         if (r.target !== "agent_settings" && byId.get(r.agentId ?? "")?.archivedAt) return true;
@@ -435,6 +518,12 @@ async function outdatedIds(db: Database, orgId: string, rows: Proposal[]) {
       })
       .map((r) => r.id),
   );
+  for (const r of open) {
+    if (r.target !== "agent_settings" || !r.agentId || deletes(r)) continue;
+    const agent = await getAgent(db, orgId, r.agentId);
+    if (agent && !agent.archivedAt && !(await settingsHold(db, agent, r.settings ?? []))) out.add(r.id);
+  }
+  return out;
 }
 
 /**
@@ -477,7 +566,7 @@ export async function decideProposal(
   const finalText = options.finalText ?? p.proposedText;
   if (options.finalText !== undefined) {
     checkContent(options.finalText);
-    await checkPermissionText(options.judge, orgId, options.finalText);
+    await checkPermissionText(options.judge, orgId, options.finalText, { db, userId: actorId });
   }
   const blobs = options.blobs && p.skillPath ? await pinBlobs(options.blobs, orgId) : options.blobs;
   const events = holdEvents(options.pubsub);
@@ -507,7 +596,15 @@ export async function decideProposal(
         : [];
       if (!agent) status = "stale";
       else if (p.target === "agent_settings") {
-        if (!(await applySettings({ db: as, pubsub: events.pubsub }, actorId, p, agent))) status = "stale";
+        // An offer to archive an idle agent says why under its button: one that went back to work since is not
+        // archived on that word.
+        const idle =
+          p.rationale !== IDLE_REASON ||
+          rowsOf(
+            await tx.execute(sql`select 1 from agents a where a.id = ${agent.id}
+              and ${idleAgentSql(new Date(Date.now() - IDLE_MS))}`),
+          ).length > 0;
+        if (!idle || !(await applySettings({ db: as, pubsub: events.pubsub }, actorId, p, agent))) status = "stale";
         else {
           const card = await cardOf(tx, p);
           if (card) await recordSettingsReceipt(tx, p, actorId, card, agent.name, UNDO_WINDOW_MS);
@@ -622,7 +719,10 @@ async function carryOpenRows(tx: Executor, p: Proposal, text: string) {
   for (const r of open) {
     const lines = r.diff.split("\n").filter((l) => /^[+-]/.test(l) && l.slice(1).trim() && l.slice(1) !== LEARNED);
     if (!lines.every((l) => l.startsWith("+- "))) continue;
-    const proposedText = lines.reduce((next, l) => withLearnedBullet(next, l.slice(3)), text);
+    const proposedText = lines.reduce(
+      (next, l) => withLearnedBullet(next, l.slice(3), p.target === "org_context"),
+      text,
+    );
     if (proposedText === text || proposedText.length > max) continue;
     await tx
       .update(contextProposals)
@@ -1040,11 +1140,11 @@ const CURRENT_CHARS = 2000;
 const TEXT_MAX = { instructions: 50_000, context: 20_000 };
 
 /**
- * `text` with a change: a rule added under "Learned", or `replaces` swapped for `change`, only when it appears
+ * `text` with a change: a rule added (`withLearnedBullet`), or `replaces` swapped for `change`, only when it appears
  * exactly once (else null). Removing a whole line (`change` empty) takes the line, its bullet included.
  */
-export function changedText(text: string, change: string, replaces?: string): string | null {
-  if (replaces === undefined) return withLearnedBullet(text, change);
+export function changedText(text: string, change: string, replaces?: string, heading = true): string | null {
+  if (replaces === undefined) return withLearnedBullet(text, change, heading);
   const at = text.indexOf(replaces);
   if (at < 0 || text.includes(replaces, at + 1)) return null;
   let start = at;
@@ -1122,7 +1222,7 @@ async function cardAgents(
 /**
  * Proposals an agent makes because a person asked it in conversation: a
  * rule added to its own or other agents' instructions or to the org context
- * (or exact text swapped or removed there), and other agents' roles and apps.
+ * (or exact text swapped or removed there, or the whole text rewritten), and other agents' roles and apps.
  * One row per agent and kind of change, for one card; the agent never edits
  * any of them, a person who may make that change accepts each, or with `atOnce`
  * the person who asked, as it is made (`applyAsked`). Only agents the person who
@@ -1141,6 +1241,8 @@ export async function proposeChange(
     /** The rule to add, or what takes the place of `replaces` (empty: removes it). */
     change: string;
     replaces?: string;
+    /** The whole new text, in place of `change` and `replaces`: a rewrite the person asked for. */
+    whole?: string;
     roles?: { agentId: string; role: string }[];
     access?: { agentId: string; lines: AccessLine[] }[];
     rationale: string;
@@ -1161,8 +1263,8 @@ export async function proposeChange(
   };
   const rows: (typeof contextProposals.$inferInsert)[] = [];
   const skipped: string[] = [];
-  const textChange = (current: string, what: string, max: number) => {
-    const next = changedText(current, change, replaces);
+  const textChange = (current: string, what: string, max: number, heading: boolean) => {
+    const next = input.whole ?? changedText(current, change, replaces, heading);
     if (next === null) {
       const where = current.includes(replaces ?? "") ? "appears more than once in" : "isn't in";
       skipped.push(`The text to swap ${where} ${what}. It reads: """${cutText(current, CURRENT_CHARS)}"""`);
@@ -1174,7 +1276,7 @@ export async function proposeChange(
   if (input.target === "org_context") {
     const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
     if (!org) throw new NotFoundError("Organization not found");
-    const text = textChange(org.context, "the org context", TEXT_MAX.context);
+    const text = textChange(org.context, "the org context", TEXT_MAX.context, true);
     if (text) rows.push({ ...base, target: "org_context", agentId: null, ...text });
   } else {
     const instructed = input.agentIds ?? [input.agentId];
@@ -1184,7 +1286,7 @@ export async function proposeChange(
       const agent = team.get(id) as Agent;
       const who = `@${agent.handle}`;
       if (instructed.includes(id)) {
-        const text = textChange(agent.instructions, `${who}'s instructions`, TEXT_MAX.instructions);
+        const text = textChange(agent.instructions, `${who}'s instructions`, TEXT_MAX.instructions, false);
         if (text) rows.push({ ...base, target: "agent_instructions", agentId: id, ...text });
       }
       const role = roles

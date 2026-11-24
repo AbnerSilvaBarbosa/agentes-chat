@@ -6,7 +6,7 @@ type ColumnRow = typeof schema.issueColumns.$inferSelect;
 const named = (c: ColumnRow, name: string) => c.name?.trim().toLowerCase() === name;
 
 /**
- * Where a PO's card is born and where a finished spec sends it (ADR 0185). The card starts in the "Especificar"
+ * Where a PO's card is born and where a finished spec sends it (ADR 0229). The card starts in the "Especificar"
  * column (any capitals) when it is a to-do column, else the board's first to-do column; a board always has one, as
  * every board has a column per stage. A finished spec moves it to "Especificado" (the spec is written and waits for the
  * person), else the first form's "Priorizado" (any stage), else the first to-do

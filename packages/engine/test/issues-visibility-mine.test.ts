@@ -19,7 +19,10 @@ describe("the member's own tasks list (my-tasks)", () => {
     const bia = await addMember(f.db, f.org.id, "member", "Bia");
     const mine = { type: "person" as const, id: bia.id };
     const make = (title: string, assignee: { type: "person" | "agent"; id: string } | null) =>
-      createIssue(deps, person(f.owner.id), f.org.id, { title, assignee });
+      createIssue(deps, person(f.owner.id), f.org.id, {
+        title,
+        assignees: assignee ? [assignee] : [],
+      });
 
     const visible = await make("A minha, de todos", mine);
     const ownersTask = await make("Do dono", { type: "person", id: f.owner.id });
@@ -47,10 +50,10 @@ describe("the member's own tasks list (my-tasks)", () => {
     const deps = { db: f.db, pubsub: f.pubsub };
     const mine = { type: "person" as const, id: f.owner.id };
     for (const title of ["c1", "c2", "c3"]) {
-      const made = await createIssue(deps, person(f.owner.id), f.org.id, { title, assignee: mine });
+      const made = await createIssue(deps, person(f.owner.id), f.org.id, { title, assignees: [mine] });
       await f.db.update(schema.issues).set({ status: "canceled" }).where(eq(schema.issues.id, made.id));
     }
-    await createIssue(deps, person(f.owner.id), f.org.id, { title: "aberta", assignee: mine });
+    await createIssue(deps, person(f.owner.id), f.org.id, { title: "aberta", assignees: [mine] });
     const list = await listIssues(f.db, person(f.owner.id), f.org.id, {
       assignee: mine,
       notStatus: "canceled",

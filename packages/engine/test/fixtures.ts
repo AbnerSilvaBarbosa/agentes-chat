@@ -49,6 +49,7 @@ import {
   createPermissionToolSource,
   createReactToolSource,
   createSandboxToolSource,
+  createSayNowToolSource,
   createScheduleToolSource,
   createSkillToolSource,
   createToolGateway,
@@ -114,6 +115,15 @@ export async function makeAdmin(db: Database, orgId: string, userId: string) {
   await db.insert(schema.organizationMemberRoles).values({ orgId, userId, roleId }).onConflictDoNothing();
 }
 
+/** Takes `key` off the workspace's base role ("Todos"), as an admin may in Cargos. */
+export async function everyoneWithout(db: Database, orgId: string, key: string) {
+  await ensureRoles(db, orgId);
+  await db
+    .update(schema.orgRoles)
+    .set({ permissions: sql`array_remove(${schema.orgRoles.permissions}, ${key}::text)` })
+    .where(and(eq(schema.orgRoles.orgId, orgId), eq(schema.orgRoles.kind, "everyone")));
+}
+
 export async function addMember(db: Database, orgId: string, role: TestRole, name: string = role) {
   const user = await addUser(db, name);
   await ensureRoles(db, orgId);
@@ -168,6 +178,8 @@ export async function setup(
   options: {
     reply?: Parameters<typeof createFakeProvider>[0];
     budgetNanoUsd?: number | null;
+    /** The server's output cap of an agent's call (`AGENT_MAX_OUTPUT_TOKENS`); null: unset. Default 1000. */
+    maxOutputTokens?: number | null;
     platform?: PlatformCredentials;
     /** Tool sources for the Tool Gateway (none = agents only chat). */
     toolSources?: ToolSource[];
@@ -181,6 +193,11 @@ export async function setup(
     askAgent?: boolean;
     /** Add the built-in `react` tool. */
     react?: boolean;
+    /**
+     * Add the built-in `say_now` tool (ADR 0207): one short line before slow work. Off by default, so the prompts and
+     * tool lists other tests pin stay as they are.
+     */
+    sayNow?: boolean;
     /**
      * Add the built-in `send_gif` and `send_sticker` tools (ADR 0091), with `gifs` as the server's GIF search (also
      * `post_message`'s `gif`).
@@ -244,6 +261,8 @@ export async function setup(
     workTools?: boolean;
     /** Long work's safety net (ADR 0121 §1). None: off (no test moves by accident). */
     workAuto?: { afterMs?: number; afterCalls?: number; minMs?: number; tickMs?: number };
+    /** Brains the jobs think with besides the model brain (computer brains). None: a computer brain's turn waits. */
+    brains?: RunExecutorDeps["brains"];
   } = {},
 ) {
   const { db, close } = await createTestDatabase();
@@ -351,6 +370,7 @@ export async function setup(
         ]
       : []),
     ...(options.react ? [createReactToolSource({ pubsub })] : []),
+    ...(options.sayNow ? [createSayNowToolSource({ pubsub })] : []),
     ...(options.mediaTools ? [createMediaToolSource({ pubsub, gifs: options.gifs ?? null })] : []),
     ...(options.followUps ? [createFollowUpToolSource({ pubsub })] : []),
     ...(options.workTools ? [createWorkToolSource({ pubsub })] : []),
@@ -404,7 +424,7 @@ export async function setup(
     db,
     gateway,
     pubsub,
-    maxOutputTokens: 1000,
+    ...(options.maxOutputTokens === null ? {} : { maxOutputTokens: options.maxOutputTokens ?? 1000 }),
     contextMessages: 30,
     workspaceComputer: options.workspaceComputer,
     maxHops: 100,
@@ -422,6 +442,7 @@ export async function setup(
     workAutoAfterCalls: options.workAuto?.afterCalls ?? 100_000,
     workAutoMinMs: options.workAuto?.minMs,
     workTickMs: options.workAuto?.tickMs ?? 60_000,
+    ...(options.brains ? { brains: options.brains } : {}),
   };
   const handlers = createJobHandlers(jobDeps);
 

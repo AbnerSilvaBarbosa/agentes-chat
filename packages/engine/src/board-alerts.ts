@@ -10,7 +10,7 @@ const { routines, agents, issueProjects, users } = schema;
 type RoutineRow = typeof routines.$inferSelect;
 
 /**
- * A board's alert rule (ADR 0175 addendum): one routine on `issue.moved`, narrowed to the board and the column a card
+ * A board's alert rule (ADR 0220 addendum): one routine on `issue.moved`, narrowed to the board and the column a card
  * lands in (and the one it leaves, when the person said so), that wakes one agent. The routine is the rule, so budgets,
  * approvals and the loop guards apply unchanged and the routines page shows it too.
  */

@@ -5,8 +5,10 @@ import {
   dayEntries,
   dayRuns,
   dragRange,
+  grownHeights,
   HOUR_PX,
   initialScrollMinutes,
+  itemOwners,
   layoutBars,
   layoutDay,
   onDay,
@@ -117,6 +119,43 @@ describe("calendar layout", () => {
     ]);
     // Its own slot stays its slot: only what it reaches into moves.
     expect(layoutDay([short], day, [], new Map([["short", 50]]))[0]?.height).toBe(30);
+  });
+
+  test("measured heights only grow, so a layout that changes how tall it draws settles instead of flipping", () => {
+    const heights = new Map([["a", 40]]);
+    expect(grownHeights(heights, new Map([["a", 30]]))).toBe(heights);
+    expect(grownHeights(heights, new Map([["a", 40.4]]))).toBe(heights);
+    expect([
+      ...grownHeights(
+        heights,
+        new Map([
+          ["a", 52],
+          ["b", 20],
+        ]),
+      ),
+    ]).toEqual([
+      ["a", 52],
+      ["b", 20],
+    ]);
+    // Runs 40 minutes apart (29px): alone the first one wraps (44px) and takes in the second; together they draw 24px,
+    // which lets the second go again. Taking each measure as it is flips the stacks on every render.
+    const runs = [run("a", at(7)), run("b", at(7, 40))];
+    const draw = (stacks: ReturnType<typeof runStacks>) =>
+      new Map(stacks.map((s) => [s.key, s.runs.length === 1 ? 44 : 24] as const));
+    const renders = (
+      next: (before: ReadonlyMap<string, number>, drawn: Map<string, number>) => ReadonlyMap<string, number>,
+    ) => {
+      let measured: ReadonlyMap<string, number> = new Map();
+      const stackCounts: number[] = [];
+      for (let render = 0; render < 6; render++) {
+        const stacks = runStacks(runs, day, measured);
+        stackCounts.push(stacks.length);
+        measured = next(measured, draw(stacks));
+      }
+      return stackCounts;
+    };
+    expect(renders((_, drawn) => drawn)).toEqual([2, 1, 2, 1, 2, 1]);
+    expect(renders(grownHeights)).toEqual([2, 1, 1, 1, 1, 1]);
   });
 
   test("a day's rows for the month and the agenda: all day first, then by time, a frequent routine once", () => {
@@ -242,8 +281,17 @@ describe("calendar layout", () => {
         },
       ],
       deadlines: [
-        { issueId: "i1", number: 128, title: "Login", date: "2026-10-14", assignee: { type: "agent", id: "ag-ada" } },
-        { issueId: "i2", number: 129, title: "Nobody", date: "2026-10-14", assignee: null },
+        {
+          issueId: "i1",
+          number: 128,
+          title: "Login",
+          date: "2026-10-14",
+          assignees: [
+            { type: "agent", id: "ag-ada" },
+            { type: "person", id: "u1" },
+          ],
+        },
+        { issueId: "i2", number: 129, title: "Nobody", date: "2026-10-14", assignees: [] },
         { issueId: "i3", number: 130, title: "Older server", date: "2026-10-14" },
       ],
       proposals: [],
@@ -257,6 +305,14 @@ describe("calendar layout", () => {
       ["deadline-i2", undefined],
       ["deadline-i3", undefined],
     ]);
+    // A task due that several have counts for each of them; any other item, for its one owner.
+    const owners = (key: string) => itemOwners(items.find((it) => it.key === key) ?? {});
+    expect(owners("deadline-i1")).toEqual([
+      { type: "agent", id: "ag-ada" },
+      { type: "person", id: "u1" },
+    ]);
+    expect(owners("deadline-i2")).toEqual([]);
+    expect(owners("by-person")).toEqual([{ type: "person", id: "u-ana" }]);
   });
 
   test("overlapping events sit side by side; a later one gets the full width again", () => {

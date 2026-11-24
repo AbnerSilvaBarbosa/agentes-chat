@@ -2,7 +2,13 @@ import { afterEach, describe, expect, jest, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
 import { createHttpApi } from "../src/api/http-client";
 import { keys } from "../src/api/keys";
-import { applyIssueEvent, applyPoProposalEvent, poProgressQuery, UNREAD_REFRESH_MS } from "../src/api/queries";
+import {
+  applyIssueEvent,
+  applyPoProposalEvent,
+  poProgressQuery,
+  UNREAD_REFRESH_MS,
+  UNREAD_SPREAD_MS,
+} from "../src/api/queries";
 import type { PoProgress, PoProgressCard, PoProgressGroup } from "../src/api/types";
 import { columnsParam, specBadge, specReasonKey } from "../src/lib/po-progress";
 
@@ -159,7 +165,7 @@ describe("the panel follows events", () => {
     applyIssueEvent(qc, "o1", { type: "issue.updated" });
     applyIssueEvent(qc, "o1", { type: "issue.updated" });
     expect(stale(qc)).toBe(false);
-    jest.advanceTimersByTime(UNREAD_REFRESH_MS);
+    jest.advanceTimersByTime(UNREAD_REFRESH_MS + UNREAD_SPREAD_MS);
     expect(stale(qc)).toBe(true);
     expect(stale(qc, "o2")).toBe(false);
   });

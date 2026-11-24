@@ -14,7 +14,7 @@ const click = (el: Element) => act(async () => fireEvent.click(el));
 const cardOf = (number: number) => document.querySelector<HTMLElement>(`[data-card="${number}"]`) as HTMLElement;
 const board = async (state = seedState()) => {
   const api = createFakeApi(state);
-  await renderApp(`/org/${ORG_ID}/issues`, { api });
+  await renderApp(`/org/${ORG_ID}/issues?all=1`, { api });
   await settle(8);
   return { api, state };
 };
