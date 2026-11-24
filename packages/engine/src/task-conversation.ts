@@ -1,4 +1,5 @@
 import { and, type Database, type Executor, eq, inArray, isNull, rowsOf, schema, sql } from "@agenteschat/db";
+import { readableBody } from "./message-preview";
 import { quietNoticeSql } from "./notices";
 import { admitTaskAgents } from "./task-access";
 
@@ -233,4 +234,61 @@ export async function taskConversationSummaries(
     });
   }
   return out;
+}
+
+/** One reply of a task's conversation, as an agent reads it. */
+export interface TaskComment {
+  author: string;
+  authorType: "person" | "agent";
+  at: string;
+  body: string;
+}
+
+/**
+ * The latest comments on a task (replies in its conversation, oldest first) with who wrote each. Notices written for
+ * agents are left out, and a voice message reads as its words. The caller has already checked the task is visible.
+ */
+export async function taskComments(
+  db: Database,
+  orgId: string,
+  conversation: TaskConversationRef | null,
+  limit = 30,
+): Promise<{ comments: TaskComment[]; total: number }> {
+  if (!conversation) return { comments: [], total: 0 };
+  const rows = await db
+    .select({
+      body: messages.body,
+      meta: messages.meta,
+      createdAt: messages.createdAt,
+      authorType: messages.authorType,
+      userName: users.name,
+      agentName: agents.name,
+    })
+    .from(messages)
+    .leftJoin(users, eq(users.id, messages.authorUserId))
+    .leftJoin(agents, eq(agents.id, messages.authorAgentId))
+    .where(
+      and(
+        eq(messages.orgId, orgId),
+        eq(messages.channelId, conversation.channelId),
+        eq(messages.threadId, conversation.rootId),
+        isNull(messages.deletedAt),
+        sql`not ${quietNoticeSql(sql`${messages.meta}`)}`,
+      ),
+    )
+    .orderBy(messages.createdAt, messages.id);
+  const readable = rows.flatMap((r) => {
+    const body = readableBody(r.body, r.meta as Record<string, unknown> | null).trim();
+    return body
+      ? [
+          {
+            author: (r.authorType === "agent" ? r.agentName : r.userName) ?? "(removed)",
+            authorType: r.authorType as "person" | "agent",
+            at: r.createdAt.toISOString(),
+            body,
+          },
+        ]
+      : [];
+  });
+  return { comments: readable.slice(-limit), total: readable.length };
 }

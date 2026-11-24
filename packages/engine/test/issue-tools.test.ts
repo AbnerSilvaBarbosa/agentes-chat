@@ -286,4 +286,18 @@ describe("what agents can do with cards", () => {
     expect(fields("list_issues")).toEqual(expect.arrayContaining(["company", "project"]));
     expect(tools.map((t) => t.name)).toContain("list_boards");
   });
+
+  test("list_issues on one card shows its comments, with who wrote them", async () => {
+    f = await setup();
+    const { run } = await agentTools(f);
+    const made = await run("create_issue", { title: "Cupom no ingresso" });
+    const id = issueOf(made.data);
+    await run("comment_issue", { issue: id, text: "Travado esperando a cobrança do Asaas." });
+
+    const shown = await run("list_issues", { issue: id });
+    expect(shown.isError).toBe(false);
+    expect(shown.content).toContain("Comments");
+    expect(shown.content).toContain("Travado esperando a cobrança do Asaas.");
+    expect(shown.content).toContain(f.agent.name);
+  });
 });
