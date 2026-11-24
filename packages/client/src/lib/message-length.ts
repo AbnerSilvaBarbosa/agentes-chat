@@ -39,7 +39,7 @@ export function tooLongRefusal(t: TFunction, locale: string, error: unknown, fix
  * under `shows`: a measure that moves a few lines with the column's width (a scrollbar showing, a rotated phone) never
  * flips it between clipped and whole.
  */
-export const LONG_MESSAGE = { over: 1200, shows: 480 } as const;
+export const LONG_MESSAGE = { over: 1000, shows: 800 } as const;
 
 /** The height a message of `height` shows at in a conversation: null when it shows whole. */
 export const clippedHeight = (height: number): number | null =>
