@@ -19,7 +19,7 @@ export const tooLongText = (t: TFunction, locale: string, length: number, max = 
  * `over` shows its first `shows`, faded, and opens whole. The gap between the two keeps "Ver mais" from hiding only
  * a line or two.
  */
-export const LONG_MESSAGE = { over: 520, shows: 360 } as const;
+export const LONG_MESSAGE = { over: 1000, shows: 800 } as const;
 
 /** The height a message of `height` shows at in a conversation: null when it shows whole. */
 export const clippedHeight = (height: number): number | null =>

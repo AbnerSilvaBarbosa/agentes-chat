@@ -3535,7 +3535,7 @@ html:not([data-pointer]) .channel-ref:focus-visible {
  * their box. Only a cut message is clipped: one that shows whole keeps whatever reaches past its lines.
  */
 .msg-clip--cut {
-  max-height: 360px;
+  max-height: 800px;
   overflow-y: clip;
   -webkit-mask-image: linear-gradient(#000 calc(100% - 96px), transparent);
   mask-image: linear-gradient(#000 calc(100% - 96px), transparent);
